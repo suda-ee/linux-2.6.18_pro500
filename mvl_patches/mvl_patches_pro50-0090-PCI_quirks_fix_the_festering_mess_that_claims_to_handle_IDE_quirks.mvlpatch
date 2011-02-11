@@ -1,0 +1,486 @@
+#! /usr/bin/env bash
+# Patch: -PCI_quirks_fix_the_festering_mess_that_claims_to_handle_IDE_quirks
+# Date: Tue Jul 31 13:55:20 2007
+# MR: 23289
+# 
+# PCI: quirks: fix the festering mess that claims to handle IDE quirks
+# 
+# The number of permutations of crap we do is amazing and almost all of it
+# has the wrong effect in 2.6.
+# 
+# At the heart of this is the PCI SFF magic which says that compatibility
+# mode PCI IDE controllers use ISA IRQ routing and hard coded addresses
+# not the BAR values. The old quirks variously clears them, sets them,
+# adjusts them and then IDE ignores the result.
+# 
+# In order to drive all this garbage out and to do it portably we need to
+# handle the SFF rules directly and properly. Because we know the device
+# BAR 0-3 are not used in compatibility mode we load them with the values
+# that are implied (and indeed which many controllers actually
+# thoughtfully put there in this mode anyway).
+# 
+# This removes special cases in the IDE layer and libata which now knows
+# that bar 0/1/2/3 always contain the correct address. It means our
+# resource allocation map is accurate from boot, not "mostly accurate"
+# after ide is loaded, and it shoots lots of code. There is also lots more
+# code and magic constant knowledge to shoot once this is in and settled.
+# 
+# Been in my test tree for a while both with drivers/ide and with libata.
+# Wants some -mm shakedown in case I've missed something dumb or there are
+# corner cases lurking.
+# 
+# Signed-off-by: Alan Cox <alan@redhat.com>
+# Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+# 
+# 
+# commit 368c73d4f689dae0807d0a2aa74c61fd2b9b075f
+# tree 4887ca05d1c02521d6194f88970f7c23d8aeb4ba
+# parent cc692a5f1e9816671b77da77c6d6c463156ba1c7
+# author Alan Cox <alan@lxorguk.ukuu.org.uk> Wed, 04 Oct 2006 00:41:26 +0100
+# committer Greg Kroah-Hartman <gregkh@suse.de> Fri, 01 Dec 2006 14:36:56 -0800
+# 
+#  arch/i386/pci/fixup.c |   46 --------------------------------------
+#  drivers/pci/probe.c   |   27 ++++++++++++++++++++++
+#  drivers/pci/quirks.c  |   59 ++-----------------------------------------------
+#  3 files changed, 30 insertions(+), 102 deletions(-)
+# 
+
+PATCHNUM=90
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 23289
+
+PCI: quirks: fix the festering mess that claims to handle IDE quirks
+
+The number of permutations of crap we do is amazing and almost all of it
+has the wrong effect in 2.6.
+
+At the heart of this is the PCI SFF magic which says that compatibility
+mode PCI IDE controllers use ISA IRQ routing and hard coded addresses
+not the BAR values. The old quirks variously clears them, sets them,
+adjusts them and then IDE ignores the result.
+
+In order to drive all this garbage out and to do it portably we need to
+handle the SFF rules directly and properly. Because we know the device
+BAR 0-3 are not used in compatibility mode we load them with the values
+that are implied (and indeed which many controllers actually
+thoughtfully put there in this mode anyway).
+
+This removes special cases in the IDE layer and libata which now knows
+that bar 0/1/2/3 always contain the correct address. It means our
+resource allocation map is accurate from boot, not "mostly accurate"
+after ide is loaded, and it shoots lots of code. There is also lots more
+code and magic constant knowledge to shoot once this is in and settled.
+
+Been in my test tree for a while both with drivers/ide and with libata.
+Wants some -mm shakedown in case I've missed something dumb or there are
+corner cases lurking.
+
+Signed-off-by: Alan Cox <alan@redhat.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+
+
+commit 368c73d4f689dae0807d0a2aa74c61fd2b9b075f
+tree 4887ca05d1c02521d6194f88970f7c23d8aeb4ba
+parent cc692a5f1e9816671b77da77c6d6c463156ba1c7
+author Alan Cox <alan@lxorguk.ukuu.org.uk> Wed, 04 Oct 2006 00:41:26 +0100
+committer Greg Kroah-Hartman <gregkh@suse.de> Fri, 01 Dec 2006 14:36:56 -0800
+
+ arch/i386/pci/fixup.c    |   46 ------------------------------------
+ drivers/pci/probe.c      |   27 +++++++++++++++++++++
+ drivers/pci/quirks.c     |   59 ++---------------------------------------------
+ mvl_patches/pro50-0090.c |   16 ++++++++++++
+ 4 files changed, 46 insertions(+), 102 deletions(-)
+
+diff --git a/arch/i386/pci/fixup.c b/arch/i386/pci/fixup.c
+index c1949ff..cde1170 100644
+
+Index: linux-2.6.18/arch/i386/pci/fixup.c
+===================================================================
+--- linux-2.6.18.orig/arch/i386/pci/fixup.c
++++ linux-2.6.18/arch/i386/pci/fixup.c
+@@ -74,52 +74,6 @@ static void __devinit  pci_fixup_ncr53c8
+ }
+ DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_NCR, PCI_DEVICE_ID_NCR_53C810, pci_fixup_ncr53c810);
+ 
+-static void __devinit pci_fixup_ide_bases(struct pci_dev *d)
+-{
+-	int i;
+-
+-	/*
+-	 * PCI IDE controllers use non-standard I/O port decoding, respect it.
+-	 */
+-	if ((d->class >> 8) != PCI_CLASS_STORAGE_IDE)
+-		return;
+-	DBG("PCI: IDE base address fixup for %s\n", pci_name(d));
+-	for(i=0; i<4; i++) {
+-		struct resource *r = &d->resource[i];
+-		if ((r->start & ~0x80) == 0x374) {
+-			r->start |= 2;
+-			r->end = r->start;
+-		}
+-	}
+-}
+-DECLARE_PCI_FIXUP_HEADER(PCI_ANY_ID, PCI_ANY_ID, pci_fixup_ide_bases);
+-
+-static void __devinit  pci_fixup_ide_trash(struct pci_dev *d)
+-{
+-	int i;
+-
+-	/*
+-	 * Runs the fixup only for the first IDE controller
+-	 * (Shai Fultheim - shai@ftcon.com)
+-	 */
+-	static int called = 0;
+-	if (called)
+-		return;
+-	called = 1;
+-
+-	/*
+-	 * There exist PCI IDE controllers which have utter garbage
+-	 * in first four base registers. Ignore that.
+-	 */
+-	DBG("PCI: IDE base address trash cleared for %s\n", pci_name(d));
+-	for(i=0; i<4; i++)
+-		d->resource[i].start = d->resource[i].end = d->resource[i].flags = 0;
+-}
+-DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_SI, PCI_DEVICE_ID_SI_5513, pci_fixup_ide_trash);
+-DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801CA_10, pci_fixup_ide_trash);
+-DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801CA_11, pci_fixup_ide_trash);
+-DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801DB_9, pci_fixup_ide_trash);
+-
+ static void __devinit  pci_fixup_latency(struct pci_dev *d)
+ {
+ 	/*
+Index: linux-2.6.18/drivers/pci/probe.c
+===================================================================
+--- linux-2.6.18.orig/drivers/pci/probe.c
++++ linux-2.6.18/drivers/pci/probe.c
+@@ -667,6 +667,33 @@ static int pci_setup_device(struct pci_d
+ 		pci_read_bases(dev, 6, PCI_ROM_ADDRESS);
+ 		pci_read_config_word(dev, PCI_SUBSYSTEM_VENDOR_ID, &dev->subsystem_vendor);
+ 		pci_read_config_word(dev, PCI_SUBSYSTEM_ID, &dev->subsystem_device);
++
++		/*
++		 *	Do the ugly legacy mode stuff here rather than broken chip
++		 *	quirk code. Legacy mode ATA controllers have fixed
++		 *	addresses. These are not always echoed in BAR0-3, and
++		 *	BAR0-3 in a few cases contain junk!
++		 */
++		if (class == PCI_CLASS_STORAGE_IDE) {
++			u8 progif;
++			pci_read_config_byte(dev, PCI_CLASS_PROG, &progif);
++			if ((progif & 1) == 0) {
++				dev->resource[0].start = 0x1F0;
++				dev->resource[0].end = 0x1F7;
++				dev->resource[0].flags = IORESOURCE_IO;
++				dev->resource[1].start = 0x3F6;
++				dev->resource[1].end = 0x3F6;
++				dev->resource[1].flags = IORESOURCE_IO;
++			}
++			if ((progif & 4) == 0) {
++				dev->resource[2].start = 0x170;
++				dev->resource[2].end = 0x177;
++				dev->resource[2].flags = IORESOURCE_IO;
++				dev->resource[3].start = 0x376;
++				dev->resource[3].end = 0x376;
++				dev->resource[3].flags = IORESOURCE_IO;
++			}
++		}
+ 		break;
+ 
+ 	case PCI_HEADER_TYPE_BRIDGE:		    /* bridge header */
+Index: linux-2.6.18/drivers/pci/quirks.c
+===================================================================
+--- linux-2.6.18.orig/drivers/pci/quirks.c
++++ linux-2.6.18/drivers/pci/quirks.c
+@@ -768,56 +768,6 @@ static void __init quirk_mediagx_master(
+ DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_CYRIX,	PCI_DEVICE_ID_CYRIX_PCI_MASTER, quirk_mediagx_master );
+ 
+ /*
+- * As per PCI spec, ignore base address registers 0-3 of the IDE controllers
+- * running in Compatible mode (bits 0 and 2 in the ProgIf for primary and
+- * secondary channels respectively). If the device reports Compatible mode
+- * but does use BAR0-3 for address decoding, we assume that firmware has
+- * programmed these BARs with standard values (0x1f0,0x3f4 and 0x170,0x374).
+- * Exceptions (if they exist) must be handled in chip/architecture specific
+- * fixups.
+- *
+- * Note: for non x86 people. You may need an arch specific quirk to handle
+- * moving IDE devices to native mode as well. Some plug in card devices power
+- * up in compatible mode and assume the BIOS will adjust them.
+- *
+- * Q: should we load the 0x1f0,0x3f4 into the registers or zap them as
+- * we do now ? We don't want is pci_enable_device to come along
+- * and assign new resources. Both approaches work for that.
+- */ 
+-static void __devinit quirk_ide_bases(struct pci_dev *dev)
+-{
+-       struct resource *res;
+-       int first_bar = 2, last_bar = 0;
+-
+-       if ((dev->class >> 8) != PCI_CLASS_STORAGE_IDE)
+-               return;
+-
+-       res = &dev->resource[0];
+-
+-       /* primary channel: ProgIf bit 0, BAR0, BAR1 */
+-       if (!(dev->class & 1) && (res[0].flags || res[1].flags)) { 
+-               res[0].start = res[0].end = res[0].flags = 0;
+-               res[1].start = res[1].end = res[1].flags = 0;
+-               first_bar = 0;
+-               last_bar = 1;
+-       }
+-
+-       /* secondary channel: ProgIf bit 2, BAR2, BAR3 */
+-       if (!(dev->class & 4) && (res[2].flags || res[3].flags)) { 
+-               res[2].start = res[2].end = res[2].flags = 0;
+-               res[3].start = res[3].end = res[3].flags = 0;
+-               last_bar = 3;
+-       }
+-
+-       if (!last_bar)
+-               return;
+-
+-       printk(KERN_INFO "PCI: Ignoring BAR%d-%d of IDE controller %s\n",
+-              first_bar, last_bar, pci_name(dev));
+-}
+-DECLARE_PCI_FIXUP_HEADER(PCI_ANY_ID, PCI_ANY_ID, quirk_ide_bases);
+-
+-/*
+  *	Ensure C0 rev restreaming is off. This is normally done by
+  *	the BIOS but in the odd case it is not the results are corruption
+  *	hence the presence of a Linux check
+@@ -851,11 +801,10 @@ static void __devinit quirk_svwks_csb5id
+ 		prog &= ~5;
+ 		pdev->class &= ~5;
+ 		pci_write_config_byte(pdev, PCI_CLASS_PROG, prog);
+-		/* need to re-assign BARs for compat mode */
+-		quirk_ide_bases(pdev);
++		/* PCI layer will sort out resources */
+ 	}
+ }
+-DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_SERVERWORKS, PCI_DEVICE_ID_SERVERWORKS_CSB5IDE, quirk_svwks_csb5ide );
++DECLARE_PCI_FIXUP_EARLY(PCI_VENDOR_ID_SERVERWORKS, PCI_DEVICE_ID_SERVERWORKS_CSB5IDE, quirk_svwks_csb5ide );
+ 
+ /*
+  *	Intel 82801CAM ICH3-M datasheet says IDE modes must be the same
+@@ -871,11 +820,9 @@ static void __init quirk_ide_samemode(st
+ 		prog &= ~5;
+ 		pdev->class &= ~5;
+ 		pci_write_config_byte(pdev, PCI_CLASS_PROG, prog);
+-		/* need to re-assign BARs for compat mode */
+-		quirk_ide_bases(pdev);
+ 	}
+ }
+-DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801CA_10, quirk_ide_samemode);
++DECLARE_PCI_FIXUP_EARLY(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801CA_10, quirk_ide_samemode);
+ 
+ /* This was originally an Alpha specific thing, but it really fits here.
+  * The i82375 PCI/EISA bridge appears as non-classified. Fix that.
+Index: linux-2.6.18/mvl_patches/pro50-0090.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0090.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(90);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

@@ -1,0 +1,700 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_mpc8548cds_move_pci_nodes_out_of_soc
+# Date: Thu Jan 17 15:24:38 2008
+# Source: Kumar Gala <galak@kernel.crashing.org>
+# MR: 25773
+# Type: Defect Fix
+# Disposition: backport from galak/powerpc.git
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# From 1b3c5cdab49a605f0e048e1ccbf4cc61a2626485 Mon Sep 17 00:00:00 2001
+# From: Kumar Gala <galak@kernel.crashing.org>
+# Date: Wed, 12 Sep 2007 18:23:46 -0500
+# [POWERPC] Move PCI nodes to be sibilings with SOC nodes
+# 
+# Updated the device trees to have the PCI nodes be at the same level as
+# the SOC node.  This is to make it so that the SOC nodes children address
+# space is just on chip registers and not other bus memory as well.
+# 
+# Also, for PCIe nodes added a P2P bridge to handle the virtual P2P bridge
+# that exists in the PHB.
+# 
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+# NOTE: The original version of this patch contained changes to a large
+# number of powerpc DTS files which are already in-tree because of other
+# patches. This patch contains only the changes related to the 8548cds.
+# 
+
+PATCHNUM=720
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Kumar Gala <galak@kernel.crashing.org>
+MR: 25773
+Type: Defect Fix
+Disposition: backport from galak/powerpc.git
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+From 1b3c5cdab49a605f0e048e1ccbf4cc61a2626485 Mon Sep 17 00:00:00 2001
+From: Kumar Gala <galak@kernel.crashing.org>
+Date: Wed, 12 Sep 2007 18:23:46 -0500
+[POWERPC] Move PCI nodes to be sibilings with SOC nodes
+
+Updated the device trees to have the PCI nodes be at the same level as
+the SOC node.  This is to make it so that the SOC nodes children address
+space is just on chip registers and not other bus memory as well.
+
+Also, for PCIe nodes added a P2P bridge to handle the virtual P2P bridge
+that exists in the PHB.
+
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+NOTE: The original version of this patch contained changes to a large
+number of powerpc DTS files which are already in-tree because of other
+patches. This patch contains only the changes related to the 8548cds.
+
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8548cds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8548cds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8548cds.dts
+@@ -74,13 +74,7 @@
+ 		#size-cells = <1>;
+ 		#interrupt-cells = <2>;
+ 		device_type = "soc";
+-		ranges = <00001000 e0001000 000ff000
+-			  80000000 80000000 10000000
+-			  e2000000 e2000000 00800000
+-			  90000000 90000000 10000000
+-			  e2800000 e2800000 00800000
+-			  a0000000 a0000000 20000000
+-		          e3000000 e3000000 01000000>;
++		ranges = <00000000 e0000000 00100000>;
+ 		reg = <e0000000 00001000>;	// CCSRBAR
+ 		bus-frequency = <0>;
+ 
+@@ -219,215 +213,226 @@
+ 			fsl,has-rstcr;
+ 		};
+ 
+-		pci@8000 {
++		mpic: pic@40000 {
++			clock-frequency = <0>;
++			interrupt-controller;
++			#address-cells = <0>;
++			#interrupt-cells = <2>;
++			reg = <40000 40000>;
++			built-in;
++			compatible = "chrp,open-pic";
++			device_type = "open-pic";
++                        big-endian;
++		};
++	};
++
++	pci@e0008000 {
++		interrupt-map-mask = <f800 0 0 7>;
++		interrupt-map = <
++			/* IDSEL 0x4 (PCIX Slot 2) */
++			02000 0 0 1 &mpic 0 1
++			02000 0 0 2 &mpic 1 1
++			02000 0 0 3 &mpic 2 1
++			02000 0 0 4 &mpic 3 1
++
++			/* IDSEL 0x5 (PCIX Slot 3) */
++			02800 0 0 1 &mpic 1 1
++			02800 0 0 2 &mpic 2 1
++			02800 0 0 3 &mpic 3 1
++			02800 0 0 4 &mpic 0 1
++
++			/* IDSEL 0x6 (PCIX Slot 4) */
++			03000 0 0 1 &mpic 2 1
++			03000 0 0 2 &mpic 3 1
++			03000 0 0 3 &mpic 0 1
++			03000 0 0 4 &mpic 1 1
++
++			/* IDSEL 0x8 (PCIX Slot 5) */
++			04000 0 0 1 &mpic 0 1
++			04000 0 0 2 &mpic 1 1
++			04000 0 0 3 &mpic 2 1
++			04000 0 0 4 &mpic 3 1
++
++			/* IDSEL 0xC (Tsi310 bridge) */
++			06000 0 0 1 &mpic 0 1
++			06000 0 0 2 &mpic 1 1
++			06000 0 0 3 &mpic 2 1
++			06000 0 0 4 &mpic 3 1
++
++			/* IDSEL 0x14 (Slot 2) */
++			0a000 0 0 1 &mpic 0 1
++			0a000 0 0 2 &mpic 1 1
++			0a000 0 0 3 &mpic 2 1
++			0a000 0 0 4 &mpic 3 1
++
++			/* IDSEL 0x15 (Slot 3) */
++			0a800 0 0 1 &mpic 1 1
++			0a800 0 0 2 &mpic 2 1
++			0a800 0 0 3 &mpic 3 1
++			0a800 0 0 4 &mpic 0 1
++
++			/* IDSEL 0x16 (Slot 4) */
++			0b000 0 0 1 &mpic 2 1
++			0b000 0 0 2 &mpic 3 1
++			0b000 0 0 3 &mpic 0 1
++			0b000 0 0 4 &mpic 1 1
++
++			/* IDSEL 0x18 (Slot 5) */
++			0c000 0 0 1 &mpic 0 1
++			0c000 0 0 2 &mpic 1 1
++			0c000 0 0 3 &mpic 2 1
++			0c000 0 0 4 &mpic 3 1
++
++			/* IDSEL 0x1C (Tsi310 bridge PCI primary) */
++			0E000 0 0 1 &mpic 0 1
++			0E000 0 0 2 &mpic 1 1
++			0E000 0 0 3 &mpic 2 1
++			0E000 0 0 4 &mpic 3 1>;
++
++		interrupt-parent = <&mpic>;
++		interrupts = <18 2>;
++		bus-range = <0 0>;
++		ranges = <02000000 0 80000000 80000000 0 10000000
++			  01000000 0 00000000 e2000000 0 00800000>;
++		clock-frequency = <3f940aa>;
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		reg = <e0008000 1000>;
++		compatible = "fsl,mpc8540-pcix", "fsl,mpc8540-pci";
++		device_type = "pci";
++
++		pci_bridge@1c {
+ 			interrupt-map-mask = <f800 0 0 7>;
+ 			interrupt-map = <
+-				/* IDSEL 0x4 (PCIX Slot 2) */
+-				02000 0 0 1 &mpic 0 1
+-				02000 0 0 2 &mpic 1 1
+-				02000 0 0 3 &mpic 2 1
+-				02000 0 0 4 &mpic 3 1
+-
+-				/* IDSEL 0x5 (PCIX Slot 3) */
+-				02800 0 0 1 &mpic 1 1
+-				02800 0 0 2 &mpic 2 1
+-				02800 0 0 3 &mpic 3 1
+-				02800 0 0 4 &mpic 0 1
+-
+-				/* IDSEL 0x6 (PCIX Slot 4) */
+-				03000 0 0 1 &mpic 2 1
+-				03000 0 0 2 &mpic 3 1
+-				03000 0 0 3 &mpic 0 1
+-				03000 0 0 4 &mpic 1 1
+-
+-				/* IDSEL 0x8 (PCIX Slot 5) */
+-				04000 0 0 1 &mpic 0 1
+-				04000 0 0 2 &mpic 1 1
+-				04000 0 0 3 &mpic 2 1
+-				04000 0 0 4 &mpic 3 1
+-
+-				/* IDSEL 0xC (Tsi310 bridge) */
+-				06000 0 0 1 &mpic 0 1
+-				06000 0 0 2 &mpic 1 1
+-				06000 0 0 3 &mpic 2 1
+-				06000 0 0 4 &mpic 3 1
+-
+-				/* IDSEL 0x14 (Slot 2) */
+-				0a000 0 0 1 &mpic 0 1
+-				0a000 0 0 2 &mpic 1 1
+-				0a000 0 0 3 &mpic 2 1
+-				0a000 0 0 4 &mpic 3 1
+-
+-				/* IDSEL 0x15 (Slot 3) */
+-				0a800 0 0 1 &mpic 1 1
+-				0a800 0 0 2 &mpic 2 1
+-				0a800 0 0 3 &mpic 3 1
+-				0a800 0 0 4 &mpic 0 1
+-
+-				/* IDSEL 0x16 (Slot 4) */
+-				0b000 0 0 1 &mpic 2 1
+-				0b000 0 0 2 &mpic 3 1
+-				0b000 0 0 3 &mpic 0 1
+-				0b000 0 0 4 &mpic 1 1
+-
+-				/* IDSEL 0x18 (Slot 5) */
+-				0c000 0 0 1 &mpic 0 1
+-				0c000 0 0 2 &mpic 1 1
+-				0c000 0 0 3 &mpic 2 1
+-				0c000 0 0 4 &mpic 3 1
+-
+-				/* IDSEL 0x1C (Tsi310 bridge PCI primary) */
+-				0E000 0 0 1 &mpic 0 1
+-				0E000 0 0 2 &mpic 1 1
+-				0E000 0 0 3 &mpic 2 1
+-				0E000 0 0 4 &mpic 3 1>;
+ 
+-			interrupt-parent = <&mpic>;
+-			interrupts = <18 2>;
+-			bus-range = <0 0>;
+-			ranges = <02000000 0 80000000 80000000 0 10000000
+-				  01000000 0 00000000 e2000000 0 00800000>;
+-			clock-frequency = <3f940aa>;
++				/* IDSEL 0x00 (PrPMC Site) */
++				0000 0 0 1 &mpic 0 1
++				0000 0 0 2 &mpic 1 1
++				0000 0 0 3 &mpic 2 1
++				0000 0 0 4 &mpic 3 1
++
++				/* IDSEL 0x04 (VIA chip) */
++				2000 0 0 1 &mpic 0 1
++				2000 0 0 2 &mpic 1 1
++				2000 0 0 3 &mpic 2 1
++				2000 0 0 4 &mpic 3 1
++
++				/* IDSEL 0x05 (8139) */
++				2800 0 0 1 &mpic 1 1
++
++				/* IDSEL 0x06 (Slot 6) */
++				3000 0 0 1 &mpic 2 1
++				3000 0 0 2 &mpic 3 1
++				3000 0 0 3 &mpic 0 1
++				3000 0 0 4 &mpic 1 1
++
++				/* IDESL 0x07 (Slot 7) */
++				3800 0 0 1 &mpic 3 1
++				3800 0 0 2 &mpic 0 1
++				3800 0 0 3 &mpic 1 1
++				3800 0 0 4 &mpic 2 1>;
++
++			reg = <e000 0 0 0 0>;
+ 			#interrupt-cells = <1>;
+ 			#size-cells = <2>;
+ 			#address-cells = <3>;
+-			reg = <8000 1000>;
+-			compatible = "fsl,mpc8540-pcix", "fsl,mpc8540-pci";
+-			device_type = "pci";
+-
+-			pci_bridge@1c {
+-				interrupt-map-mask = <f800 0 0 7>;
+-				interrupt-map = <
+-
+-					/* IDSEL 0x00 (PrPMC Site) */
+-					0000 0 0 1 &mpic 0 1
+-					0000 0 0 2 &mpic 1 1
+-					0000 0 0 3 &mpic 2 1
+-					0000 0 0 4 &mpic 3 1
+-
+-					/* IDSEL 0x04 (VIA chip) */
+-					2000 0 0 1 &mpic 0 1
+-					2000 0 0 2 &mpic 1 1
+-					2000 0 0 3 &mpic 2 1
+-					2000 0 0 4 &mpic 3 1
+-
+-					/* IDSEL 0x05 (8139) */
+-					2800 0 0 1 &mpic 1 1
+-
+-					/* IDSEL 0x06 (Slot 6) */
+-					3000 0 0 1 &mpic 2 1
+-					3000 0 0 2 &mpic 3 1
+-					3000 0 0 3 &mpic 0 1
+-					3000 0 0 4 &mpic 1 1
+-
+-					/* IDESL 0x07 (Slot 7) */
+-					3800 0 0 1 &mpic 3 1
+-					3800 0 0 2 &mpic 0 1
+-					3800 0 0 3 &mpic 1 1
+-					3800 0 0 4 &mpic 2 1>;
+-
+-				reg = <e000 0 0 0 0>;
+-				#interrupt-cells = <1>;
+-				#size-cells = <2>;
+-				#address-cells = <3>;
+-				ranges = <02000000 0 80000000
+-					  02000000 0 80000000
+-					  0 20000000
+-					  01000000 0 00000000
+-					  01000000 0 00000000
+-					  0 00080000>;
+-				clock-frequency = <1fca055>;
++			ranges = <02000000 0 80000000
++				  02000000 0 80000000
++				  0 20000000
++				  01000000 0 00000000
++				  01000000 0 00000000
++				  0 00080000>;
++			clock-frequency = <1fca055>;
+ 
+-				isa@4 {
+-					device_type = "isa";
++			isa@4 {
++				device_type = "isa";
++				#interrupt-cells = <2>;
++				#size-cells = <1>;
++				#address-cells = <2>;
++				reg = <2000 0 0 0 0>;
++				ranges = <1 0 01000000 0 0 00001000>;
++				interrupt-parent = <&i8259>;
++
++				i8259: interrupt-controller@20 {
++					interrupt-controller;
++					device_type = "interrupt-controller";
++					reg = <1 20 2
++					       1 a0 2
++					       1 4d0 2>;
++					#address-cells = <0>;
+ 					#interrupt-cells = <2>;
+-					#size-cells = <1>;
+-					#address-cells = <2>;
+-					reg = <2000 0 0 0 0>;
+-					ranges = <1 0 01000000 0 0 00001000>;
+-					interrupt-parent = <&i8259>;
+-
+-					i8259: interrupt-controller@20 {
+-						clock-frequency = <0>;
+-						interrupt-controller;
+-						device_type = "interrupt-controller";
+-						reg = <1 20 2
+-						       1 a0 2
+-						       1 4d0 2>;
+-						#address-cells = <0>;
+-						#interrupt-cells = <2>;
+-						built-in;
+-						compatible = "chrp,iic";
+-						interrupts = <0 1>;
+-						interrupt-parent = <&mpic>;
+-					};
+-
+-					rtc@70 {
+-						compatible = "pnpPNP,b00";
+-						reg = <1 70 2>;
+-					};
++					compatible = "chrp,iic";
++					interrupts = <0 1>;
++					interrupt-parent = <&mpic>;
+ 				};
+-			};
+-		};
+-
+-		pci@9000 {
+-			interrupt-map-mask = <f800 0 0 7>;
+-			interrupt-map = <
+-
+-				/* IDSEL 0x15 */
+-				a800 0 0 1 &mpic b 1
+-				a800 0 0 2 &mpic 1 1
+-				a800 0 0 3 &mpic 2 1
+-				a800 0 0 4 &mpic 3 1>;
+ 
+-			interrupt-parent = <&mpic>;
+-			interrupts = <19 2>;
+-			bus-range = <0 0>;
+-			ranges = <02000000 0 90000000 90000000 0 10000000
+-				  01000000 0 00000000 e2800000 0 00800000>;
+-			clock-frequency = <3f940aa>;
+-			#interrupt-cells = <1>;
+-			#size-cells = <2>;
+-			#address-cells = <3>;
+-			reg = <9000 1000>;
+-			compatible = "fsl,mpc8540-pci";
+-			device_type = "pci";
++				rtc@70 {
++					compatible = "pnpPNP,b00";
++					reg = <1 70 2>;
++				};
++			};
+ 		};
+-		/* PCI Express */
+-		pcie@a000 {
+-			interrupt-map-mask = <f800 0 0 7>;
+-			interrupt-map = <
++	};
+ 
+-				/* IDSEL 0x0 (PEX) */
+-				00000 0 0 1 &mpic 0 1
+-				00000 0 0 2 &mpic 1 1
+-				00000 0 0 3 &mpic 2 1
+-				00000 0 0 4 &mpic 3 1>;
++	pci@e0009000 {
++		interrupt-map-mask = <f800 0 0 7>;
++		interrupt-map = <
++
++			/* IDSEL 0x15 */
++			a800 0 0 1 &mpic b 1
++			a800 0 0 2 &mpic 1 1
++			a800 0 0 3 &mpic 2 1
++			a800 0 0 4 &mpic 3 1>;
++
++		interrupt-parent = <&mpic>;
++		interrupts = <19 2>;
++		bus-range = <0 0>;
++		ranges = <02000000 0 90000000 90000000 0 10000000
++			  01000000 0 00000000 e2800000 0 00800000>;
++		clock-frequency = <3f940aa>;
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		reg = <e0009000 1000>;
++		compatible = "fsl,mpc8540-pci";
++		device_type = "pci";
++	};
+ 
+-			interrupt-parent = <&mpic>;
+-			interrupts = <1a 2>;
+-			bus-range = <0 ff>;
+-			ranges = <02000000 0 a0000000 a0000000 0 20000000
+-				  01000000 0 00000000 e3000000 0 08000000>;
+-			clock-frequency = <1fca055>;
+-			#interrupt-cells = <1>;
++	pcie@e000a000 {
++		interrupt-map-mask = <f800 0 0 7>;
++		interrupt-map = <
++
++			/* IDSEL 0x0 (PEX) */
++			00000 0 0 1 &mpic 0 1
++			00000 0 0 2 &mpic 1 1
++			00000 0 0 3 &mpic 2 1
++			00000 0 0 4 &mpic 3 1>;
++
++		interrupt-parent = <&mpic>;
++		interrupts = <1a 2>;
++		bus-range = <0 ff>;
++		ranges = <02000000 0 a0000000 a0000000 0 20000000
++			  01000000 0 00000000 e3000000 0 08000000>;
++		clock-frequency = <1fca055>;
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		reg = <e000a000 1000>;
++		compatible = "fsl,mpc8548-pcie";
++		device_type = "pci";
++		pcie@0 {
++			reg = <0 0 0 0 0>;
+ 			#size-cells = <2>;
+ 			#address-cells = <3>;
+-			reg = <a000 1000>;
+-			compatible = "fsl,mpc8548-pcie";
+ 			device_type = "pci";
+-		};
+-
+-		mpic: pic@40000 {
+-			clock-frequency = <0>;
+-			interrupt-controller;
+-			#address-cells = <0>;
+-			#interrupt-cells = <2>;
+-			reg = <40000 40000>;
+-			built-in;
+-			compatible = "chrp,open-pic";
+-			device_type = "open-pic";
+-                        big-endian;
++			ranges = <02000000 0 a0000000
++				  02000000 0 a0000000
++				  0 20000000
++
++				  01000000 0 00000000
++				  01000000 0 00000000
++				  0 08000000>;
+ 		};
+ 	};
+ };
+Index: linux-2.6.18/mvl_patches/pro50-0720.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0720.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(720);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

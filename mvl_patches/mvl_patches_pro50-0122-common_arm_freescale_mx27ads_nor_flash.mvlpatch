@@ -1,0 +1,536 @@
+#! /usr/bin/env bash
+# Patch: -common_arm_freescale_mx27ads_nor_flash
+# Date: Wed Aug 29 07:28:06 2007
+
+PATCHNUM=122
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Index: linux-2.6.18/drivers/mtd/maps/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/mtd/maps/Kconfig
++++ linux-2.6.18/drivers/mtd/maps/Kconfig
+@@ -639,5 +639,15 @@ config MTD_PLATRAM
+ 
+ 	  This selection automatically selects the map_ram driver.
+ 
++config MTD_MXC
++        bool "Map driver for Freescale MXC boards"
++        depends on MTD && ARCH_MXC
++        default y
++        select MTD_CFI
++        select MTD_PARTITIONS
++        help
++          This enables access to the flash chips on Freescale MXC based
++          platforms. If you have such a board, say 'Y'.
++
+ endmenu
+ 
+Index: linux-2.6.18/drivers/mtd/maps/Makefile
+===================================================================
+--- linux-2.6.18.orig/drivers/mtd/maps/Makefile
++++ linux-2.6.18/drivers/mtd/maps/Makefile
+@@ -72,3 +72,4 @@ obj-$(CONFIG_MTD_PLATRAM)	+= plat-ram.o
+ obj-$(CONFIG_MTD_OMAP_NOR)	+= omap_nor.o
+ obj-$(CONFIG_MTD_MTX1)		+= mtx-1_flash.o
+ obj-$(CONFIG_MTD_TQM834x)	+= tqm834x.o
++obj-$(CONFIG_MTD_MXC)           += mxc_nor.o
+Index: linux-2.6.18/drivers/mtd/maps/mxc_nor.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/mtd/maps/mxc_nor.c
+@@ -0,0 +1,181 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ * (c) 2005 MontaVista Software, Inc.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++
++#include <linux/module.h>
++#include <linux/types.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/platform_device.h>
++#include <linux/err.h>
++#include <linux/ioport.h>
++#include <linux/mtd/mtd.h>
++#include <linux/mtd/map.h>
++#include <linux/mtd/partitions.h>
++#include <asm/mach-types.h>
++#include <asm/mach/flash.h>
++
++#define DVR_VER "2.0"
++
++#ifdef CONFIG_MTD_PARTITIONS
++static const char *part_probes[] = { "RedBoot", "cmdlinepart", NULL };
++#endif
++
++struct mxcflash_info {
++	struct mtd_partition *parts;
++	struct mtd_info *mtd;
++	struct map_info map;
++};
++
++/*!
++ * @defgroup NOR_MTD NOR Flash MTD Driver
++ */
++
++/*!
++ * @file mxc_nor.c
++ *
++ * @brief This file contains the MTD Mapping information on the MXC.
++ *
++ * @ingroup NOR_MTD
++ */
++
++static int __devinit mxcflash_probe(struct platform_device *pdev)
++{
++	int err, nr_parts = 0;
++	struct mxcflash_info *info;
++	struct flash_platform_data *flash = pdev->dev.platform_data;
++	struct resource *res = pdev->resource;
++	unsigned long size = res->end - res->start + 1;
++
++	info = kmalloc(sizeof(struct mxcflash_info), GFP_KERNEL);
++	if (!info)
++		return -ENOMEM;
++
++	memset(info, 0, sizeof(struct mxcflash_info));
++
++	if (!request_mem_region(res->start, size, "flash")) {
++		err = -EBUSY;
++		goto out_free_info;
++	}
++	info->map.virt = ioremap(res->start, size);
++	if (!info->map.virt) {
++		err = -ENOMEM;
++		goto out_release_mem_region;
++	}
++	info->map.name = pdev->dev.bus_id;
++	info->map.phys = res->start;
++	info->map.size = size;
++	info->map.bankwidth = flash->width;
++
++	simple_map_init(&info->map);
++	info->mtd = do_map_probe(flash->map_name, &info->map);
++	if (!info->mtd) {
++		err = -EIO;
++		goto out_iounmap;
++	}
++	info->mtd->owner = THIS_MODULE;
++
++#ifdef CONFIG_MTD_PARTITIONS
++	nr_parts =
++	    parse_mtd_partitions(info->mtd, part_probes, &info->parts, 0);
++	if (nr_parts > 0) {
++		add_mtd_partitions(info->mtd, info->parts, nr_parts);
++	} else if (nr_parts < 0 && flash->parts) {
++		add_mtd_partitions(info->mtd, flash->parts, flash->nr_parts);
++	} else
++#endif
++	{
++		printk(KERN_NOTICE "MXC flash: no partition info "
++		       "available, registering whole flash\n");
++		add_mtd_device(info->mtd);
++	}
++
++	platform_set_drvdata(pdev, info);
++	return 0;
++
++      out_iounmap:
++	iounmap(info->map.virt);
++      out_release_mem_region:
++	release_mem_region(res->start, size);
++      out_free_info:
++	kfree(info);
++
++	return err;
++}
++
++static int __devexit mxcflash_remove(struct platform_device *pdev)
++{
++
++	struct mxcflash_info *info = platform_get_drvdata(pdev);
++	struct flash_platform_data *flash = pdev->dev.platform_data;
++
++	platform_set_drvdata(pdev, NULL);
++
++	if (info) {
++		if (info->parts) {
++			del_mtd_partitions(info->mtd);
++			kfree(info->parts);
++		} else if (flash->parts)
++			del_mtd_partitions(info->mtd);
++		else
++			del_mtd_device(info->mtd);
++
++		map_destroy(info->mtd);
++		release_mem_region(info->map.phys, info->map.size);
++		iounmap((void __iomem *)info->map.virt);
++		kfree(info);
++	}
++	return 0;
++}
++
++static struct platform_driver mxcflash_driver = {
++	.driver = {
++		   .name = "mxc_nor_flash",
++		   },
++	.probe = mxcflash_probe,
++	.remove = __devexit_p(mxcflash_remove),
++};
++
++/*!
++ * This is the module's entry function. It passes board specific
++ * config details into the MTD physmap driver which then does the
++ * real work for us. After this function runs, our job is done.
++ *
++ * @return  0 if successful; non-zero otherwise
++ */
++static int __init mxc_mtd_init(void)
++{
++	pr_info("MXC MTD nor Driver %s\n", DVR_VER);
++	if (platform_driver_register(&mxcflash_driver) != 0) {
++		printk(KERN_ERR "Driver register failed for mxcflash_driver\n");
++		return -ENODEV;
++	}
++	return 0;
++}
++
++/*!
++ * This function is the module's exit function. It's empty because the
++ * MTD physmap driver is doing the real work and our job was done after
++ * mxc_mtd_init() runs.
++ */
++static void __exit mxc_mtd_exit(void)
++{
++	platform_driver_unregister(&mxcflash_driver);
++}
++
++module_init(mxc_mtd_init);
++module_exit(mxc_mtd_exit);
++
++MODULE_AUTHOR("Freescale Semiconductor, Inc.");
++MODULE_DESCRIPTION("MTD map and partitions for Freescale MXC boards");
++MODULE_LICENSE("GPL");
+Index: linux-2.6.18/arch/arm/mach-mx2/mx27ads.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-mx2/mx27ads.c
++++ linux-2.6.18/arch/arm/mach-mx2/mx27ads.c
+@@ -21,6 +21,12 @@
+ #include <linux/irq.h>
+ 
+ #include <linux/spi/spi.h>
++#if defined(CONFIG_MTD) || defined(CONFIG_MTD_MODULE)
++#include <linux/mtd/mtd.h>
++#include <linux/mtd/map.h>
++#include <linux/mtd/partitions.h>
++#include <asm/mach/flash.h>
++#endif
+ #include <asm/hardware.h>
+ #include <asm/mach-types.h>
+ #include <asm/mach/arch.h>
+@@ -41,6 +47,82 @@ static void mxc_nop_release(struct devic
+         /* Nothing */
+ }
+ 
++/* MTD NOR flash */
++
++#if defined(CONFIG_MTD_MXC) || defined(CONFIG_MTD_MXC_MODULE)
++
++static struct mtd_partition mxc_nor_partitions[] = {
++        {
++         .name = "Bootloader",
++         .size = 512 * 1024,
++         .offset = 0x00000000,
++         .mask_flags = MTD_WRITEABLE    /* force read-only */
++         },
++        {
++         .name = "nor.Kernel",
++         .size = 2 * 1024 * 1024,
++         .offset = MTDPART_OFS_APPEND,
++         .mask_flags = 0},
++        {
++         .name = "nor.userfs",
++         .size = 14 * 1024 * 1024,
++         .offset = MTDPART_OFS_APPEND,
++         .mask_flags = 0},
++        {
++         .name = "nor.rootfs",
++         .size = 12 * 1024 * 1024,
++         .offset = MTDPART_OFS_APPEND,
++         .mask_flags = MTD_WRITEABLE},
++        {
++         .name = "FIS directory",
++         .size = 12 * 1024,
++         .offset = 0x01FE0000,
++         .mask_flags = MTD_WRITEABLE    /* force read-only */
++         },
++        {
++         .name = "Redboot config",
++         .size = MTDPART_SIZ_FULL,
++         .offset = 0x01FFF000,
++         .mask_flags = MTD_WRITEABLE    /* force read-only */
++         },
++};
++
++
++static struct flash_platform_data mxc_flash_data = {
++        .map_name = "cfi_probe",
++        .width = 2,
++        .parts = mxc_nor_partitions,
++        .nr_parts = ARRAY_SIZE(mxc_nor_partitions),
++};
++
++static struct resource mxc_flash_resource = {
++        .start = 0xc0000000,
++        .end = 0xc0000000 + 0x02000000 - 1,
++        .flags = IORESOURCE_MEM,
++
++};
++
++static struct platform_device mxc_nor_mtd_device = {
++        .name = "mxc_nor_flash",
++        .id = 0,
++        .dev = {
++                .release = mxc_nop_release,
++                .platform_data = &mxc_flash_data,
++                },
++        .num_resources = 1,
++        .resource = &mxc_flash_resource,
++};
++
++static void mxc_init_nor_mtd(void)
++{
++        (void)platform_device_register(&mxc_nor_mtd_device);
++}
++#else
++static void mxc_init_nor_mtd(void)
++{
++}
++#endif
++
+ #if defined(CONFIG_FB_MXC_SYNC_PANEL) || defined(CONFIG_FB_MXC_SYNC_PANEL_MODULE)
+ static const char fb_default_mode[] = "Sharp-QVGA";
+ 
+@@ -376,6 +458,7 @@ static void __init mx27ads_board_init(vo
+ 	mxc_clocks_init();
+ 	mxc_gpio_init();
+ 	mxc_expio_init();
++        mxc_init_nor_mtd();
+ 	mxc_init_extuart();
+ 
+         spi_register_board_info(mxc_spi_board_info,
+Index: linux-2.6.18/mvl_patches/pro50-0122.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0122.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(122);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

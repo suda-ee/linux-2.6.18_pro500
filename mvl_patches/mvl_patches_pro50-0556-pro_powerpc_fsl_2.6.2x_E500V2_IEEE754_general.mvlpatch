@@ -1,0 +1,797 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_fsl_2.6.2x_E500V2_IEEE754_general
+# Date: Fri Oct 26 08:43:04 2007
+# Source: Freescale Semiconductor
+# MR: 25195
+# Type: Enhancement
+# Disposition: merged from Freescale Semiconductor
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# Add the general support for Embedded Floating-Point instructions
+# to fully comply with IEEE-754.
+# 
+# Signed-off-by:Ebony Zhu <ebony.zhu@freescale.com>
+# 
+# NOTE: This patch was modified to require MATH_EMULATION when SPE was
+# selected to avoid build errors.
+
+PATCHNUM=556
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Freescale Semiconductor
+MR: 25195
+Type: Enhancement
+Disposition: merged from Freescale Semiconductor
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+Add the general support for Embedded Floating-Point instructions
+to fully comply with IEEE-754.
+
+Signed-off-by:Ebony Zhu <ebony.zhu@freescale.com>
+
+NOTE: This patch was modified to require MATH_EMULATION when SPE was
+selected to avoid build errors.
+Index: linux-2.6.18/arch/powerpc/kernel/head_fsl_booke.S
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/head_fsl_booke.S
++++ linux-2.6.18/arch/powerpc/kernel/head_fsl_booke.S
+@@ -700,12 +700,15 @@ interrupt_base:
+ 	/* SPE Floating Point Data */
+ #ifdef CONFIG_SPE
+ 	EXCEPTION(0x2030, SPEFloatingPointData, SPEFloatingPointException, EXC_XFER_EE);
++
++	/* SPE Floating Point Round */
++	EXCEPTION(0x2050, SPEFloatingPointRound, SPEFloatingPointException_Round, EXC_XFER_EE)
+ #else
+ 	EXCEPTION(0x2040, SPEFloatingPointData, unknown_exception, EXC_XFER_EE)
+-#endif /* CONFIG_SPE */
+ 
+ 	/* SPE Floating Point Round */
+ 	EXCEPTION(0x2050, SPEFloatingPointRound, unknown_exception, EXC_XFER_EE)
++#endif /* CONFIG_SPE */
+ 
+ 	/* Performance Monitor */
+ 	EXCEPTION(0x2060, PerformanceMonitor, performance_monitor_exception, EXC_XFER_STD)
+@@ -840,6 +843,8 @@ load_up_spe:
+ 	oris	r5,r5,MSR_SPE@h
+ 	mtmsr	r5			/* enable use of SPE now */
+ 	isync
++	li	r5,(SPEFSCR_FINVE | SPEFSCR_FDBZE | SPEFSCR_FUNFE | SPEFSCR_FOVFE)
++	mtspr   SPRN_SPEFSCR,r5
+ /*
+  * For SMP, we don't do lazy SPE switching because it just gets too
+  * horrendously complex, especially when a task switches from one CPU
+Index: linux-2.6.18/arch/powerpc/kernel/traps.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/traps.c
++++ linux-2.6.18/arch/powerpc/kernel/traps.c
+@@ -1049,9 +1049,16 @@ void CacheLockingException(struct pt_reg
+ #ifdef CONFIG_SPE
+ void SPEFloatingPointException(struct pt_regs *regs)
+ {
++	extern int spedata_handler(struct pt_regs *regs);
+ 	unsigned long spefscr;
+ 	int fpexc_mode;
+ 	int code = 0;
++	int err;
++
++	preempt_disable();
++	if (regs->msr & MSR_SPE)
++		giveup_spe(current);
++	preempt_enable();
+ 
+ 	spefscr = current->thread.spefscr;
+ 	fpexc_mode = current->thread.fpexc_mode;
+@@ -1076,9 +1083,55 @@ void SPEFloatingPointException(struct pt
+ 		code = FPE_FLTRES;
+ 
+ 	current->thread.spefscr = spefscr;
++	err = spedata_handler(regs);
++	if (err == 0) {
++		regs->nip += 4;		/* skip emulated instruction */
++		emulate_single_step(regs);
++		return;
++	}
+ 
+-	_exception(SIGFPE, regs, code, regs->nip);
+-	return;
++	if (err == -EFAULT) {
++		/* got an error reading the instruction */
++		_exception(SIGSEGV, regs, SEGV_ACCERR, regs->nip);
++	} else if (err == -EINVAL) {
++		/* didn't recognize the instruction */
++		printk(KERN_ERR "unrecognized spe instruction "
++		       "in %s at %lx\n", current->comm, regs->nip);
++	} else {
++		_exception(SIGFPE, regs, code, regs->nip);
++		return;
++	}
++}
++
++void SPEFloatingPointException_Round(struct pt_regs *regs)
++{
++	extern int speround_handler(struct pt_regs *regs);
++	int err;
++
++	preempt_disable();
++	if (regs->msr & MSR_SPE)
++		giveup_spe(current);
++	preempt_enable();
++
++	regs->nip -= 4;
++	err = speround_handler(regs);
++	if (err == 0) {
++		regs->nip += 4;		/* skip emulated instruction */
++		emulate_single_step(regs);
++		return;
++	}
++
++	if (err == -EFAULT) {
++		/* got an error reading the instruction */
++		_exception(SIGSEGV, regs, SEGV_ACCERR, regs->nip);
++	} else if (err == -EINVAL) {
++		/* didn't recognize the instruction */
++		printk(KERN_ERR "unrecognized spe instruction "
++		       "in %s at %lx\n", current->comm, regs->nip);
++	} else {
++		_exception(SIGFPE, regs, 0, regs->nip);
++		return;
++	}
+ }
+ #endif
+ 
+Index: linux-2.6.18/arch/powerpc/math-emu/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/math-emu/Makefile
++++ linux-2.6.18/arch/powerpc/math-emu/Makefile
+@@ -1,16 +1,29 @@
+ 
+-obj-y				:= math.o fmr.o lfd.o stfd.o
++obj-y				:= fabs.o fneg.o types.o udivmodti4.o
+ 
+-obj-$(CONFIG_MATH_EMULATION)	+= fabs.o fadd.o fadds.o fcmpo.o fcmpu.o \
++obj-$(CONFIG_MATH_EMULATION)	+= math.o fmr.o lfd.o stfd.o \
++					fadd.o fadds.o fcmpo.o fcmpu.o \
+ 					fctiw.o fctiwz.o fdiv.o fdivs.o \
+ 					fmadd.o fmadds.o fmsub.o fmsubs.o \
+-					fmul.o fmuls.o fnabs.o fneg.o types.o \
++					fmul.o fmuls.o fnabs.o \
+ 					fnmadd.o fnmadds.o fnmsub.o fnmsubs.o \
+ 					fres.o frsp.o frsqrte.o fsel.o lfs.o \
+ 					fsqrt.o	fsqrts.o fsub.o fsubs.o \
+ 					mcrfs.o mffs.o mtfsb0.o mtfsb1.o \
+-					mtfsf.o mtfsfi.o stfiwx.o stfs.o \
+-					udivmodti4.o
++					mtfsf.o mtfsfi.o stfiwx.o stfs.o
++
++obj-$(CONFIG_SPE)		+= efsabs.o efsadd.o efscfd.o efscmpeq.o \
++					efscmpgt.o efscmplt.o efsctsf.o efsctsi.o \
++					efsctsiz.o efsctuf.o efsctui.o efsctuiz.o \
++					efsdiv.o efsmul.o efsnabs.o efsneg.o efssub.o \
++					evfsabs.o evfsadd.o evfscmpeq.o evfscmpgt.o \
++					evfscmplt.o evfsctsf.o evfsctsi.o evfsctsiz.o \
++					evfsctuf.o evfsctui.o evfsctuiz.o evfsdiv.o \
++					evfsmul.o evfsnabs.o evfsneg.o evfssub.o \
++					efdadd.o efdcfs.o efdcmpeq.o efdcmpgt.o efdcmplt.o \
++					efdctsf.o efdctsi.o efdctsidz.o efdctsiz.o efdctuf.o \
++					efdctui.o efdctuidz.o efdctuiz.o efddiv.o efdmul.o \
++					efdnabs.o efdsub.o
+ 
+ CFLAGS_fabs.o = -fno-builtin-fabs
+ CFLAGS_math.o = -fno-builtin-fabs
+Index: linux-2.6.18/arch/powerpc/math-emu/sfp-machine.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/math-emu/sfp-machine.h
++++ linux-2.6.18/arch/powerpc/math-emu/sfp-machine.h
+@@ -166,7 +166,9 @@ extern int  fp_pack_ds(void *, long, uns
+ #include <linux/kernel.h>
+ #include <linux/sched.h>
+ 
++#ifndef __FPU_FPSCR
+ #define __FPU_FPSCR	(current->thread.fpscr.val)
++#endif
+ 
+ /* We only actually write to the destination register
+  * if exceptions signalled (if any) will not trap.
+Index: linux-2.6.18/arch/powerpc/math-emu/spe.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/spe.h
+@@ -0,0 +1 @@
++#define __FPU_FPSCR	(current->thread.spefscr)
+Index: linux-2.6.18/arch/powerpc/sysdev/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/Makefile
++++ linux-2.6.18/arch/powerpc/sysdev/Makefile
+@@ -12,6 +12,7 @@ obj-$(CONFIG_FSL_SOC)		+= fsl_soc.o
+ obj-$(CONFIG_FSL_PCI)		+= fsl_pci.o
+ obj-$(CONFIG_TSI108_BRIDGE)	+= tsi108_pci.o tsi108_dev.o
+ obj-$(CONFIG_QUICC_ENGINE)	+= qe_lib/
++obj-$(CONFIG_SPE)		+= sigfpe_handler.o
+ mv64x60-$(CONFIG_PCI)		+= mv64x60_pci.o
+ obj-$(CONFIG_MV64X60)		+= $(mv64x60-y) mv64x60_pic.o mv64x60_dev.o
+ obj-$(CONFIG_MTD)		+= rom.o
+Index: linux-2.6.18/arch/powerpc/sysdev/sigfpe_handler.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/sysdev/sigfpe_handler.c
+@@ -0,0 +1,361 @@
++/*
++ * arch/powerpc/sysdev/sigfpe_handler.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Derived from arch/powerpc/math-emu/math.c
++ * Copyright (C) 1999  Eddie C. Dost  (ecd@atecom.com)
++ *
++ * Description:
++ * This file is the exception handler to make E500 SPE instructions
++ * fully comply with IEEE-754 floating point standard.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */
++
++#include <linux/types.h>
++#include <asm/uaccess.h>
++#include <asm/reg.h>
++
++#define SPEFUNC(x)	extern int x(void *, void *, void *, void *)
++#define efdabs	fabs
++#define efdneg	fneg
++
++/* Scalar SPFP functions */
++SPEFUNC(efsabs);
++SPEFUNC(efsadd);
++SPEFUNC(efscfd);
++SPEFUNC(efscmpeq);
++SPEFUNC(efscmpgt);
++SPEFUNC(efscmplt);
++SPEFUNC(efsctsf);
++SPEFUNC(efsctsi);
++SPEFUNC(efsctsiz);
++SPEFUNC(efsctuf);
++SPEFUNC(efsctui);
++SPEFUNC(efsctuiz);
++SPEFUNC(efsdiv);
++SPEFUNC(efsmul);
++SPEFUNC(efsnabs);
++SPEFUNC(efsneg);
++SPEFUNC(efssub);
++
++/* Vector Floating-Point functions */
++SPEFUNC(evfsabs);
++SPEFUNC(evfsadd);
++SPEFUNC(evfscmpeq);
++SPEFUNC(evfscmpgt);
++SPEFUNC(evfscmplt);
++SPEFUNC(evfsctsf);
++SPEFUNC(evfsctsi);
++SPEFUNC(evfsctsiz);
++SPEFUNC(evfsctuf);
++SPEFUNC(evfsctui);
++SPEFUNC(evfsctuiz);
++SPEFUNC(evfsdiv);
++SPEFUNC(evfsmul);
++SPEFUNC(evfsnabs);
++SPEFUNC(evfsneg);
++SPEFUNC(evfssub);
++
++/* Scalar DPFP functions */
++SPEFUNC(efdabs);
++SPEFUNC(efdadd);
++SPEFUNC(efdcfs);
++SPEFUNC(efdcmpeq);
++SPEFUNC(efdcmpgt);
++SPEFUNC(efdcmplt);
++SPEFUNC(efdctsf);
++SPEFUNC(efdctsi);
++SPEFUNC(efdctsidz);
++SPEFUNC(efdctsiz);
++SPEFUNC(efdctuf);
++SPEFUNC(efdctui);
++SPEFUNC(efdctuidz);
++SPEFUNC(efdctuiz);
++SPEFUNC(efddiv);
++SPEFUNC(efdmul);
++SPEFUNC(efdnabs);
++SPEFUNC(efdneg);
++SPEFUNC(efdsub);
++
++#define VCT		0x4
++#define SPFP		0x6
++#define DPFP		0x7
++#define EFAPU		0x4
++
++#define EFSADD		0x2c0
++#define EFSSUB		0x2c1
++#define EFSABS		0x2c4
++#define EFSNABS		0x2c5
++#define EFSNEG		0x2c6
++#define EFSMUL		0x2c8
++#define EFSDIV		0x2c9
++#define EFSCMPGT	0x2cc
++#define EFSCMPLT	0x2cd
++#define EFSCMPEQ	0x2ce
++#define EFSCFD		0x2cf
++#define EFSCTUI		0x2d4
++#define EFSCTSI		0x2d5
++#define EFSCTUF		0x2d6
++#define EFSCTSF		0x2d7
++#define EFSCTUIZ	0x2d8
++#define EFSCTSIZ	0x2da
++
++#define EVFSADD		0x280
++#define EVFSSUB		0x281
++#define EVFSABS		0x284
++#define EVFSNABS	0x285
++#define EVFSNEG		0x286
++#define EVFSMUL		0x288
++#define EVFSDIV		0x289
++#define EVFSCMPGT	0x28c
++#define EVFSCMPLT	0x28d
++#define EVFSCMPEQ	0x28e
++#define EVFSCTUI	0x294
++#define EVFSCTSI	0x295
++#define EVFSCTUF	0x296
++#define EVFSCTSF	0x297
++#define EVFSCTUIZ	0x298
++#define EVFSCTSIZ	0x29a
++
++#define EFDADD		0x2e0
++#define EFDSUB		0x2e1
++#define EFDABS		0x2e4
++#define EFDNABS		0x2e5
++#define EFDNEG		0x2e6
++#define EFDMUL		0x2e8
++#define EFDDIV		0x2e9
++#define EFDCTUIDZ	0x2ea
++#define EFDCTSIDZ	0x2eb
++#define EFDCMPGT	0x2ec
++#define EFDCMPLT	0x2ed
++#define EFDCMPEQ	0x2ee
++#define EFDCFS		0x2ef
++#define EFDCTUI		0x2f4
++#define EFDCTSI		0x2f5
++#define EFDCTUF		0x2f6
++#define EFDCTSF		0x2f7
++#define EFDCTUIZ	0x2f8
++#define EFDCTSIZ	0x2fa
++
++#define AB	2
++#define XA	3
++#define XB	4
++#define XCR	5
++
++static u64 fullgprs[32];
++static u32 speinsn;
++static int insn_decode(struct pt_regs *regs);
++static int (*func)(void *, void *, void *, void *);
++static void *op0 = 0, *op1 = 0, *op2 = 0, *op3 = 0;
++static int type = 0, flag;
++
++int
++spedata_handler(struct pt_regs *regs)
++{
++	int i;
++
++	if (get_user(speinsn, (unsigned int __user *) regs->nip))
++		return -EFAULT;
++	if ((speinsn >> 26) != 4)
++		return -EINVAL;         /* not an spe instruction */
++	switch ((speinsn >> 5) & 0x7 ) {
++	case SPFP:
++		for(i = 0; i < 32; i++) {
++			fullgprs[i] = regs->gpr[i];
++			fullgprs[i] = fullgprs[i] << 32 | current->thread.evr[i];
++		};
++		break;
++	default:
++		for(i = 0; i < 32; i++) {
++			fullgprs[i] = current->thread.evr[i];
++			fullgprs[i] = (fullgprs[i] << 32) | (regs->gpr[i]);
++		};
++	}
++
++	if (insn_decode(regs) == -ENOSYS) return -ENOSYS;
++	flag = func(op0, op1, op2, op3);
++
++	switch ((speinsn >> 5) & 0x7 ) {
++	case SPFP:
++		for (i = 0; i < 32; i++) {
++			regs->gpr[i] = fullgprs[i] >> 32;
++		};
++		break;
++	default:
++		for (i = 0; i < 32; i++) {
++			regs->gpr[i] = fullgprs[i];
++			current->thread.evr[i] = fullgprs[i] >> 32;
++		};
++	}
++	return 0;
++}
++
++int
++speround_handler(struct pt_regs *regs)
++{
++	u32 lsb_lo, lsb_hi;
++	int s_lo, s_hi;
++	int rD;
++
++	if (get_user(speinsn, (unsigned int __user *) regs->nip))
++		return -EFAULT;
++	if ((speinsn >> 26) != 4)
++		return -EINVAL;         /* not an spe instruction */
++
++	rD = (speinsn >> 21) & 0x1f;
++	flag = insn_decode(regs);
++	if (type == XCR) return -ENOSYS;
++
++	s_lo = (regs->gpr[rD] & 0x80000000) >> 31;
++	s_hi = (current->thread.evr[rD] & 0x80000000) >> 31;
++	lsb_lo = regs->gpr[rD];
++	lsb_hi = current->thread.evr[rD];
++	switch ((speinsn >> 5) & 0x7 ) {
++	/* Since SPE instructions on E500 core can handle round to nearest
++	 * and round toward zero with IEEE-754 complied, we just need
++	 * to handle round toward +Inf and round toward -Inf by software.
++	 */
++	case SPFP:
++		if ((current->thread.spefscr & 0x3) == 0x2) { /* round to +Inf */
++			if (!s_lo) lsb_lo++; /* Z > 0, choose Z1 */
++		} else { /* round to -Inf */
++			if (s_lo) lsb_lo++; /* Z < 0, choose Z2 */
++		}
++		regs->gpr[rD] = lsb_lo;
++		break;
++	case DPFP:
++		fullgprs[rD] = current->thread.evr[rD];
++		fullgprs[rD] = (fullgprs[rD] << 32) | (regs->gpr[rD]);
++
++		if ((current->thread.spefscr & 0x3) == 0x2) { /* round to +Inf */
++			if (!s_hi) fullgprs[rD]++; /* Z > 0, choose Z1 */
++		} else { /* round to -Inf */
++			if (s_hi) fullgprs[rD]++; /* Z < 0, choose Z2 */
++		}
++		regs->gpr[rD] = fullgprs[rD];
++		current->thread.evr[rD] = fullgprs[rD] >> 32;
++		break;
++	case VCT:
++		if ((current->thread.spefscr & 0x3) == 0x2) { /* round to +Inf */
++			if (!s_lo) lsb_lo++; /* Z_low > 0, choose Z1 */
++			if (!s_hi) lsb_hi++; /* Z_high word > 0, choose Z1 */
++		} else { /* round to -Inf */
++			if (s_lo) lsb_lo++; /* Z_low < 0, choose Z2 */
++			if (s_hi) lsb_hi++; /* Z_high < 0, choose Z2 */
++		}
++		regs->gpr[rD] = lsb_lo;
++		current->thread.evr[rD] = lsb_hi;
++		break;
++	default:
++		return -EINVAL;
++	}
++	return 0;
++}
++
++static int insn_decode(struct pt_regs *regs)
++{
++	switch (speinsn >> 26) {
++
++	case EFAPU:
++		switch (speinsn & 0x7ff) {
++		case EFSABS:	func = efsabs;		type = XA;	break;
++		case EFSADD:	func = efsadd;		type = AB;      break;
++		case EFSCFD:	func = efscfd;		type = XB;	break;
++		case EFSCMPEQ:	func = efscmpeq;	type = XCR;	break;
++		case EFSCMPGT:	func = efscmpgt;	type = XCR;	break;
++		case EFSCMPLT:	func = efscmplt;	type = XCR;	break;
++		case EFSCTSF:	func = efsctsf;		type = XB;	break;
++		case EFSCTSI:	func = efsctsi;		type = XB;	break;
++		case EFSCTSIZ:	func = efsctsiz;	type = XB;	break;
++		case EFSCTUF:	func = efsctuf;		type = XB;	break;
++		case EFSCTUI:	func = efsctui;		type = XB;	break;
++		case EFSCTUIZ:	func = efsctuiz;	type = XB;	break;
++		case EFSDIV:	func = efsdiv;		type = AB;	break;
++		case EFSMUL:	func = efsmul;		type = AB;	break;
++		case EFSNABS:	func = efsnabs;		type = XA;	break;
++		case EFSNEG:	func = efsneg;		type = XA;	break;
++		case EFSSUB:	func = efssub;		type = AB;	break;
++
++		case EVFSABS:	func = evfsabs;		type = XA;	break;
++		case EVFSADD:	func = evfsadd;		type = AB;      break;
++		case EVFSCMPEQ:	func = evfscmpeq;	type = XCR;	break;
++		case EVFSCMPGT:	func = evfscmpgt;	type = XCR;	break;
++		case EVFSCMPLT:	func = evfscmplt;	type = XCR;	break;
++		case EVFSCTSF:	func = evfsctsf;	type = XB;	break;
++		case EVFSCTSI:	func = evfsctsi;	type = XB;	break;
++		case EVFSCTSIZ:	func = evfsctsiz;	type = XB;	break;
++		case EVFSCTUF:	func = evfsctuf;	type = XB;	break;
++		case EVFSCTUI:	func = evfsctui;	type = XB;	break;
++		case EVFSCTUIZ:	func = evfsctuiz;	type = XB;	break;
++		case EVFSDIV:	func = evfsdiv;		type = AB;	break;
++		case EVFSMUL:	func = evfsmul;		type = AB;	break;
++		case EVFSNABS:	func = evfsnabs;	type = XA;	break;
++		case EVFSNEG:	func = evfsneg;		type = XA;	break;
++		case EVFSSUB:	func = evfssub;		type = AB;	break;
++
++		case EFDABS:	func = efdabs;		type = XA;	break;
++		case EFDADD:	func = efdadd;		type = AB;	break;
++		case EFDCFS:	func = efdcfs;		type = XB;	break;
++		case EFDCMPEQ:	func = efdcmpeq;	type = XCR;	break;
++		case EFDCMPGT:	func = efdcmpgt;	type = XCR;	break;
++		case EFDCMPLT:	func = efdcmplt;	type = XCR;	break;
++		case EFDCTSF:	func = efdctsf;		type = XB;	break;
++		case EFDCTSI:	func = efdctsi;		type = XB;	break;
++		case EFDCTSIDZ:	func = efdctsidz;	type = XB;	break;
++		case EFDCTSIZ:	func = efdctsiz;	type = XB;	break;
++		case EFDCTUF:	func = efdctuf;		type = XB;	break;
++		case EFDCTUI:	func = efdctui;		type = XB;	break;
++		case EFDCTUIDZ:	func = efdctuidz;	type = XB;	break;
++		case EFDCTUIZ:	func = efdctuiz;	type = XB;	break;
++		case EFDDIV:	func = efddiv;		type = AB;	break;
++		case EFDMUL:	func = efdmul;		type = AB;	break;
++		case EFDNABS:	func = efdnabs;		type = XA;	break;
++		case EFDNEG:	func = efdneg;		type = XA;	break;
++		case EFDSUB:	func = efdsub;		type = AB;	break;
++		default:
++			goto illegal;
++		}
++		break;
++	default:
++		goto illegal;
++	}
++
++	switch (type) {
++	case AB:
++		op0 = &fullgprs[(speinsn >> 21) & 0x1f];
++		op1 = &fullgprs[(speinsn >> 16) & 0x1f];
++		op2 = &fullgprs[(speinsn >> 11) & 0x1f];
++		break;
++
++	case XA:
++		op0 = &fullgprs[(speinsn >> 21) & 0x1f];
++		op1 = &fullgprs[(speinsn >> 16) & 0x1f];
++		break;
++
++	case XB:
++		op0 = &fullgprs[(speinsn >> 21) & 0x1f];
++		op1 = &fullgprs[(speinsn >> 11) & 0x1f];
++		break;
++
++	case XCR:
++		op0 = (void *)&regs->ccr;
++		op1 = (void *)((speinsn >> 23) & 0x7);
++		op2 = &fullgprs[(speinsn >> 16) & 0x1f];
++		op3 = &fullgprs[(speinsn >> 11) & 0x1f];
++		break;
++
++	default:
++		goto illegal;
++	}
++	return 0;
++illegal:
++	printk(KERN_ERR "\nOoops! IEEE-754 compliance handler encountered un-supported instruction.\n");
++	return -ENOSYS;
++}
+Index: linux-2.6.18/arch/powerpc/platforms/Kconfig.cputype
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/Kconfig.cputype
++++ linux-2.6.18/arch/powerpc/platforms/Kconfig.cputype
+@@ -144,6 +144,7 @@ config SPE
+ 	bool "SPE Support"
+ 	depends on E200 || E500
+ 	default y
++	select MATH_EMULATION
+ 	---help---
+ 	  This option enables kernel support for the Signal Processing
+ 	  Extensions (SPE) to the PowerPC processor. The kernel currently
+Index: linux-2.6.18/mvl_patches/pro50-0556.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0556.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(556);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

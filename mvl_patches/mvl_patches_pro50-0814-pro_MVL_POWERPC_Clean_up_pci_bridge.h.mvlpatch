@@ -1,0 +1,425 @@
+#! /usr/bin/env bash
+# Patch: -pro_MVL_POWERPC_Clean_up_pci_bridge.h
+# Date: Wed Mar  5 11:41:22 2008
+# MR: 26747
+# Disposition: backport from
+# git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# Adjustments:
+#     Minor changes to make it apply with no fuzz.
+# 
+# From 7cd1de6bc1a46867fa5b9405e8ce0cbf9bc4a884 Mon Sep 17 00:00:00 2001
+# From: Stephen Rothwell <sfr@canb.auug.org.au>
+# Date: Thu, 6 Dec 2007 18:02:28 +1100
+# Subject: [PATCH] [POWERPC] Clean up pci-bridge.h
+# 
+# No semantic changes.
+# 
+# Signed-off-by: Stephen Rothwell <sfr@canb.auug.org.au>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=814
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26747
+Disposition: backport from
+git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+Adjustments:
+    Minor changes to make it apply with no fuzz.
+
+From 7cd1de6bc1a46867fa5b9405e8ce0cbf9bc4a884 Mon Sep 17 00:00:00 2001
+From: Stephen Rothwell <sfr@canb.auug.org.au>
+Date: Thu, 6 Dec 2007 18:02:28 +1100
+Subject: [PATCH] [POWERPC] Clean up pci-bridge.h
+
+No semantic changes.
+
+Signed-off-by: Stephen Rothwell <sfr@canb.auug.org.au>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/include/asm-powerpc/pci-bridge.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pci-bridge.h
++++ linux-2.6.18/include/asm-powerpc/pci-bridge.h
+@@ -1,16 +1,17 @@
+ #ifndef _ASM_POWERPC_PCI_BRIDGE_H
+ #define _ASM_POWERPC_PCI_BRIDGE_H
+ #ifdef __KERNEL__
+-
++/*
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */
+ #include <linux/pci.h>
+ #include <linux/list.h>
+ #include <linux/ioport.h>
+ 
+ #ifndef CONFIG_PPC64
+-
+-struct device_node;
+-struct pci_controller;
+-
+ /*
+  * Structure of a PCI controller (host bridge)
+  */
+@@ -51,11 +52,11 @@ struct pci_controller {
+ 	 *   set.
+ 	 *  BIG_ENDIAN - cfg_addr is a big endian register
+ 	 */
+-#define PPC_INDIRECT_TYPE_SET_CFG_TYPE		(0x00000001)
+-#define PPC_INDIRECT_TYPE_EXT_REG		(0x00000002)
+-#define PPC_INDIRECT_TYPE_SURPRESS_PRIMARY_BUS	(0x00000004)
+-#define PPC_INDIRECT_TYPE_NO_PCIE_LINK		(0x00000008)
+-#define PPC_INDIRECT_TYPE_BIG_ENDIAN		(0x00000010)
++#define PPC_INDIRECT_TYPE_SET_CFG_TYPE		0x00000001
++#define PPC_INDIRECT_TYPE_EXT_REG		0x00000002
++#define PPC_INDIRECT_TYPE_SURPRESS_PRIMARY_BUS	0x00000004
++#define PPC_INDIRECT_TYPE_NO_PCIE_LINK		0x00000008
++#define PPC_INDIRECT_TYPE_BIG_ENDIAN		0x00000010
+ 	u32 indirect_type;
+ 
+ 	/* Currently, we limit ourselves to 1 IO range and 3 mem
+@@ -81,18 +82,18 @@ static inline int isa_vaddr_is_ioport(vo
+ 
+ /* These are used for config access before all the PCI probing
+    has been done. */
+-int early_read_config_byte(struct pci_controller *hose, int bus, int dev_fn,
+-			   int where, u8 *val);
+-int early_read_config_word(struct pci_controller *hose, int bus, int dev_fn,
+-			   int where, u16 *val);
+-int early_read_config_dword(struct pci_controller *hose, int bus, int dev_fn,
+-			    int where, u32 *val);
+-int early_write_config_byte(struct pci_controller *hose, int bus, int dev_fn,
+-			    int where, u8 val);
+-int early_write_config_word(struct pci_controller *hose, int bus, int dev_fn,
+-			    int where, u16 val);
+-int early_write_config_dword(struct pci_controller *hose, int bus, int dev_fn,
+-			     int where, u32 val);
++extern int early_read_config_byte(struct pci_controller *hose, int bus,
++			int dev_fn, int where, u8 *val);
++extern int early_read_config_word(struct pci_controller *hose, int bus,
++			int dev_fn, int where, u16 *val);
++extern int early_read_config_dword(struct pci_controller *hose, int bus,
++			int dev_fn, int where, u32 *val);
++extern int early_write_config_byte(struct pci_controller *hose, int bus,
++			int dev_fn, int where, u8 val);
++extern int early_write_config_word(struct pci_controller *hose, int bus,
++			int dev_fn, int where, u16 val);
++extern int early_write_config_dword(struct pci_controller *hose, int bus,
++			int dev_fn, int where, u32 val);
+ 
+ extern int early_find_capability(struct pci_controller *hose, int bus,
+ 				 int dev_fn, int cap);
+@@ -104,16 +105,7 @@ extern void setup_grackle(struct pci_con
+ extern void __init update_bridge_resource(struct pci_dev *dev,
+ 					  struct resource *res);
+ 
+-#else
+-
+-#include <linux/config.h>
+-
+-/*
+- * This program is free software; you can redistribute it and/or
+- * modify it under the terms of the GNU General Public License
+- * as published by the Free Software Foundation; either version
+- * 2 of the License, or (at your option) any later version.
+- */
++#else	/* CONFIG_PPC64 */
+ 
+ /*
+  * Structure of a PCI controller (host bridge)
+@@ -160,8 +152,8 @@ struct pci_controller {
+  * PCI stuff, for nodes representing PCI devices, pointed to
+  * by device_node->data.
+  */
+-struct pci_controller;
+ struct iommu_table;
++struct device_node;
+ 
+ struct pci_dn {
+ 	int	busno;			/* pci bus number */
+@@ -173,8 +165,8 @@ struct pci_dn {
+ 	int	eeh_mode;		/* See eeh.h for possible EEH_MODEs */
+ 	int	eeh_config_addr;
+ 	int	eeh_pe_config_addr; /* new-style partition endpoint address */
+-	int 	eeh_check_count;	/* # times driver ignored error */
+-	int 	eeh_freeze_count;	/* # times this device froze up. */
++	int	eeh_check_count;	/* # times driver ignored error */
++	int	eeh_freeze_count;	/* # times this device froze up. */
+ #endif
+ 	int	pci_ext_config_space;	/* for pci devices */
+ 	struct  pci_controller *phb;	/* for pci devices */
+@@ -187,7 +179,7 @@ struct pci_dn {
+ /* Get the pointer to a device_node's pci_dn */
+ #define PCI_DN(dn)	((struct pci_dn *) (dn)->data)
+ 
+-struct device_node *fetch_dev_dn(struct pci_dev *dev);
++extern struct device_node *fetch_dev_dn(struct pci_dev *dev);
+ 
+ /* Get a device_node from a pci_dev.  This code must be fast except
+  * in the case where the sysdata is incorrect and needs to be fixed
+@@ -225,14 +217,14 @@ static inline struct device_node *pci_bu
+ }
+ 
+ /** Find the bus corresponding to the indicated device node */
+-struct pci_bus * pcibios_find_pci_bus(struct device_node *dn);
++extern struct pci_bus *pcibios_find_pci_bus(struct device_node *dn);
+ 
+ /** Remove all of the PCI devices under this bus */
+-void pcibios_remove_pci_devices(struct pci_bus *bus);
++extern void pcibios_remove_pci_devices(struct pci_bus *bus);
+ 
+ /** Discover new pci devices under this bus, and add them */
+-void pcibios_add_pci_devices(struct pci_bus * bus);
+-void pcibios_fixup_new_pci_devices(struct pci_bus *bus, int fix_bus);
++extern void pcibios_add_pci_devices(struct pci_bus *bus);
++extern void pcibios_fixup_new_pci_devices(struct pci_bus *bus, int fix_bus);
+ 
+ extern int pcibios_remove_root_bus(struct pci_controller *phb);
+ 
+@@ -268,20 +260,18 @@ extern int pcibios_map_io_space(struct p
+ #define PHB_SET_NODE(PHB, NODE)		((PHB)->node = -1)
+ #endif
+ 
+-#endif /* CONFIG_PPC64 */
++#endif	/* CONFIG_PPC64 */
+ 
+ /* Get the PCI host controller for an OF device */
+-extern struct pci_controller*
+-pci_find_hose_for_OF_device(struct device_node* node);
++extern struct pci_controller *pci_find_hose_for_OF_device(
++			struct device_node* node);
+ 
+ /* Fill up host controller resources from the OF node */
+-extern void
+-pci_process_bridge_OF_ranges(struct pci_controller *hose,
+-			   struct device_node *dev, int primary);
++extern void pci_process_bridge_OF_ranges(struct pci_controller *hose,
++			struct device_node *dev, int primary);
+ 
+ /* Allocate & free a PCI host bridge structure */
+-extern struct pci_controller *
+-pcibios_alloc_controller(struct device_node *dev);
++extern struct pci_controller *pcibios_alloc_controller(struct device_node *dev);
+ extern void pcibios_free_controller(struct pci_controller *phb);
+ 
+ #ifdef CONFIG_PCI
+@@ -296,9 +286,7 @@ static inline int pcibios_vaddr_is_iopor
+ {
+ 	return 0;
+ }
+-#endif
++#endif	/* CONFIG_PCI */
+ 
+-
+-
+-#endif /* __KERNEL__ */
+-#endif
++#endif	/* __KERNEL__ */
++#endif	/* _ASM_POWERPC_PCI_BRIDGE_H */
+Index: linux-2.6.18/mvl_patches/pro50-0814.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0814.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(814);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

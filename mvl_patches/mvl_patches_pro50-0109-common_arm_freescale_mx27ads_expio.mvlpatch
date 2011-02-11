@@ -1,0 +1,505 @@
+#! /usr/bin/env bash
+# Patch: -common_arm_freescale_mx27ads_expio
+# Date: Wed Aug 29 07:24:32 2007
+
+PATCHNUM=109
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Index: linux-2.6.18/arch/arm/mach-mx2/mx27ads.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-mx2/mx27ads.c
++++ linux-2.6.18/arch/arm/mach-mx2/mx27ads.c
+@@ -17,12 +17,16 @@
+ #include <linux/delay.h>
+ #include <linux/io.h>
+ #include <linux/memory.h>
++#include <linux/interrupt.h>
++#include <linux/irq.h>
+ 
+ #include <asm/hardware.h>
+ #include <asm/mach-types.h>
+ #include <asm/mach/arch.h>
+ #include <asm/mach/map.h>
+ #include <asm/arch/common.h>
++#include <asm/arch/gpio.h>
++#include "gpio_mux.h"
+ 
+ /*!
+  * @file mx27ads.c
+@@ -31,6 +35,237 @@
+  * @ingroup System
+  */
+ 
++static const int pbc_card_bit[4][3] = {
++	/* BSTAT            IMR enable       IMR removal */
++	{PBC_BSTAT_SD2_DET, PBC_INTR_SD2_EN, PBC_INTR_SD2_R_EN},
++	{PBC_BSTAT_SD3_DET, PBC_INTR_SD3_EN, PBC_INTR_SD3_R_EN},
++	{PBC_BSTAT_MS_DET, PBC_INTR_MS_EN, PBC_INTR_MS_R_EN},
++	{PBC_BSTAT_SD1_DET, PBC_INTR_SD1_EN, PBC_INTR_SD1_R_EN},
++};
++
++static int mxc_card_status;
++
++/*!
++ * Check if a SD card has been inserted or not.
++ *
++ * @param  num		a card number as defined in \b enum \b mxc_card_no
++ * @return 0 if a card is not present; non-zero otherwise.
++ */
++int mxc_card_detected(enum mxc_card_no num)
++{
++	u32 status;
++
++	status = __raw_readw(PBC_BSTAT1_REG);
++	return ((status & MXC_BSTAT_BIT(num)) == 0);
++}
++
++/*
++ * Check if there is any state change by reading the IMR register and the
++ * previous and current states of the board status register (offset 0x28).
++ * A state change is defined to be card insertion OR removal. So the driver
++ * may have to call the mxc_card_detected() function to see if it is card
++ * insertion or removal.
++ *
++ * @param  mask		current IMR value
++ * @param  s0		previous status register value (offset 0x28)
++ * @param  s1		current status register value (offset 0x28)
++ *
++ * @return 0 if no card status change OR the corresponding bits in the IMR
++ *           (passed in as 'mask') is NOT set.
++ *         A non-zero value indicates some card state changes. For example,
++ *         0b0001 means SD3 has a card state change (bit0 is set) AND its
++ *               associated insertion or removal bits in IMR is SET.
++ *         0b0100 means SD1 has a card state change (bit2 is set) AND its
++ *               associated insertion or removal bits in IMR is SET.
++ *         0b1001 means both MS and SD3 have state changes
++ */
++static u32 mxc_card_state_changed(u32 mask, u32 s0, u32 s1)
++{
++	u32 i, retval = 0;
++	u32 stat = (s0 ^ s1) & 0x7800;
++
++	if (stat == 0)
++		return 0;
++
++	for (i = MXC_CARD_MIN; i <= MXC_CARD_MAX; i++) {
++		if ((stat & pbc_card_bit[i][0]) != 0 &&
++		    (mask & (pbc_card_bit[i][1] | pbc_card_bit[i][2])) != 0) {
++			retval |= 1 << i;
++		}
++	}
++	return retval;
++}
++
++/*!
++ * Interrupt handler for the expio (CPLD) to deal with interrupts from
++ * FEC, external UART, CS8900 Ethernet and SD cards, etc.
++ */
++static void mxc_expio_irq_handler(u32 irq, struct irq_desc *desc,
++		struct pt_regs *regs)
++{
++	u32 imr, card_int, i;
++	u32 int_valid;
++	u32 expio_irq;
++	u32 stat = __raw_readw(PBC_BSTAT1_REG);
++
++	desc->chip->mask(irq);	/* irq = gpio irq number */
++
++	imr = __raw_readw(PBC_INTMASK_SET_REG);
++
++	card_int = mxc_card_state_changed(imr, mxc_card_status, stat);
++	mxc_card_status = stat;
++
++	if (card_int != 0) {
++		for (i = MXC_CARD_MIN; i <= MXC_CARD_MAX - 1; i++) {
++			if ((card_int & (1 << i)) != 0) {
++				pr_info("card no %d state changed\n", i);
++			}
++		}
++	}
++
++	/* Bits defined in PBC_INTSTATUS_REG at 0x2C */
++	int_valid = __raw_readw(PBC_INTSTATUS_REG) & imr;
++	/*  combined with the card interrupt valid information */
++	int_valid = (int_valid & 0x0F8E) | (card_int << PBC_INTR_SD2_EN_BIT);
++
++	if (unlikely(!int_valid)) {
++		printk(KERN_ERR "\nEXPIO: Spurious interrupt:0x%0x\n\n",
++		       int_valid);
++		pr_info("CPLD IMR(0x38)=0x%x, BSTAT1(0x28)=0x%x\n", imr, stat);
++		goto out;
++	}
++
++	expio_irq = MXC_EXP_IO_BASE;
++	for (; int_valid != 0; int_valid >>= 1, expio_irq++) {
++		struct irqdesc *d;
++		if ((int_valid & 1) == 0)
++			continue;
++		d = irq_desc + expio_irq;
++		if (unlikely(!(d->handle_irq))) {
++			printk(KERN_ERR "\nEXPIO irq: %d unhandeled\n",
++			       expio_irq);
++			BUG();	/* oops */
++		}
++		d->handle_irq(expio_irq, d, regs);
++	}
++
++out:
++	desc->chip->ack(irq);
++	desc->chip->unmask(irq);
++}
++
++/*
++ * Disable an expio pin's interrupt by setting the bit in the imr.
++ * @param irq		an expio virtual irq number
++ */
++static void expio_mask_irq(u32 irq)
++{
++	u32 expio = MXC_IRQ_TO_EXPIO(irq);
++
++	/* mask the interrupt */
++	if (irq < EXPIO_INT_SD2_EN) {
++		__raw_writew(1 << expio, PBC_INTMASK_CLEAR_REG);
++	} else {
++		irq -= EXPIO_INT_SD2_EN;
++		/* clear both SDx_EN and SDx_R_EN bits */
++		__raw_writew((pbc_card_bit[irq][1] | pbc_card_bit[irq][2]),
++			     PBC_INTMASK_CLEAR_REG);
++	}
++}
++
++/*
++ * Acknowledge an expanded io pin's interrupt by clearing the bit in the isr.
++ * @param irq		an expanded io virtual irq number
++ */
++static void expio_ack_irq(u32 irq)
++{
++	u32 expio = MXC_IRQ_TO_EXPIO(irq);
++	/* clear the interrupt status */
++	__raw_writew(1 << expio, PBC_INTSTATUS_REG);
++	/* mask the interrupt */
++	expio_mask_irq(irq);
++}
++
++/*
++ * Enable a expio pin's interrupt by clearing the bit in the imr.
++ * @param irq		an expio virtual irq number
++ */
++static void expio_unmask_irq(u32 irq)
++{
++	u32 expio = MXC_IRQ_TO_EXPIO(irq);
++
++	/* unmask the interrupt */
++	if (irq < EXPIO_INT_SD2_EN) {
++		if (irq == EXPIO_INT_XUART_INTA) {
++			/* Set 8250 MCR register bit 3 - Forces the INT (A-B
++			 * outputs to the active mode and sets OP2 to logic 0.
++			 * This is needed to avoid spurious int caused by the
++			 * internal CPLD pull-up for the interrupt pin.
++			 */
++			u16 val = __raw_readw(MXC_LL_EXTUART_VADDR + 8);
++			__raw_writew(val | 0x8, MXC_LL_EXTUART_VADDR + 8);
++		}
++		__raw_writew(1 << expio, PBC_INTMASK_SET_REG);
++	} else {
++		irq -= EXPIO_INT_SD2_EN;
++
++		if (mxc_card_detected(irq)) {
++			__raw_writew(pbc_card_bit[irq][2], PBC_INTMASK_SET_REG);
++		} else {
++			__raw_writew(pbc_card_bit[irq][1], PBC_INTMASK_SET_REG);
++		}
++	}
++}
++
++static struct irqchip expio_irq_chip = {
++	.ack = expio_ack_irq,
++	.mask = expio_mask_irq,
++	.unmask = expio_unmask_irq,
++};
++
++static int __init mxc_expio_init(void)
++{
++	int i, ver;
++
++	ver = (__raw_readw(PBC_VERSION_REG) >> 8) & 0xFF;
++	if ((ver & 0x80) != 0) {
++		pr_info("MX27 ADS EXPIO(CPLD) hardware\n");
++		pr_info("CPLD version: 0x%x\n", ver);
++	} else {
++		ver &= 0x0F;
++		pr_info("MX27 EVB EXPIO(CPLD) hardware\n");
++		if (ver == 0xF || ver <= MXC_CPLD_VER_1_50)
++			pr_info("Wrong CPLD version: %d\n", ver);
++		else {
++			pr_info("CPLD version: %d\n", ver);
++		}
++	}
++
++	mxc_card_status = __raw_readw(PBC_BSTAT1_REG);
++
++	/*
++	 * Configure INT line as GPIO input
++	 */
++	gpio_config_mux(MX27_PIN_TIN, GPIO_MUX_GPIO);
++	mxc_set_gpio_direction(MX27_PIN_TIN, 1);
++
++	/* disable the interrupt and clear the status */
++	__raw_writew(0xFFFF, PBC_INTMASK_CLEAR_REG);
++	__raw_writew(0xFFFF, PBC_INTSTATUS_REG);
++
++	for (i = MXC_EXP_IO_BASE; i < (MXC_EXP_IO_BASE + MXC_MAX_EXP_IO_LINES);
++	     i++) {
++		set_irq_chip(i, &expio_irq_chip);
++		set_irq_handler(i, do_level_IRQ);
++		set_irq_flags(i, IRQF_VALID);
++	}
++	set_irq_type(EXPIO_PARENT_INT, IRQT_HIGH);
++	set_irq_chained_handler(EXPIO_PARENT_INT, mxc_expio_irq_handler);
++
++	return 0;
++}
++
++
+ #if defined(CONFIG_SERIAL_8250) || defined(CONFIG_SERIAL_8250_MODULE)
+ /*!
+  * The serial port definition structure.
+@@ -100,6 +335,7 @@ static void __init mx27ads_board_init(vo
+ 
+ 	mxc_clocks_init();
+ 	mxc_gpio_init();
++	mxc_expio_init();
+ 	mxc_init_extuart();
+ }
+ 
+Index: linux-2.6.18/include/asm-arm/arch-mxc/board-mx27ads.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-mxc/board-mx27ads.h
++++ linux-2.6.18/include/asm-arm/arch-mxc/board-mx27ads.h
+@@ -18,6 +18,10 @@
+ /* Size of contiguous memory for DMA and other h/w blocks */
+ #define CONSISTENT_DMA_SIZE	SZ_8M
+ 
++#define MXC_LL_EXTUART_PADDR	(CS4_BASE_ADDR + 0x20000)
++#define MXC_LL_EXTUART_VADDR	(CS4_BASE_ADDR_VIRT + 0x20000)
++#define MXC_LL_EXTUART_16BIT_BUS
++
+ /*!
+  * @name Memory Size parameters
+  */
+@@ -196,6 +200,9 @@ enum mxc_card_no {
+ #define PBC_INTR_MS_EN          0x4000
+ #define PBC_INTR_SD1_EN         0x8000
+ 
++/* For interrupts like xuart, enet etc */
++#define EXPIO_PARENT_INT	IOMUX_TO_IRQ(MX27_PIN_TIN)
++#define MXC_MAX_EXP_IO_LINES	16
+ 
+ /*
+  * This corresponds to PBC_INTMASK_SET_REG at offset 0x38.
+Index: linux-2.6.18/mvl_patches/pro50-0109.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0109.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(109);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

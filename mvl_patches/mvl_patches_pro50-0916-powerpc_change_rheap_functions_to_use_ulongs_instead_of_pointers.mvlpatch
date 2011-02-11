@@ -1,0 +1,1798 @@
+#! /usr/bin/env bash
+# Patch: -powerpc_change_rheap_functions_to_use_ulongs_instead_of_pointers
+# Date: Wed Mar  5 16:42:46 2008
+# Source: Timur Tabi <timur@freescale.com>
+# MR: 26854
+# Type: Enhancement
+# Disposition: backport from 2.6.22-rc1 (4c35630ccda56ed494f6102d2e147fefe14b78d2)
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# 
+# commit 4c35630ccda56ed494f6102d2e147fefe14b78d2
+# Author: Timur Tabi <timur@freescale.com>
+# Date:   Tue May 8 14:46:36 2007 -0500
+# 
+#     [POWERPC] Change rheap functions to use ulongs instead of pointers
+#     
+#     The rheap allocation functions return a pointer, but the actual value is based
+#     on how the heap was initialized, and so it can be anything, e.g. an offset
+#     into a buffer.  A ulong is a better representation of the value returned by
+#     the allocation functions.
+#     
+#     This patch changes all of the relevant rheap functions to use a unsigned long
+#     integers instead of a pointer.  In case of an error, the value returned is
+#     a negative error code that has been cast to an unsigned long.  The caller can
+#     use the IS_ERR_VALUE() macro to check for this.
+#     
+#     All code which calls the rheap functions is updated accordingly.  Macros
+#     IS_MURAM_ERR() and IS_DPERR(), have been deleted in favor of IS_ERR_VALUE().
+#     
+#     Also added error checking to rh_attach_region().
+#     
+#     Signed-off-by: Timur Tabi <timur@freescale.com>
+#     Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+#  arch/powerpc/lib/rheap.c                |  115 ++++++++++++++++++-------------
+#  arch/powerpc/sysdev/commproc.c          |   20 +++--
+#  arch/powerpc/sysdev/cpm2_common.c       |   20 +++--
+#  arch/powerpc/sysdev/qe_lib/qe.c         |   29 ++++----
+#  arch/powerpc/sysdev/qe_lib/ucc_fast.c   |    5 +
+#  arch/powerpc/sysdev/qe_lib/ucc_slow.c   |    7 +-
+#  arch/ppc/8xx_io/commproc.c              |   22 +++---
+#  arch/ppc/lib/rheap.c                    |   95 +++++++++++++-------------
+#  arch/ppc/syslib/cpm2_common.c           |   23 +++---
+#  drivers/net/fs_enet/mac-scc.c           |    2 -
+#  drivers/net/ucc_geth.c                  |   30 ++++----
+#  drivers/serial/cpm_uart/cpm_uart_cpm1.c |    4 +
+#  drivers/serial/cpm_uart/cpm_uart_cpm2.c |    4 +
+#  include/asm-powerpc/qe.h                |   13 +---
+#  include/asm-ppc/commproc.h              |   13 +---
+#  include/asm-ppc/cpm2.h                  |   13 +---
+#  include/asm-ppc/rheap.h                 |   20 +++--
+#  17 files changed, 220 insertions(+), 215 deletions(-)
+# 
+
+PATCHNUM=916
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Timur Tabi <timur@freescale.com>
+MR: 26854
+Type: Enhancement
+Disposition: backport from 2.6.22-rc1 (4c35630ccda56ed494f6102d2e147fefe14b78d2)
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+
+commit 4c35630ccda56ed494f6102d2e147fefe14b78d2
+Author: Timur Tabi <timur@freescale.com>
+Date:   Tue May 8 14:46:36 2007 -0500
+
+    [POWERPC] Change rheap functions to use ulongs instead of pointers
+    
+    The rheap allocation functions return a pointer, but the actual value is based
+    on how the heap was initialized, and so it can be anything, e.g. an offset
+    into a buffer.  A ulong is a better representation of the value returned by
+    the allocation functions.
+    
+    This patch changes all of the relevant rheap functions to use a unsigned long
+    integers instead of a pointer.  In case of an error, the value returned is
+    a negative error code that has been cast to an unsigned long.  The caller can
+    use the IS_ERR_VALUE() macro to check for this.
+    
+    All code which calls the rheap functions is updated accordingly.  Macros
+    IS_MURAM_ERR() and IS_DPERR(), have been deleted in favor of IS_ERR_VALUE().
+    
+    Also added error checking to rh_attach_region().
+    
+    Signed-off-by: Timur Tabi <timur@freescale.com>
+    Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+ arch/powerpc/lib/rheap.c                |  115 ++++++++++++++++++--------------
+ arch/powerpc/sysdev/commproc.c          |   20 ++---
+ arch/powerpc/sysdev/cpm2_common.c       |   20 ++---
+ arch/powerpc/sysdev/qe_lib/qe.c         |   29 +++-----
+ arch/powerpc/sysdev/qe_lib/ucc_fast.c   |    5 -
+ arch/powerpc/sysdev/qe_lib/ucc_slow.c   |    7 +
+ arch/ppc/8xx_io/commproc.c              |   22 +++---
+ arch/ppc/lib/rheap.c                    |   95 +++++++++++++-------------
+ arch/ppc/syslib/cpm2_common.c           |   23 +++---
+ drivers/net/fs_enet/mac-scc.c           |    2 
+ drivers/net/ucc_geth.c                  |   30 ++++----
+ drivers/serial/cpm_uart/cpm_uart_cpm1.c |    4 -
+ drivers/serial/cpm_uart/cpm_uart_cpm2.c |    4 -
+ include/asm-powerpc/qe.h                |   13 +--
+ include/asm-ppc/commproc.h              |   13 +--
+ include/asm-ppc/cpm2.h                  |   13 +--
+ include/asm-ppc/rheap.h                 |   20 ++---
+ mvl_patches/pro50-0916.c                |   16 ++++
+ 18 files changed, 236 insertions(+), 215 deletions(-)
+
+Index: linux-2.6.18/arch/powerpc/lib/rheap.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/lib/rheap.c
++++ linux-2.6.18/arch/powerpc/lib/rheap.c
+@@ -133,7 +133,7 @@ static rh_block_t *get_slot(rh_info_t * 
+ 	info->empty_slots--;
+ 
+ 	/* Initialize */
+-	blk->start = NULL;
++	blk->start = 0;
+ 	blk->size = 0;
+ 	blk->owner = NULL;
+ 
+@@ -158,7 +158,7 @@ static void attach_free_block(rh_info_t 
+ 
+ 	/* We assume that they are aligned properly */
+ 	size = blkn->size;
+-	s = (unsigned long)blkn->start;
++	s = blkn->start;
+ 	e = s + size;
+ 
+ 	/* Find the blocks immediately before and after the given one
+@@ -170,7 +170,7 @@ static void attach_free_block(rh_info_t 
+ 	list_for_each(l, &info->free_list) {
+ 		blk = list_entry(l, rh_block_t, list);
+ 
+-		bs = (unsigned long)blk->start;
++		bs = blk->start;
+ 		be = bs + blk->size;
+ 
+ 		if (next == NULL && s >= bs)
+@@ -188,10 +188,10 @@ static void attach_free_block(rh_info_t 
+ 	}
+ 
+ 	/* Now check if they are really adjacent */
+-	if (before != NULL && s != (unsigned long)before->start + before->size)
++	if (before && s != (before->start + before->size))
+ 		before = NULL;
+ 
+-	if (after != NULL && e != (unsigned long)after->start)
++	if (after && e != after->start)
+ 		after = NULL;
+ 
+ 	/* No coalescing; list insert and return */
+@@ -216,7 +216,7 @@ static void attach_free_block(rh_info_t 
+ 
+ 	/* Grow the after block backwards */
+ 	if (before == NULL && after != NULL) {
+-		after->start = (int8_t *)after->start - size;
++		after->start -= size;
+ 		after->size += size;
+ 		return;
+ 	}
+@@ -321,14 +321,14 @@ void rh_init(rh_info_t * info, unsigned 
+ }
+ 
+ /* Attach a free memory region, coalesces regions if adjuscent */
+-int rh_attach_region(rh_info_t * info, void *start, int size)
++int rh_attach_region(rh_info_t * info, unsigned long start, int size)
+ {
+ 	rh_block_t *blk;
+ 	unsigned long s, e, m;
+ 	int r;
+ 
+ 	/* The region must be aligned */
+-	s = (unsigned long)start;
++	s = start;
+ 	e = s + size;
+ 	m = info->alignment - 1;
+ 
+@@ -338,9 +338,12 @@ int rh_attach_region(rh_info_t * info, v
+ 	/* Round end down */
+ 	e = e & ~m;
+ 
++	if (IS_ERR_VALUE(e) || (e < s))
++		return -ERANGE;
++
+ 	/* Take final values */
+-	start = (void *)s;
+-	size = (int)(e - s);
++	start = s;
++	size = e - s;
+ 
+ 	/* Grow the blocks, if needed */
+ 	r = assure_empty(info, 1);
+@@ -358,7 +361,7 @@ int rh_attach_region(rh_info_t * info, v
+ }
+ 
+ /* Detatch given address range, splits free block if needed. */
+-void *rh_detach_region(rh_info_t * info, void *start, int size)
++unsigned long rh_detach_region(rh_info_t * info, unsigned long start, int size)
+ {
+ 	struct list_head *l;
+ 	rh_block_t *blk, *newblk;
+@@ -366,10 +369,10 @@ void *rh_detach_region(rh_info_t * info,
+ 
+ 	/* Validate size */
+ 	if (size <= 0)
+-		return ERR_PTR(-EINVAL);
++		return (unsigned long) -EINVAL;
+ 
+ 	/* The region must be aligned */
+-	s = (unsigned long)start;
++	s = start;
+ 	e = s + size;
+ 	m = info->alignment - 1;
+ 
+@@ -380,34 +383,34 @@ void *rh_detach_region(rh_info_t * info,
+ 	e = e & ~m;
+ 
+ 	if (assure_empty(info, 1) < 0)
+-		return ERR_PTR(-ENOMEM);
++		return (unsigned long) -ENOMEM;
+ 
+ 	blk = NULL;
+ 	list_for_each(l, &info->free_list) {
+ 		blk = list_entry(l, rh_block_t, list);
+ 		/* The range must lie entirely inside one free block */
+-		bs = (unsigned long)blk->start;
+-		be = (unsigned long)blk->start + blk->size;
++		bs = blk->start;
++		be = blk->start + blk->size;
+ 		if (s >= bs && e <= be)
+ 			break;
+ 		blk = NULL;
+ 	}
+ 
+ 	if (blk == NULL)
+-		return ERR_PTR(-ENOMEM);
++		return (unsigned long) -ENOMEM;
+ 
+ 	/* Perfect fit */
+ 	if (bs == s && be == e) {
+ 		/* Delete from free list, release slot */
+ 		list_del(&blk->list);
+ 		release_slot(info, blk);
+-		return (void *)s;
++		return s;
+ 	}
+ 
+ 	/* blk still in free list, with updated start and/or size */
+ 	if (bs == s || be == e) {
+ 		if (bs == s)
+-			blk->start = (int8_t *)blk->start + size;
++			blk->start += size;
+ 		blk->size -= size;
+ 
+ 	} else {
+@@ -416,25 +419,29 @@ void *rh_detach_region(rh_info_t * info,
+ 
+ 		/* the back free fragment */
+ 		newblk = get_slot(info);
+-		newblk->start = (void *)e;
++		newblk->start = e;
+ 		newblk->size = be - e;
+ 
+ 		list_add(&newblk->list, &blk->list);
+ 	}
+ 
+-	return (void *)s;
++	return s;
+ }
+ 
+-void *rh_alloc_align(rh_info_t * info, int size, int alignment, const char *owner)
++/* Allocate a block of memory at the specified alignment.  The value returned
++ * is an offset into the buffer initialized by rh_init(), or a negative number
++ * if there is an error.
++ */
++unsigned long rh_alloc_align(rh_info_t * info, int size, int alignment, const char *owner)
+ {
+ 	struct list_head *l;
+ 	rh_block_t *blk;
+ 	rh_block_t *newblk;
+-	void *start;
++	unsigned long start;
+ 
+-	/* Validate size, (must be power of two) */
++	/* Validate size, and alignment must be power of two */
+ 	if (size <= 0 || (alignment & (alignment - 1)) != 0)
+-		return ERR_PTR(-EINVAL);
++		return (unsigned long) -EINVAL;
+ 
+ 	/* given alignment larger that default rheap alignment */
+ 	if (alignment > info->alignment)
+@@ -444,7 +451,7 @@ void *rh_alloc_align(rh_info_t * info, i
+ 	size = (size + (info->alignment - 1)) & ~(info->alignment - 1);
+ 
+ 	if (assure_empty(info, 1) < 0)
+-		return ERR_PTR(-ENOMEM);
++		return (unsigned long) -ENOMEM;
+ 
+ 	blk = NULL;
+ 	list_for_each(l, &info->free_list) {
+@@ -455,7 +462,7 @@ void *rh_alloc_align(rh_info_t * info, i
+ 	}
+ 
+ 	if (blk == NULL)
+-		return ERR_PTR(-ENOMEM);
++		return (unsigned long) -ENOMEM;
+ 
+ 	/* Just fits */
+ 	if (blk->size == size) {
+@@ -480,19 +487,25 @@ void *rh_alloc_align(rh_info_t * info, i
+ 	/* this is no problem with the deallocator since */
+ 	/* we scan for pointers that lie in the blocks   */
+ 	if (alignment > info->alignment)
+-		start = (void *)(((unsigned long)start + alignment - 1) &
+-				~(alignment - 1));
++		start = (start + alignment - 1) & ~(alignment - 1);
+ 
+ 	return start;
+ }
+ 
+-void *rh_alloc(rh_info_t * info, int size, const char *owner)
++/* Allocate a block of memory at the default alignment.  The value returned is
++ * an offset into the buffer initialized by rh_init(), or a negative number if
++ * there is an error.
++ */
++unsigned long rh_alloc(rh_info_t * info, int size, const char *owner)
+ {
+ 	return rh_alloc_align(info, size, info->alignment, owner);
+ }
+ 
+-/* allocate at precisely the given address */
+-void *rh_alloc_fixed(rh_info_t * info, void *start, int size, const char *owner)
++/* Allocate a block of memory at the given offset, rounded up to the default
++ * alignment.  The value returned is an offset into the buffer initialized by
++ * rh_init(), or a negative number if there is an error.
++ */
++unsigned long rh_alloc_fixed(rh_info_t * info, unsigned long start, int size, const char *owner)
+ {
+ 	struct list_head *l;
+ 	rh_block_t *blk, *newblk1, *newblk2;
+@@ -500,10 +513,10 @@ void *rh_alloc_fixed(rh_info_t * info, v
+ 
+ 	/* Validate size */
+ 	if (size <= 0)
+-		return ERR_PTR(-EINVAL);
++		return (unsigned long) -EINVAL;
+ 
+ 	/* The region must be aligned */
+-	s = (unsigned long)start;
++	s = start;
+ 	e = s + size;
+ 	m = info->alignment - 1;
+ 
+@@ -514,20 +527,20 @@ void *rh_alloc_fixed(rh_info_t * info, v
+ 	e = e & ~m;
+ 
+ 	if (assure_empty(info, 2) < 0)
+-		return ERR_PTR(-ENOMEM);
++		return (unsigned long) -ENOMEM;
+ 
+ 	blk = NULL;
+ 	list_for_each(l, &info->free_list) {
+ 		blk = list_entry(l, rh_block_t, list);
+ 		/* The range must lie entirely inside one free block */
+-		bs = (unsigned long)blk->start;
+-		be = (unsigned long)blk->start + blk->size;
++		bs = blk->start;
++		be = blk->start + blk->size;
+ 		if (s >= bs && e <= be)
+ 			break;
+ 	}
+ 
+ 	if (blk == NULL)
+-		return ERR_PTR(-ENOMEM);
++		return (unsigned long) -ENOMEM;
+ 
+ 	/* Perfect fit */
+ 	if (bs == s && be == e) {
+@@ -545,7 +558,7 @@ void *rh_alloc_fixed(rh_info_t * info, v
+ 	/* blk still in free list, with updated start and/or size */
+ 	if (bs == s || be == e) {
+ 		if (bs == s)
+-			blk->start = (int8_t *)blk->start + size;
++			blk->start += size;
+ 		blk->size -= size;
+ 
+ 	} else {
+@@ -554,14 +567,14 @@ void *rh_alloc_fixed(rh_info_t * info, v
+ 
+ 		/* The back free fragment */
+ 		newblk2 = get_slot(info);
+-		newblk2->start = (void *)e;
++		newblk2->start = e;
+ 		newblk2->size = be - e;
+ 
+ 		list_add(&newblk2->list, &blk->list);
+ 	}
+ 
+ 	newblk1 = get_slot(info);
+-	newblk1->start = (void *)s;
++	newblk1->start = s;
+ 	newblk1->size = e - s;
+ 	newblk1->owner = owner;
+ 
+@@ -571,7 +584,11 @@ void *rh_alloc_fixed(rh_info_t * info, v
+ 	return start;
+ }
+ 
+-int rh_free(rh_info_t * info, void *start)
++/* Deallocate the memory previously allocated by one of the rh_alloc functions.
++ * The return value is the size of the deallocated block, or a negative number
++ * if there is an error.
++ */
++int rh_free(rh_info_t * info, unsigned long start)
+ {
+ 	rh_block_t *blk, *blk2;
+ 	struct list_head *l;
+@@ -636,7 +653,7 @@ int rh_get_stats(rh_info_t * info, int w
+ 	return nr;
+ }
+ 
+-int rh_set_owner(rh_info_t * info, void *start, const char *owner)
++int rh_set_owner(rh_info_t * info, unsigned long start, const char *owner)
+ {
+ 	rh_block_t *blk, *blk2;
+ 	struct list_head *l;
+@@ -678,8 +695,8 @@ void rh_dump(rh_info_t * info)
+ 		nr = maxnr;
+ 	for (i = 0; i < nr; i++)
+ 		printk(KERN_INFO
+-		       "    0x%p-0x%p (%u)\n",
+-		       st[i].start, (int8_t *) st[i].start + st[i].size,
++		       "    0x%lx-0x%lx (%u)\n",
++		       st[i].start, st[i].start + st[i].size,
+ 		       st[i].size);
+ 	printk(KERN_INFO "\n");
+ 
+@@ -689,8 +706,8 @@ void rh_dump(rh_info_t * info)
+ 		nr = maxnr;
+ 	for (i = 0; i < nr; i++)
+ 		printk(KERN_INFO
+-		       "    0x%p-0x%p (%u) %s\n",
+-		       st[i].start, (int8_t *) st[i].start + st[i].size,
++		       "    0x%lx-0x%lx (%u) %s\n",
++		       st[i].start, st[i].start + st[i].size,
+ 		       st[i].size, st[i].owner != NULL ? st[i].owner : "");
+ 	printk(KERN_INFO "\n");
+ }
+@@ -698,6 +715,6 @@ void rh_dump(rh_info_t * info)
+ void rh_dump_blk(rh_info_t * info, rh_block_t * blk)
+ {
+ 	printk(KERN_INFO
+-	       "blk @0x%p: 0x%p-0x%p (%u)\n",
+-	       blk, blk->start, (int8_t *) blk->start + blk->size, blk->size);
++	       "blk @0x%p: 0x%lx-0x%lx (%u)\n",
++	       blk, blk->start, blk->start + blk->size, blk->size);
+ }
+Index: linux-2.6.18/arch/powerpc/sysdev/commproc.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/commproc.c
++++ linux-2.6.18/arch/powerpc/sysdev/commproc.c
+@@ -328,7 +328,7 @@ void m8xx_cpm_dpinit(void)
+ 	 * with the processor and the microcode patches applied / activated.
+ 	 * But the following should be at least safe.
+ 	 */
+-	rh_attach_region(&cpm_dpmem_info, (void *)CPM_DATAONLY_BASE, CPM_DATAONLY_SIZE);
++	rh_attach_region(&cpm_dpmem_info, CPM_DATAONLY_BASE, CPM_DATAONLY_SIZE);
+ 	dp_initialized = 1;
+ }
+ 
+@@ -337,9 +337,9 @@ void m8xx_cpm_dpinit(void)
+  * This function returns an offset into the DPRAM area.
+  * Use cpm_dpram_addr() to get the virtual address of the area.
+  */
+-uint cpm_dpalloc(uint size, uint align)
++unsigned long cpm_dpalloc(uint size, uint align)
+ {
+-	void *start;
++	unsigned long start;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&cpm_dpmem_lock, flags);
+@@ -351,30 +351,30 @@ uint cpm_dpalloc(uint size, uint align)
+ }
+ EXPORT_SYMBOL(cpm_dpalloc);
+ 
+-int cpm_dpfree(uint offset)
++int cpm_dpfree(unsigned long offset)
+ {
+ 	int ret;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&cpm_dpmem_lock, flags);
+-	ret = rh_free(&cpm_dpmem_info, (void *)offset);
++	ret = rh_free(&cpm_dpmem_info, offset);
+ 	spin_unlock_irqrestore(&cpm_dpmem_lock, flags);
+ 
+ 	return ret;
+ }
+ EXPORT_SYMBOL(cpm_dpfree);
+ 
+-uint cpm_dpalloc_fixed(uint offset, uint size, uint align)
++unsigned long cpm_dpalloc_fixed(unsigned long offset, uint size, uint align)
+ {
+-	void *start;
++	unsigned long start;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&cpm_dpmem_lock, flags);
+ 	cpm_dpmem_info.alignment = align;
+-	start = rh_alloc_fixed(&cpm_dpmem_info, (void *)offset, size, "commproc");
++	start = rh_alloc_fixed(&cpm_dpmem_info, offset, size, "commproc");
+ 	spin_unlock_irqrestore(&cpm_dpmem_lock, flags);
+ 
+-	return (uint)start;
++	return start;
+ }
+ EXPORT_SYMBOL(cpm_dpalloc_fixed);
+ 
+@@ -384,7 +384,7 @@ void cpm_dpdump(void)
+ }
+ EXPORT_SYMBOL(cpm_dpdump);
+ 
+-void *cpm_dpram_addr(uint offset)
++void *cpm_dpram_addr(unsigned long offset)
+ {
+ 	return (void *)(dpram_vbase + offset);
+ }
+Index: linux-2.6.18/arch/powerpc/sysdev/cpm2_common.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/cpm2_common.c
++++ linux-2.6.18/arch/powerpc/sysdev/cpm2_common.c
+@@ -286,16 +286,16 @@ static void cpm2_dpinit(void)
+ 	 * varies with the processor and the microcode patches activated.
+ 	 * But the following should be at least safe.
+ 	 */
+-	rh_attach_region(&cpm_dpmem_info, (void *)CPM_DATAONLY_BASE,
++	rh_attach_region(&cpm_dpmem_info, CPM_DATAONLY_BASE,
+ 			CPM_DATAONLY_SIZE);
+ 	dp_initialized = 1;
+ }
+ 
+ /* This function returns an index into the DPRAM area.
+  */
+-uint cpm_dpalloc(uint size, uint align)
++unsigned long cpm_dpalloc(uint size, uint align)
+ {
+-	void *start;
++	unsigned long start;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&cpm_dpmem_lock, flags);
+@@ -307,13 +307,13 @@ uint cpm_dpalloc(uint size, uint align)
+ }
+ EXPORT_SYMBOL(cpm_dpalloc);
+ 
+-int cpm_dpfree(uint offset)
++int cpm_dpfree(unsigned long offset)
+ {
+ 	int ret;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&cpm_dpmem_lock, flags);
+-	ret = rh_free(&cpm_dpmem_info, (void *)offset);
++	ret = rh_free(&cpm_dpmem_info, offset);
+ 	spin_unlock_irqrestore(&cpm_dpmem_lock, flags);
+ 
+ 	return ret;
+@@ -321,17 +321,17 @@ int cpm_dpfree(uint offset)
+ EXPORT_SYMBOL(cpm_dpfree);
+ 
+ /* not sure if this is ever needed */
+-uint cpm_dpalloc_fixed(uint offset, uint size, uint align)
++unsigned long cpm_dpalloc_fixed(unsigned long offset, uint size, uint align)
+ {
+-	void *start;
++	unsigned long start;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&cpm_dpmem_lock, flags);
+ 	cpm_dpmem_info.alignment = align;
+-	start = rh_alloc_fixed(&cpm_dpmem_info, (void *)offset, size, "commproc");
++	start = rh_alloc_fixed(&cpm_dpmem_info, offset, size, "commproc");
+ 	spin_unlock_irqrestore(&cpm_dpmem_lock, flags);
+ 
+-	return (uint)start;
++	return start;
+ }
+ EXPORT_SYMBOL(cpm_dpalloc_fixed);
+ 
+@@ -341,7 +341,7 @@ void cpm_dpdump(void)
+ }
+ EXPORT_SYMBOL(cpm_dpdump);
+ 
+-void *cpm_dpram_addr(uint offset)
++void *cpm_dpram_addr(unsigned long offset)
+ {
+ 	return (void *)(im_dprambase + offset);
+ }
+Index: linux-2.6.18/arch/powerpc/sysdev/qe_lib/qe.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/qe_lib/qe.c
++++ linux-2.6.18/arch/powerpc/sysdev/qe_lib/qe.c
+@@ -244,7 +244,7 @@ EXPORT_SYMBOL(qe_put_snum);
+ static int qe_sdma_init(void)
+ {
+ 	struct sdma *sdma = &qe_immr->sdma;
+-	u32 sdma_buf_offset;
++	unsigned long sdma_buf_offset;
+ 
+ 	if (!sdma)
+ 		return -ENODEV;
+@@ -252,10 +252,10 @@ static int qe_sdma_init(void)
+ 	/* allocate 2 internal temporary buffers (512 bytes size each) for
+ 	 * the SDMA */
+  	sdma_buf_offset = qe_muram_alloc(512 * 2, 4096);
+-	if (IS_MURAM_ERR(sdma_buf_offset))
++	if (IS_ERR_VALUE(sdma_buf_offset))
+ 		return -ENOMEM;
+ 
+-	out_be32(&sdma->sdebcr, sdma_buf_offset & QE_SDEBCR_BA_MASK);
++	out_be32(&sdma->sdebcr, (u32) sdma_buf_offset & QE_SDEBCR_BA_MASK);
+  	out_be32(&sdma->sdmr, (QE_SDMR_GLB_1_MSK |
+  					(0x1 << QE_SDMR_CEN_SHIFT)));
+ 
+@@ -291,33 +291,32 @@ static void qe_muram_init(void)
+ 	if ((np = of_find_node_by_name(NULL, "data-only")) != NULL) {
+ 		address = *of_get_address(np, 0, &size, &flags);
+ 		of_node_put(np);
+-		rh_attach_region(&qe_muram_info,
+-			(void *)address, (int)size);
++		rh_attach_region(&qe_muram_info, address, (int) size);
+ 	}
+ }
+ 
+ /* This function returns an index into the MURAM area.
+  */
+-u32 qe_muram_alloc(u32 size, u32 align)
++unsigned long qe_muram_alloc(int size, int align)
+ {
+-	void *start;
++	unsigned long start;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&qe_muram_lock, flags);
+ 	start = rh_alloc_align(&qe_muram_info, size, align, "QE");
+ 	spin_unlock_irqrestore(&qe_muram_lock, flags);
+ 
+-	return (u32) start;
++	return start;
+ }
+ EXPORT_SYMBOL(qe_muram_alloc);
+ 
+-int qe_muram_free(u32 offset)
++int qe_muram_free(unsigned long offset)
+ {
+ 	int ret;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&qe_muram_lock, flags);
+-	ret = rh_free(&qe_muram_info, (void *)offset);
++	ret = rh_free(&qe_muram_info, offset);
+ 	spin_unlock_irqrestore(&qe_muram_lock, flags);
+ 
+ 	return ret;
+@@ -325,16 +324,16 @@ int qe_muram_free(u32 offset)
+ EXPORT_SYMBOL(qe_muram_free);
+ 
+ /* not sure if this is ever needed */
+-u32 qe_muram_alloc_fixed(u32 offset, u32 size)
++unsigned long qe_muram_alloc_fixed(unsigned long offset, int size)
+ {
+-	void *start;
++	unsigned long start;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&qe_muram_lock, flags);
+-	start = rh_alloc_fixed(&qe_muram_info, (void *)offset, size, "commproc");
++	start = rh_alloc_fixed(&qe_muram_info, offset, size, "commproc");
+ 	spin_unlock_irqrestore(&qe_muram_lock, flags);
+ 
+-	return (u32) start;
++	return start;
+ }
+ EXPORT_SYMBOL(qe_muram_alloc_fixed);
+ 
+@@ -344,7 +343,7 @@ void qe_muram_dump(void)
+ }
+ EXPORT_SYMBOL(qe_muram_dump);
+ 
+-void *qe_muram_addr(u32 offset)
++void *qe_muram_addr(unsigned long offset)
+ {
+ 	return (void *)&qe_immr->muram[offset];
+ }
+Index: linux-2.6.18/arch/powerpc/sysdev/qe_lib/ucc_fast.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/qe_lib/ucc_fast.c
++++ linux-2.6.18/arch/powerpc/sysdev/qe_lib/ucc_fast.c
+@@ -18,6 +18,7 @@
+ #include <linux/slab.h>
+ #include <linux/stddef.h>
+ #include <linux/interrupt.h>
++#include <linux/err.h>
+ 
+ #include <asm/io.h>
+ #include <asm/immap_qe.h>
+@@ -268,7 +269,7 @@ int ucc_fast_init(struct ucc_fast_info *
+ 	/* Allocate memory for Tx Virtual Fifo */
+ 	uccf->ucc_fast_tx_virtual_fifo_base_offset =
+ 	    qe_muram_alloc(uf_info->utfs, UCC_FAST_VIRT_FIFO_REGS_ALIGNMENT);
+-	if (IS_MURAM_ERR(uccf->ucc_fast_tx_virtual_fifo_base_offset)) {
++	if (IS_ERR_VALUE(uccf->ucc_fast_tx_virtual_fifo_base_offset)) {
+ 		printk(KERN_ERR "%s: cannot allocate MURAM for TX FIFO", __FUNCTION__);
+ 		uccf->ucc_fast_tx_virtual_fifo_base_offset = 0;
+ 		ucc_fast_free(uccf);
+@@ -280,7 +281,7 @@ int ucc_fast_init(struct ucc_fast_info *
+ 		qe_muram_alloc(uf_info->urfs +
+ 			   UCC_FAST_RECEIVE_VIRTUAL_FIFO_SIZE_FUDGE_FACTOR,
+ 			   UCC_FAST_VIRT_FIFO_REGS_ALIGNMENT);
+-	if (IS_MURAM_ERR(uccf->ucc_fast_rx_virtual_fifo_base_offset)) {
++	if (IS_ERR_VALUE(uccf->ucc_fast_rx_virtual_fifo_base_offset)) {
+ 		printk(KERN_ERR "%s: cannot allocate MURAM for RX FIFO", __FUNCTION__);
+ 		uccf->ucc_fast_rx_virtual_fifo_base_offset = 0;
+ 		ucc_fast_free(uccf);
+Index: linux-2.6.18/arch/powerpc/sysdev/qe_lib/ucc_slow.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/qe_lib/ucc_slow.c
++++ linux-2.6.18/arch/powerpc/sysdev/qe_lib/ucc_slow.c
+@@ -18,6 +18,7 @@
+ #include <linux/slab.h>
+ #include <linux/stddef.h>
+ #include <linux/interrupt.h>
++#include <linux/err.h>
+ 
+ #include <asm/io.h>
+ #include <asm/immap_qe.h>
+@@ -175,7 +176,7 @@ int ucc_slow_init(struct ucc_slow_info *
+ 	/* Get PRAM base */
+ 	uccs->us_pram_offset =
+ 		qe_muram_alloc(UCC_SLOW_PRAM_SIZE, ALIGNMENT_OF_UCC_SLOW_PRAM);
+-	if (IS_MURAM_ERR(uccs->us_pram_offset)) {
++	if (IS_ERR_VALUE(uccs->us_pram_offset)) {
+ 		printk(KERN_ERR "%s: cannot allocate MURAM for PRAM", __FUNCTION__);
+ 		ucc_slow_free(uccs);
+ 		return -ENOMEM;
+@@ -210,7 +211,7 @@ int ucc_slow_init(struct ucc_slow_info *
+ 	uccs->rx_base_offset =
+ 		qe_muram_alloc(us_info->rx_bd_ring_len * sizeof(struct qe_bd),
+ 				QE_ALIGNMENT_OF_BD);
+-	if (IS_MURAM_ERR(uccs->rx_base_offset)) {
++	if (IS_ERR_VALUE(uccs->rx_base_offset)) {
+ 		printk(KERN_ERR "%s: cannot allocate RX BDs", __FUNCTION__);
+ 		uccs->rx_base_offset = 0;
+ 		ucc_slow_free(uccs);
+@@ -220,7 +221,7 @@ int ucc_slow_init(struct ucc_slow_info *
+ 	uccs->tx_base_offset =
+ 		qe_muram_alloc(us_info->tx_bd_ring_len * sizeof(struct qe_bd),
+ 			QE_ALIGNMENT_OF_BD);
+-	if (IS_MURAM_ERR(uccs->tx_base_offset)) {
++	if (IS_ERR_VALUE(uccs->tx_base_offset)) {
+ 		printk(KERN_ERR "%s: cannot allocate TX BDs", __FUNCTION__);
+ 		uccs->tx_base_offset = 0;
+ 		ucc_slow_free(uccs);
+Index: linux-2.6.18/arch/ppc/8xx_io/commproc.c
+===================================================================
+--- linux-2.6.18.orig/arch/ppc/8xx_io/commproc.c
++++ linux-2.6.18/arch/ppc/8xx_io/commproc.c
+@@ -382,7 +382,7 @@ void m8xx_cpm_dpinit(void)
+ 	 * with the processor and the microcode patches applied / activated.
+ 	 * But the following should be at least safe.
+ 	 */
+-	rh_attach_region(&cpm_dpmem_info, (void *)CPM_DATAONLY_BASE, CPM_DATAONLY_SIZE);
++	rh_attach_region(&cpm_dpmem_info, CPM_DATAONLY_BASE, CPM_DATAONLY_SIZE);
+ }
+ 
+ /*
+@@ -390,9 +390,9 @@ void m8xx_cpm_dpinit(void)
+  * This function returns an offset into the DPRAM area.
+  * Use cpm_dpram_addr() to get the virtual address of the area.
+  */
+-uint cpm_dpalloc(uint size, uint align)
++unsigned long cpm_dpalloc(uint size, uint align)
+ {
+-	void *start;
++	unsigned long start;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&cpm_dpmem_lock, flags);
+@@ -400,34 +400,34 @@ uint cpm_dpalloc(uint size, uint align)
+ 	start = rh_alloc(&cpm_dpmem_info, size, "commproc");
+ 	spin_unlock_irqrestore(&cpm_dpmem_lock, flags);
+ 
+-	return (uint)start;
++	return start;
+ }
+ EXPORT_SYMBOL(cpm_dpalloc);
+ 
+-int cpm_dpfree(uint offset)
++int cpm_dpfree(unsigned long offset)
+ {
+ 	int ret;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&cpm_dpmem_lock, flags);
+-	ret = rh_free(&cpm_dpmem_info, (void *)offset);
++	ret = rh_free(&cpm_dpmem_info, offset);
+ 	spin_unlock_irqrestore(&cpm_dpmem_lock, flags);
+ 
+ 	return ret;
+ }
+ EXPORT_SYMBOL(cpm_dpfree);
+ 
+-uint cpm_dpalloc_fixed(uint offset, uint size, uint align)
++unsigned long cpm_dpalloc_fixed(unsigned long offset, uint size, uint align)
+ {
+-	void *start;
++	unsigned long start;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&cpm_dpmem_lock, flags);
+ 	cpm_dpmem_info.alignment = align;
+-	start = rh_alloc_fixed(&cpm_dpmem_info, (void *)offset, size, "commproc");
++	start = rh_alloc_fixed(&cpm_dpmem_info, offset, size, "commproc");
+ 	spin_unlock_irqrestore(&cpm_dpmem_lock, flags);
+ 
+-	return (uint)start;
++	return start;
+ }
+ EXPORT_SYMBOL(cpm_dpalloc_fixed);
+ 
+@@ -437,7 +437,7 @@ void cpm_dpdump(void)
+ }
+ EXPORT_SYMBOL(cpm_dpdump);
+ 
+-void *cpm_dpram_addr(uint offset)
++void *cpm_dpram_addr(unsigned long offset)
+ {
+ 	return ((immap_t *)IMAP_ADDR)->im_cpm.cp_dpmem + offset;
+ }
+Index: linux-2.6.18/arch/ppc/lib/rheap.c
+===================================================================
+--- linux-2.6.18.orig/arch/ppc/lib/rheap.c
++++ linux-2.6.18/arch/ppc/lib/rheap.c
+@@ -131,7 +131,7 @@ static rh_block_t *get_slot(rh_info_t * 
+ 	info->empty_slots--;
+ 
+ 	/* Initialize */
+-	blk->start = NULL;
++	blk->start = 0;
+ 	blk->size = 0;
+ 	blk->owner = NULL;
+ 
+@@ -156,7 +156,7 @@ static void attach_free_block(rh_info_t 
+ 
+ 	/* We assume that they are aligned properly */
+ 	size = blkn->size;
+-	s = (unsigned long)blkn->start;
++	s = blkn->start;
+ 	e = s + size;
+ 
+ 	/* Find the blocks immediately before and after the given one
+@@ -168,7 +168,7 @@ static void attach_free_block(rh_info_t 
+ 	list_for_each(l, &info->free_list) {
+ 		blk = list_entry(l, rh_block_t, list);
+ 
+-		bs = (unsigned long)blk->start;
++		bs = blk->start;
+ 		be = bs + blk->size;
+ 
+ 		if (next == NULL && s >= bs)
+@@ -186,10 +186,10 @@ static void attach_free_block(rh_info_t 
+ 	}
+ 
+ 	/* Now check if they are really adjacent */
+-	if (before != NULL && s != (unsigned long)before->start + before->size)
++	if (before && s != (before->start + before->size))
+ 		before = NULL;
+ 
+-	if (after != NULL && e != (unsigned long)after->start)
++	if (after && e != after->start)
+ 		after = NULL;
+ 
+ 	/* No coalescing; list insert and return */
+@@ -214,7 +214,7 @@ static void attach_free_block(rh_info_t 
+ 
+ 	/* Grow the after block backwards */
+ 	if (before == NULL && after != NULL) {
+-		after->start = (int8_t *)after->start - size;
++		after->start -= size;
+ 		after->size += size;
+ 		return;
+ 	}
+@@ -319,14 +319,14 @@ void rh_init(rh_info_t * info, unsigned 
+ }
+ 
+ /* Attach a free memory region, coalesces regions if adjuscent */
+-int rh_attach_region(rh_info_t * info, void *start, int size)
++int rh_attach_region(rh_info_t * info, unsigned long start, int size)
+ {
+ 	rh_block_t *blk;
+ 	unsigned long s, e, m;
+ 	int r;
+ 
+ 	/* The region must be aligned */
+-	s = (unsigned long)start;
++	s = start;
+ 	e = s + size;
+ 	m = info->alignment - 1;
+ 
+@@ -336,9 +336,12 @@ int rh_attach_region(rh_info_t * info, v
+ 	/* Round end down */
+ 	e = e & ~m;
+ 
++	if (IS_ERR_VALUE(e) || (e < s))
++		return -ERANGE;
++
+ 	/* Take final values */
+-	start = (void *)s;
+-	size = (int)(e - s);
++	start = s;
++	size = e - s;
+ 
+ 	/* Grow the blocks, if needed */
+ 	r = assure_empty(info, 1);
+@@ -356,7 +359,7 @@ int rh_attach_region(rh_info_t * info, v
+ }
+ 
+ /* Detatch given address range, splits free block if needed. */
+-void *rh_detach_region(rh_info_t * info, void *start, int size)
++unsigned long rh_detach_region(rh_info_t * info, unsigned long start, int size)
+ {
+ 	struct list_head *l;
+ 	rh_block_t *blk, *newblk;
+@@ -364,10 +367,10 @@ void *rh_detach_region(rh_info_t * info,
+ 
+ 	/* Validate size */
+ 	if (size <= 0)
+-		return ERR_PTR(-EINVAL);
++		return (unsigned long) -EINVAL;
+ 
+ 	/* The region must be aligned */
+-	s = (unsigned long)start;
++	s = start;
+ 	e = s + size;
+ 	m = info->alignment - 1;
+ 
+@@ -378,34 +381,34 @@ void *rh_detach_region(rh_info_t * info,
+ 	e = e & ~m;
+ 
+ 	if (assure_empty(info, 1) < 0)
+-		return ERR_PTR(-ENOMEM);
++		return (unsigned long) -ENOMEM;
+ 
+ 	blk = NULL;
+ 	list_for_each(l, &info->free_list) {
+ 		blk = list_entry(l, rh_block_t, list);
+ 		/* The range must lie entirely inside one free block */
+-		bs = (unsigned long)blk->start;
+-		be = (unsigned long)blk->start + blk->size;
++		bs = blk->start;
++		be = blk->start + blk->size;
+ 		if (s >= bs && e <= be)
+ 			break;
+ 		blk = NULL;
+ 	}
+ 
+ 	if (blk == NULL)
+-		return ERR_PTR(-ENOMEM);
++		return (unsigned long) -ENOMEM;
+ 
+ 	/* Perfect fit */
+ 	if (bs == s && be == e) {
+ 		/* Delete from free list, release slot */
+ 		list_del(&blk->list);
+ 		release_slot(info, blk);
+-		return (void *)s;
++		return s;
+ 	}
+ 
+ 	/* blk still in free list, with updated start and/or size */
+ 	if (bs == s || be == e) {
+ 		if (bs == s)
+-			blk->start = (int8_t *)blk->start + size;
++			blk->start += size;
+ 		blk->size -= size;
+ 
+ 	} else {
+@@ -414,31 +417,31 @@ void *rh_detach_region(rh_info_t * info,
+ 
+ 		/* the back free fragment */
+ 		newblk = get_slot(info);
+-		newblk->start = (void *)e;
++		newblk->start = e;
+ 		newblk->size = be - e;
+ 
+ 		list_add(&newblk->list, &blk->list);
+ 	}
+ 
+-	return (void *)s;
++	return s;
+ }
+ 
+-void *rh_alloc(rh_info_t * info, int size, const char *owner)
++unsigned long rh_alloc(rh_info_t * info, int size, const char *owner)
+ {
+ 	struct list_head *l;
+ 	rh_block_t *blk;
+ 	rh_block_t *newblk;
+-	void *start;
++	unsigned long start;
+ 
+ 	/* Validate size */
+ 	if (size <= 0)
+-		return ERR_PTR(-EINVAL);
++		return (unsigned long) -EINVAL;
+ 
+ 	/* Align to configured alignment */
+ 	size = (size + (info->alignment - 1)) & ~(info->alignment - 1);
+ 
+ 	if (assure_empty(info, 1) < 0)
+-		return ERR_PTR(-ENOMEM);
++		return (unsigned long) -ENOMEM;
+ 
+ 	blk = NULL;
+ 	list_for_each(l, &info->free_list) {
+@@ -449,7 +452,7 @@ void *rh_alloc(rh_info_t * info, int siz
+ 	}
+ 
+ 	if (blk == NULL)
+-		return ERR_PTR(-ENOMEM);
++		return (unsigned long) -ENOMEM;
+ 
+ 	/* Just fits */
+ 	if (blk->size == size) {
+@@ -469,7 +472,7 @@ void *rh_alloc(rh_info_t * info, int siz
+ 	newblk->owner = owner;
+ 
+ 	/* blk still in free list, with updated start, size */
+-	blk->start = (int8_t *)blk->start + size;
++	blk->start += size;
+ 	blk->size -= size;
+ 
+ 	start = newblk->start;
+@@ -480,18 +483,18 @@ void *rh_alloc(rh_info_t * info, int siz
+ }
+ 
+ /* allocate at precisely the given address */
+-void *rh_alloc_fixed(rh_info_t * info, void *start, int size, const char *owner)
++unsigned long rh_alloc_fixed(rh_info_t * info, unsigned long start, int size, const char *owner)
+ {
+ 	struct list_head *l;
+ 	rh_block_t *blk, *newblk1, *newblk2;
+-	unsigned long s, e, m, bs, be;
++	unsigned long s, e, m, bs=0, be=0;
+ 
+ 	/* Validate size */
+ 	if (size <= 0)
+-		return ERR_PTR(-EINVAL);
++		return (unsigned long) -EINVAL;
+ 
+ 	/* The region must be aligned */
+-	s = (unsigned long)start;
++	s = start;
+ 	e = s + size;
+ 	m = info->alignment - 1;
+ 
+@@ -502,20 +505,20 @@ void *rh_alloc_fixed(rh_info_t * info, v
+ 	e = e & ~m;
+ 
+ 	if (assure_empty(info, 2) < 0)
+-		return ERR_PTR(-ENOMEM);
++		return (unsigned long) -ENOMEM;
+ 
+ 	blk = NULL;
+ 	list_for_each(l, &info->free_list) {
+ 		blk = list_entry(l, rh_block_t, list);
+ 		/* The range must lie entirely inside one free block */
+-		bs = (unsigned long)blk->start;
+-		be = (unsigned long)blk->start + blk->size;
++		bs = blk->start;
++		be = blk->start + blk->size;
+ 		if (s >= bs && e <= be)
+ 			break;
+ 	}
+ 
+ 	if (blk == NULL)
+-		return ERR_PTR(-ENOMEM);
++		return (unsigned long) -ENOMEM;
+ 
+ 	/* Perfect fit */
+ 	if (bs == s && be == e) {
+@@ -533,7 +536,7 @@ void *rh_alloc_fixed(rh_info_t * info, v
+ 	/* blk still in free list, with updated start and/or size */
+ 	if (bs == s || be == e) {
+ 		if (bs == s)
+-			blk->start = (int8_t *)blk->start + size;
++			blk->start += size;
+ 		blk->size -= size;
+ 
+ 	} else {
+@@ -542,14 +545,14 @@ void *rh_alloc_fixed(rh_info_t * info, v
+ 
+ 		/* The back free fragment */
+ 		newblk2 = get_slot(info);
+-		newblk2->start = (void *)e;
++		newblk2->start = e;
+ 		newblk2->size = be - e;
+ 
+ 		list_add(&newblk2->list, &blk->list);
+ 	}
+ 
+ 	newblk1 = get_slot(info);
+-	newblk1->start = (void *)s;
++	newblk1->start = s;
+ 	newblk1->size = e - s;
+ 	newblk1->owner = owner;
+ 
+@@ -559,7 +562,7 @@ void *rh_alloc_fixed(rh_info_t * info, v
+ 	return start;
+ }
+ 
+-int rh_free(rh_info_t * info, void *start)
++int rh_free(rh_info_t * info, unsigned long start)
+ {
+ 	rh_block_t *blk, *blk2;
+ 	struct list_head *l;
+@@ -624,7 +627,7 @@ int rh_get_stats(rh_info_t * info, int w
+ 	return nr;
+ }
+ 
+-int rh_set_owner(rh_info_t * info, void *start, const char *owner)
++int rh_set_owner(rh_info_t * info, unsigned long start, const char *owner)
+ {
+ 	rh_block_t *blk, *blk2;
+ 	struct list_head *l;
+@@ -666,8 +669,8 @@ void rh_dump(rh_info_t * info)
+ 		nr = maxnr;
+ 	for (i = 0; i < nr; i++)
+ 		printk(KERN_INFO
+-		       "    0x%p-0x%p (%u)\n",
+-		       st[i].start, (int8_t *) st[i].start + st[i].size,
++		       "    0x%lx-0x%lx (%u)\n",
++		       st[i].start, st[i].start + st[i].size,
+ 		       st[i].size);
+ 	printk(KERN_INFO "\n");
+ 
+@@ -677,8 +680,8 @@ void rh_dump(rh_info_t * info)
+ 		nr = maxnr;
+ 	for (i = 0; i < nr; i++)
+ 		printk(KERN_INFO
+-		       "    0x%p-0x%p (%u) %s\n",
+-		       st[i].start, (int8_t *) st[i].start + st[i].size,
++		       "    0x%lx-0x%lx (%u) %s\n",
++		       st[i].start, st[i].start + st[i].size,
+ 		       st[i].size, st[i].owner != NULL ? st[i].owner : "");
+ 	printk(KERN_INFO "\n");
+ }
+@@ -686,6 +689,6 @@ void rh_dump(rh_info_t * info)
+ void rh_dump_blk(rh_info_t * info, rh_block_t * blk)
+ {
+ 	printk(KERN_INFO
+-	       "blk @0x%p: 0x%p-0x%p (%u)\n",
+-	       blk, blk->start, (int8_t *) blk->start + blk->size, blk->size);
++	       "blk @0x%p: 0x%lx-0x%lx (%u)\n",
++	       blk, blk->start, blk->start + blk->size, blk->size);
+ }
+Index: linux-2.6.18/arch/ppc/syslib/cpm2_common.c
+===================================================================
+--- linux-2.6.18.orig/arch/ppc/syslib/cpm2_common.c
++++ linux-2.6.18/arch/ppc/syslib/cpm2_common.c
+@@ -136,15 +136,14 @@ static void cpm2_dpinit(void)
+ 	 * varies with the processor and the microcode patches activated.
+ 	 * But the following should be at least safe.
+ 	 */
+-	rh_attach_region(&cpm_dpmem_info, (void *)CPM_DATAONLY_BASE,
+-			CPM_DATAONLY_SIZE);
++	rh_attach_region(&cpm_dpmem_info, CPM_DATAONLY_BASE, CPM_DATAONLY_SIZE);
+ }
+ 
+ /* This function returns an index into the DPRAM area.
+  */
+-uint cpm_dpalloc(uint size, uint align)
++unsigned long cpm_dpalloc(uint size, uint align)
+ {
+-	void *start;
++	unsigned long start;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&cpm_dpmem_lock, flags);
+@@ -152,17 +151,17 @@ uint cpm_dpalloc(uint size, uint align)
+ 	start = rh_alloc(&cpm_dpmem_info, size, "commproc");
+ 	spin_unlock_irqrestore(&cpm_dpmem_lock, flags);
+ 
+-	return (uint)start;
++	return start;
+ }
+ EXPORT_SYMBOL(cpm_dpalloc);
+ 
+-int cpm_dpfree(uint offset)
++int cpm_dpfree(unsigned long offset)
+ {
+ 	int ret;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&cpm_dpmem_lock, flags);
+-	ret = rh_free(&cpm_dpmem_info, (void *)offset);
++	ret = rh_free(&cpm_dpmem_info, offset);
+ 	spin_unlock_irqrestore(&cpm_dpmem_lock, flags);
+ 
+ 	return ret;
+@@ -170,17 +169,17 @@ int cpm_dpfree(uint offset)
+ EXPORT_SYMBOL(cpm_dpfree);
+ 
+ /* not sure if this is ever needed */
+-uint cpm_dpalloc_fixed(uint offset, uint size, uint align)
++unsigned long cpm_dpalloc_fixed(unsigned long offset, uint size, uint align)
+ {
+-	void *start;
++	unsigned long start;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&cpm_dpmem_lock, flags);
+ 	cpm_dpmem_info.alignment = align;
+-	start = rh_alloc_fixed(&cpm_dpmem_info, (void *)offset, size, "commproc");
++	start = rh_alloc_fixed(&cpm_dpmem_info, offset, size, "commproc");
+ 	spin_unlock_irqrestore(&cpm_dpmem_lock, flags);
+ 
+-	return (uint)start;
++	return start;
+ }
+ EXPORT_SYMBOL(cpm_dpalloc_fixed);
+ 
+@@ -190,7 +189,7 @@ void cpm_dpdump(void)
+ }
+ EXPORT_SYMBOL(cpm_dpdump);
+ 
+-void *cpm_dpram_addr(uint offset)
++void *cpm_dpram_addr(unsigned long offset)
+ {
+ 	return (void *)&cpm2_immr->im_dprambase[offset];
+ }
+Index: linux-2.6.18/drivers/net/fs_enet/mac-scc.c
+===================================================================
+--- linux-2.6.18.orig/drivers/net/fs_enet/mac-scc.c
++++ linux-2.6.18/drivers/net/fs_enet/mac-scc.c
+@@ -169,7 +169,7 @@ static int allocate_bd(struct net_device
+ 
+ 	fep->ring_mem_addr = cpm_dpalloc((fpi->tx_ring + fpi->rx_ring) *
+ 					 sizeof(cbd_t), 8);
+-	if (IS_DPERR(fep->ring_mem_addr))
++	if (IS_ERR_VALUE(fep->ring_mem_addr))
+ 		return -ENOMEM;
+ 
+ 	fep->ring_base = cpm_dpram_addr(fep->ring_mem_addr);
+Index: linux-2.6.18/drivers/net/ucc_geth.c
+===================================================================
+--- linux-2.6.18.orig/drivers/net/ucc_geth.c
++++ linux-2.6.18/drivers/net/ucc_geth.c
+@@ -293,7 +293,7 @@ static int fill_init_enet_entries(struct
+ 		else {
+ 			init_enet_offset =
+ 			    qe_muram_alloc(thread_size, thread_alignment);
+-			if (IS_MURAM_ERR(init_enet_offset)) {
++			if (IS_ERR_VALUE(init_enet_offset)) {
+ 				ugeth_err
+ 		("fill_init_enet_entries: Can not allocate DPRAM memory.");
+ 				qe_put_snum((u8) snum);
+@@ -2596,7 +2596,7 @@ static int ucc_geth_startup(struct ucc_g
+ 			ugeth->tx_bd_ring_offset[j] =
+ 			    qe_muram_alloc(length,
+ 					   UCC_GETH_TX_BD_RING_ALIGNMENT);
+-			if (!IS_MURAM_ERR(ugeth->tx_bd_ring_offset[j]))
++			if (!IS_ERR_VALUE(ugeth->tx_bd_ring_offset[j]))
+ 				ugeth->p_tx_bd_ring[j] =
+ 				    (u8 *) qe_muram_addr(ugeth->
+ 							 tx_bd_ring_offset[j]);
+@@ -2631,7 +2631,7 @@ static int ucc_geth_startup(struct ucc_g
+ 			ugeth->rx_bd_ring_offset[j] =
+ 			    qe_muram_alloc(length,
+ 					   UCC_GETH_RX_BD_RING_ALIGNMENT);
+-			if (!IS_MURAM_ERR(ugeth->rx_bd_ring_offset[j]))
++			if (!IS_ERR_VALUE(ugeth->rx_bd_ring_offset[j]))
+ 				ugeth->p_rx_bd_ring[j] =
+ 				    (u8 *) qe_muram_addr(ugeth->
+ 							 rx_bd_ring_offset[j]);
+@@ -2715,7 +2715,7 @@ static int ucc_geth_startup(struct ucc_g
+ 	ugeth->tx_glbl_pram_offset =
+ 	    qe_muram_alloc(sizeof(struct ucc_geth_tx_global_pram),
+ 			   UCC_GETH_TX_GLOBAL_PRAM_ALIGNMENT);
+-	if (IS_MURAM_ERR(ugeth->tx_glbl_pram_offset)) {
++	if (IS_ERR_VALUE(ugeth->tx_glbl_pram_offset)) {
+ 		ugeth_err
+ 		    ("%s: Can not allocate DPRAM memory for p_tx_glbl_pram.",
+ 		     __FUNCTION__);
+@@ -2737,7 +2737,7 @@ static int ucc_geth_startup(struct ucc_g
+ 			   sizeof(struct ucc_geth_thread_data_tx) +
+ 			   32 * (numThreadsTxNumerical == 1),
+ 			   UCC_GETH_THREAD_DATA_ALIGNMENT);
+-	if (IS_MURAM_ERR(ugeth->thread_dat_tx_offset)) {
++	if (IS_ERR_VALUE(ugeth->thread_dat_tx_offset)) {
+ 		ugeth_err
+ 		    ("%s: Can not allocate DPRAM memory for p_thread_data_tx.",
+ 		     __FUNCTION__);
+@@ -2765,7 +2765,7 @@ static int ucc_geth_startup(struct ucc_g
+ 	    qe_muram_alloc(ug_info->numQueuesTx *
+ 			   sizeof(struct ucc_geth_send_queue_qd),
+ 			   UCC_GETH_SEND_QUEUE_QUEUE_DESCRIPTOR_ALIGNMENT);
+-	if (IS_MURAM_ERR(ugeth->send_q_mem_reg_offset)) {
++	if (IS_ERR_VALUE(ugeth->send_q_mem_reg_offset)) {
+ 		ugeth_err
+ 		    ("%s: Can not allocate DPRAM memory for p_send_q_mem_reg.",
+ 		     __FUNCTION__);
+@@ -2808,7 +2808,7 @@ static int ucc_geth_startup(struct ucc_g
+ 		ugeth->scheduler_offset =
+ 		    qe_muram_alloc(sizeof(struct ucc_geth_scheduler),
+ 				   UCC_GETH_SCHEDULER_ALIGNMENT);
+-		if (IS_MURAM_ERR(ugeth->scheduler_offset)) {
++		if (IS_ERR_VALUE(ugeth->scheduler_offset)) {
+ 			ugeth_err
+ 			 ("%s: Can not allocate DPRAM memory for p_scheduler.",
+ 			     __FUNCTION__);
+@@ -2856,7 +2856,7 @@ static int ucc_geth_startup(struct ucc_g
+ 		    qe_muram_alloc(sizeof
+ 				   (struct ucc_geth_tx_firmware_statistics_pram),
+ 				   UCC_GETH_TX_STATISTICS_ALIGNMENT);
+-		if (IS_MURAM_ERR(ugeth->tx_fw_statistics_pram_offset)) {
++		if (IS_ERR_VALUE(ugeth->tx_fw_statistics_pram_offset)) {
+ 			ugeth_err
+ 			    ("%s: Can not allocate DPRAM memory for"
+ 				" p_tx_fw_statistics_pram.", __FUNCTION__);
+@@ -2895,7 +2895,7 @@ static int ucc_geth_startup(struct ucc_g
+ 	ugeth->rx_glbl_pram_offset =
+ 	    qe_muram_alloc(sizeof(struct ucc_geth_rx_global_pram),
+ 			   UCC_GETH_RX_GLOBAL_PRAM_ALIGNMENT);
+-	if (IS_MURAM_ERR(ugeth->rx_glbl_pram_offset)) {
++	if (IS_ERR_VALUE(ugeth->rx_glbl_pram_offset)) {
+ 		ugeth_err
+ 		    ("%s: Can not allocate DPRAM memory for p_rx_glbl_pram.",
+ 		     __FUNCTION__);
+@@ -2916,7 +2916,7 @@ static int ucc_geth_startup(struct ucc_g
+ 	    qe_muram_alloc(numThreadsRxNumerical *
+ 			   sizeof(struct ucc_geth_thread_data_rx),
+ 			   UCC_GETH_THREAD_DATA_ALIGNMENT);
+-	if (IS_MURAM_ERR(ugeth->thread_dat_rx_offset)) {
++	if (IS_ERR_VALUE(ugeth->thread_dat_rx_offset)) {
+ 		ugeth_err
+ 		    ("%s: Can not allocate DPRAM memory for p_thread_data_rx.",
+ 		     __FUNCTION__);
+@@ -2939,7 +2939,7 @@ static int ucc_geth_startup(struct ucc_g
+ 		    qe_muram_alloc(sizeof
+ 				   (struct ucc_geth_rx_firmware_statistics_pram),
+ 				   UCC_GETH_RX_STATISTICS_ALIGNMENT);
+-		if (IS_MURAM_ERR(ugeth->rx_fw_statistics_pram_offset)) {
++		if (IS_ERR_VALUE(ugeth->rx_fw_statistics_pram_offset)) {
+ 			ugeth_err
+ 				("%s: Can not allocate DPRAM memory for"
+ 				" p_rx_fw_statistics_pram.", __FUNCTION__);
+@@ -2961,7 +2961,7 @@ static int ucc_geth_startup(struct ucc_g
+ 	    qe_muram_alloc(ug_info->numQueuesRx *
+ 			   sizeof(struct ucc_geth_rx_interrupt_coalescing_entry)
+ 			   + 4, UCC_GETH_RX_INTERRUPT_COALESCING_ALIGNMENT);
+-	if (IS_MURAM_ERR(ugeth->rx_irq_coalescing_tbl_offset)) {
++	if (IS_ERR_VALUE(ugeth->rx_irq_coalescing_tbl_offset)) {
+ 		ugeth_err
+ 		    ("%s: Can not allocate DPRAM memory for"
+ 			" p_rx_irq_coalescing_tbl.", __FUNCTION__);
+@@ -3029,7 +3029,7 @@ static int ucc_geth_startup(struct ucc_g
+ 			   (sizeof(struct ucc_geth_rx_bd_queues_entry) +
+ 			    sizeof(struct ucc_geth_rx_prefetched_bds)),
+ 			   UCC_GETH_RX_BD_QUEUES_ALIGNMENT);
+-	if (IS_MURAM_ERR(ugeth->rx_bd_qs_tbl_offset)) {
++	if (IS_ERR_VALUE(ugeth->rx_bd_qs_tbl_offset)) {
+ 		ugeth_err
+ 		    ("%s: Can not allocate DPRAM memory for p_rx_bd_qs_tbl.",
+ 		     __FUNCTION__);
+@@ -3118,7 +3118,7 @@ static int ucc_geth_startup(struct ucc_g
+ 		ugeth->exf_glbl_param_offset =
+ 		    qe_muram_alloc(sizeof(struct ucc_geth_exf_global_pram),
+ 		UCC_GETH_RX_EXTENDED_FILTERING_GLOBAL_PARAMETERS_ALIGNMENT);
+-		if (IS_MURAM_ERR(ugeth->exf_glbl_param_offset)) {
++		if (IS_ERR_VALUE(ugeth->exf_glbl_param_offset)) {
+ 			ugeth_err
+ 				("%s: Can not allocate DPRAM memory for"
+ 				" p_exf_glbl_param.", __FUNCTION__);
+@@ -3260,7 +3260,7 @@ static int ucc_geth_startup(struct ucc_g
+ 
+ 	/* Allocate InitEnet command parameter structure */
+ 	init_enet_pram_offset = qe_muram_alloc(sizeof(struct ucc_geth_init_pram), 4);
+-	if (IS_MURAM_ERR(init_enet_pram_offset)) {
++	if (IS_ERR_VALUE(init_enet_pram_offset)) {
+ 		ugeth_err
+ 		    ("%s: Can not allocate DPRAM memory for p_init_enet_pram.",
+ 		     __FUNCTION__);
+Index: linux-2.6.18/drivers/serial/cpm_uart/cpm_uart_cpm1.c
+===================================================================
+--- linux-2.6.18.orig/drivers/serial/cpm_uart/cpm_uart_cpm1.c
++++ linux-2.6.18/drivers/serial/cpm_uart/cpm_uart_cpm1.c
+@@ -180,7 +180,7 @@ int cpm_uart_allocbuf(struct uart_cpm_po
+ {
+ 	int dpmemsz, memsz;
+ 	u8 *dp_mem;
+-	uint dp_offset;
++	unsigned long dp_offset;
+ 	u8 *mem_addr;
+ 	dma_addr_t dma_addr = 0;
+ 
+@@ -188,7 +188,7 @@ int cpm_uart_allocbuf(struct uart_cpm_po
+ 
+ 	dpmemsz = sizeof(cbd_t) * (pinfo->rx_nrfifos + pinfo->tx_nrfifos);
+ 	dp_offset = cpm_dpalloc(dpmemsz, 8);
+-	if (IS_DPERR(dp_offset)) {
++	if (IS_ERR_VALUE(dp_offset)) {
+ 		printk(KERN_ERR
+ 		       "cpm_uart_cpm1.c: could not allocate buffer descriptors\n");
+ 		return -ENOMEM;
+Index: linux-2.6.18/drivers/serial/cpm_uart/cpm_uart_cpm2.c
+===================================================================
+--- linux-2.6.18.orig/drivers/serial/cpm_uart/cpm_uart_cpm2.c
++++ linux-2.6.18/drivers/serial/cpm_uart/cpm_uart_cpm2.c
+@@ -227,7 +227,7 @@ int cpm_uart_allocbuf(struct uart_cpm_po
+ {
+ 	int dpmemsz, memsz;
+ 	u8 *dp_mem;
+-	uint dp_offset;
++	unsigned long dp_offset;
+ 	u8 *mem_addr;
+ 	dma_addr_t dma_addr = 0;
+ 
+@@ -235,7 +235,7 @@ int cpm_uart_allocbuf(struct uart_cpm_po
+ 
+ 	dpmemsz = sizeof(cbd_t) * (pinfo->rx_nrfifos + pinfo->tx_nrfifos);
+ 	dp_offset = cpm_dpalloc(dpmemsz, 8);
+-	if (IS_DPERR(dp_offset)) {
++	if (IS_ERR_VALUE(dp_offset)) {
+ 		printk(KERN_ERR
+ 		       "cpm_uart_cpm.c: could not allocate buffer descriptors\n");
+ 		return -ENOMEM;
+Index: linux-2.6.18/include/asm-powerpc/qe.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/qe.h
++++ linux-2.6.18/include/asm-powerpc/qe.h
+@@ -41,11 +41,11 @@ int qe_issue_cmd(u32 cmd, u32 device, u8
+ void qe_setbrg(u32 brg, u32 rate);
+ int qe_get_snum(void);
+ void qe_put_snum(u8 snum);
+-u32 qe_muram_alloc(u32 size, u32 align);
+-int qe_muram_free(u32 offset);
+-u32 qe_muram_alloc_fixed(u32 offset, u32 size);
++unsigned long qe_muram_alloc(int size, int align);
++int qe_muram_free(unsigned long offset);
++unsigned long qe_muram_alloc_fixed(unsigned long offset, int size);
+ void qe_muram_dump(void);
+-void *qe_muram_addr(u32 offset);
++void *qe_muram_addr(unsigned long offset);
+ 
+ /* Buffer descriptors */
+ struct qe_bd {
+@@ -451,10 +451,5 @@ struct ucc_slow_pram {
+ #define UCC_FAST_FUNCTION_CODE_DTB_LCL	0x02
+ #define UCC_FAST_FUNCTION_CODE_BDB_LCL	0x01
+ 
+-static inline long IS_MURAM_ERR(const u32 offset)
+-{
+-	return offset > (u32) - 1000L;
+-}
+-
+ #endif /* __KERNEL__ */
+ #endif /* _ASM_POWERPC_QE_H */
+Index: linux-2.6.18/include/asm-ppc/commproc.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-ppc/commproc.h
++++ linux-2.6.18/include/asm-ppc/commproc.h
+@@ -68,20 +68,15 @@
+ #define CPM_DATAONLY_SIZE	((uint)0x0700)
+ #define CPM_DP_NOSPACE		((uint)0x7fffffff)
+ 
+-static inline long IS_DPERR(const uint offset)
+-{
+-	return (uint)offset > (uint)-1000L;
+-}
+-
+ /* Export the base address of the communication processor registers
+  * and dual port ram.
+  */
+ extern	cpm8xx_t	*cpmp;		/* Pointer to comm processor */
+-extern uint cpm_dpalloc(uint size, uint align);
+-extern int cpm_dpfree(uint offset);
+-extern uint cpm_dpalloc_fixed(uint offset, uint size, uint align);
++extern unsigned long cpm_dpalloc(uint size, uint align);
++extern int cpm_dpfree(unsigned long offset);
++extern unsigned long cpm_dpalloc_fixed(unsigned long offset, uint size, uint align);
+ extern void cpm_dpdump(void);
+-extern void *cpm_dpram_addr(uint offset);
++extern void *cpm_dpram_addr(unsigned long offset);
+ extern uint cpm_dpram_phys(u8* addr);
+ extern void cpm_setbrg(uint brg, uint rate);
+ 
+Index: linux-2.6.18/include/asm-ppc/cpm2.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-ppc/cpm2.h
++++ linux-2.6.18/include/asm-ppc/cpm2.h
+@@ -104,21 +104,16 @@
+  */
+ #define NUM_CPM_HOST_PAGES	2
+ 
+-static inline long IS_DPERR(const uint offset)
+-{
+-	return (uint)offset > (uint)-1000L;
+-}
+-
+ /* Export the base address of the communication processor registers
+  * and dual port ram.
+  */
+ extern		cpm_cpm2_t	*cpmp;	 /* Pointer to comm processor */
+ 
+-extern uint cpm_dpalloc(uint size, uint align);
+-extern int cpm_dpfree(uint offset);
+-extern uint cpm_dpalloc_fixed(uint offset, uint size, uint align);
++extern unsigned long cpm_dpalloc(uint size, uint align);
++extern int cpm_dpfree(unsigned long offset);
++extern unsigned long cpm_dpalloc_fixed(unsigned long offset, uint size, uint align);
+ extern void cpm_dpdump(void);
+-extern void *cpm_dpram_addr(uint offset);
++extern void *cpm_dpram_addr(unsigned long offset);
+ extern void cpm_setbrg(uint brg, uint rate);
+ extern void cpm2_fastbrg(uint brg, uint rate, int div16);
+ extern void cpm2_reset(void);
+Index: linux-2.6.18/include/asm-ppc/rheap.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-ppc/rheap.h
++++ linux-2.6.18/include/asm-ppc/rheap.h
+@@ -18,7 +18,7 @@
+ 
+ typedef struct _rh_block {
+ 	struct list_head list;
+-	void *start;
++	unsigned long start;
+ 	int size;
+ 	const char *owner;
+ } rh_block_t;
+@@ -37,8 +37,8 @@ typedef struct _rh_info {
+ #define RHIF_STATIC_INFO	0x1
+ #define RHIF_STATIC_BLOCK	0x2
+ 
+-typedef struct rh_stats_t {
+-	void *start;
++typedef struct _rh_stats {
++	unsigned long start;
+ 	int size;
+ 	const char *owner;
+ } rh_stats_t;
+@@ -57,24 +57,24 @@ extern void rh_init(rh_info_t * info, un
+ 		    rh_block_t * block);
+ 
+ /* Attach a free region to manage */
+-extern int rh_attach_region(rh_info_t * info, void *start, int size);
++extern int rh_attach_region(rh_info_t * info, unsigned long start, int size);
+ 
+ /* Detach a free region */
+-extern void *rh_detach_region(rh_info_t * info, void *start, int size);
++extern unsigned long rh_detach_region(rh_info_t * info, unsigned long start, int size);
+ 
+ /* Allocate the given size from the remote heap (with alignment) */
+-extern void *rh_alloc_align(rh_info_t * info, int size, int alignment,
++extern unsigned long rh_alloc_align(rh_info_t * info, int size, int alignment,
+ 		const char *owner);
+ 
+ /* Allocate the given size from the remote heap */
+-extern void *rh_alloc(rh_info_t * info, int size, const char *owner);
++extern unsigned long rh_alloc(rh_info_t * info, int size, const char *owner);
+ 
+ /* Allocate the given size from the given address */
+-extern void *rh_alloc_fixed(rh_info_t * info, void *start, int size,
++extern unsigned long rh_alloc_fixed(rh_info_t * info, unsigned long start, int size,
+ 			    const char *owner);
+ 
+ /* Free the allocated area */
+-extern int rh_free(rh_info_t * info, void *start);
++extern int rh_free(rh_info_t * info, unsigned long start);
+ 
+ /* Get stats for debugging purposes */
+ extern int rh_get_stats(rh_info_t * info, int what, int max_stats,
+@@ -84,6 +84,6 @@ extern int rh_get_stats(rh_info_t * info
+ extern void rh_dump(rh_info_t * info);
+ 
+ /* Set owner of taken block */
+-extern int rh_set_owner(rh_info_t * info, void *start, const char *owner);
++extern int rh_set_owner(rh_info_t * info, unsigned long start, const char *owner);
+ 
+ #endif				/* __ASM_PPC_RHEAP_H__ */
+Index: linux-2.6.18/mvl_patches/pro50-0916.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0916.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(916);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

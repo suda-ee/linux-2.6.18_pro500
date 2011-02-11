@@ -1,0 +1,312 @@
+#! /usr/bin/env bash
+# Patch: -common_64bits_be_compat_sys_migrate_pages
+# Date: Wed Jun 11 14:47:32 2008
+# MR: 22612
+# 
+# commit 3fd593979802f81ff6452596ac61e3840f917589
+# Author: Stephen Rothwell <sfr@canb.auug.org.au>
+# Date:   Thu Nov 2 22:07:24 2006 -0800
+# 
+#     [PATCH] Create compat_sys_migrate_pages
+#     
+#     This is needed on bigendian 64bit architectures.
+#     
+#     Signed-off-by: Stephen Rothwell <sfr@canb.auug.org.au>
+#     Acked-by: Christoph Lameter <clameter@sgi.com>
+#     Signed-off-by: Andrew Morton <akpm@osdl.org>
+#     Signed-off-by: Linus Torvalds <torvalds@osdl.org>
+# 
+
+PATCHNUM=1139
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 22612
+
+commit 3fd593979802f81ff6452596ac61e3840f917589
+Author: Stephen Rothwell <sfr@canb.auug.org.au>
+Date:   Thu Nov 2 22:07:24 2006 -0800
+
+    [PATCH] Create compat_sys_migrate_pages
+    
+    This is needed on bigendian 64bit architectures.
+    
+    Signed-off-by: Stephen Rothwell <sfr@canb.auug.org.au>
+    Acked-by: Christoph Lameter <clameter@sgi.com>
+    Signed-off-by: Andrew Morton <akpm@osdl.org>
+    Signed-off-by: Linus Torvalds <torvalds@osdl.org>
+
+diff --git a/include/linux/compat.h b/include/linux/compat.h
+index f155319..80b17f4 100644
+
+Index: linux-2.6.18/include/linux/compat.h
+===================================================================
+--- linux-2.6.18.orig/include/linux/compat.h
++++ linux-2.6.18/include/linux/compat.h
+@@ -228,5 +228,10 @@ asmlinkage long compat_sys_adjtimex(stru
+ 
+ extern int compat_printk(const char *fmt, ...);
+ 
++asmlinkage long compat_sys_migrate_pages(compat_pid_t pid,
++		compat_ulong_t maxnode, const compat_ulong_t __user *old_nodes,
++		const compat_ulong_t __user *new_nodes);
++
++
+ #endif /* CONFIG_COMPAT */
+ #endif /* _LINUX_COMPAT_H */
+Index: linux-2.6.18/kernel/compat.c
+===================================================================
+--- linux-2.6.18.orig/kernel/compat.c
++++ linux-2.6.18/kernel/compat.c
+@@ -982,4 +982,37 @@ asmlinkage long compat_sys_move_pages(pi
+ 	}
+ 	return sys_move_pages(pid, nr_pages, pages, nodes, status, flags);
+ }
++
++asmlinkage long compat_sys_migrate_pages(compat_pid_t pid,
++			compat_ulong_t maxnode,
++			const compat_ulong_t __user *old_nodes,
++			const compat_ulong_t __user *new_nodes)
++{
++	unsigned long __user *old = NULL;
++	unsigned long __user *new = NULL;
++	nodemask_t tmp_mask;
++	unsigned long nr_bits;
++	unsigned long size;
++
++	nr_bits = min_t(unsigned long, maxnode - 1, MAX_NUMNODES);
++	size = ALIGN(nr_bits, BITS_PER_LONG) / 8;
++	if (old_nodes) {
++		if (compat_get_bitmap(nodes_addr(tmp_mask), old_nodes, nr_bits))
++			return -EFAULT;
++		old = compat_alloc_user_space(new_nodes ? size * 2 : size);
++		if (new_nodes)
++			new = old + size / sizeof(unsigned long);
++		if (copy_to_user(old, nodes_addr(tmp_mask), size))
++			return -EFAULT;
++	}
++	if (new_nodes) {
++		if (compat_get_bitmap(nodes_addr(tmp_mask), new_nodes, nr_bits))
++			return -EFAULT;
++		if (new == NULL)
++			new = compat_alloc_user_space(size);
++		if (copy_to_user(new, nodes_addr(tmp_mask), size))
++			return -EFAULT;
++	}
++	return sys_migrate_pages(pid, nr_bits + 1, old, new);
++}
+ #endif
+Index: linux-2.6.18/kernel/sys_ni.c
+===================================================================
+--- linux-2.6.18.orig/kernel/sys_ni.c
++++ linux-2.6.18/kernel/sys_ni.c
+@@ -136,3 +136,4 @@ cond_syscall(sys_madvise);
+ cond_syscall(sys_mremap);
+ cond_syscall(sys_remap_file_pages);
+ cond_syscall(compat_sys_move_pages);
++cond_syscall(compat_sys_migrate_pages);
+Index: linux-2.6.18/mvl_patches/pro50-1139.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1139.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1139);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

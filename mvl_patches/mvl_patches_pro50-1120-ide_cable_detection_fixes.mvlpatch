@@ -1,0 +1,455 @@
+#! /usr/bin/env bash
+# Patch: -ide_cable_detection_fixes
+# Date: Wed May 28 17:43:40 2008
+# Source: Bartlomiej Zolnierkiewicz <bzolnier@gmail.com>
+# MR: 21773
+# Type: Defect Fix
+# Disposition: merged from 2.6.22-rc1
+# Signed-off-by: Bartlomiej Zolnierkiewicz <bzolnier@gmail.com>
+# Signed-off-by: Sergei Shtylyov <sshtylyov@ru.mvista.com>
+# Description:
+# 
+# ide: cable detection fixes (take 2)
+# 
+# Tejun's recent eighty_ninty_three() fix has inspired me to do more thorough
+# review of the cable detection code...
+# 
+# * print user-friendly warning about limiting the maximum transfer speed
+#   to UDMA33 (and the reason behind it) when 80-wire cable is not detected,
+#   also while at it cleanup eighty_ninty_three() a bit
+# 
+# * use eighty_ninty_three() in ide_ata66_check(), this actually fixes 3 bugs:
+#   - bit 14 (word 93 validity check) == 1 && bit 13 (80-wire cable test) == 1
+#     were used as 80-wire cable present test for CONFIG_IDEDMA_IVB=n case
+#     (please see FIXME comment in eighty_ninty_three() for more details)
+#   - CONFIG_IDEDMA_IVB=y/n cases were interchanged
+#   - check for SATA devices was missing
+# 
+# * remove private cable warnings from pdc_202xx{old,new} drivers now that core
+#   code provides this functionality (plus, in pdc202xx_new case the test could
+#   give false warnings for ATAPI devices because pdc202xx_new driver doesn't
+#   even support ATAPI DMA)
+# 
+# The patch deviates from the upstream because of a lot of cleanups that went into
+# the kernel before this fix which I didn't backport...
+# 
+# commit 7f8f48af0861c38c28d4abd550102643e0ea9e6a
+# tree 6ec47ace87afbd96cc1144d423854b09d9f21d75
+# parent 7662d046df09e80680b77b68de896beab45e675e
+# author Bartlomiej Zolnierkiewicz <bzolnier@gmail.com> Thu, 10 May 2007 00:01:10 +0200
+# committer Bartlomiej Zolnierkiewicz <bzolnier@gmail.com> Thu, 10 May 2007 00:01:10 +0200
+# 
+#  drivers/ide/ide-iops.c         |   49 ++++++++++++++++++++++-------------------
+#  drivers/ide/pci/pdc202xx_new.c |   16 -------------
+#  drivers/ide/pci/pdc202xx_old.c |    5 ----
+#  include/linux/ide.h            |    1 
+#  4 files changed, 28 insertions(+), 43 deletions(-)
+# 
+
+PATCHNUM=1120
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Bartlomiej Zolnierkiewicz <bzolnier@gmail.com>
+MR: 21773
+Type: Defect Fix
+Disposition: merged from 2.6.22-rc1
+Signed-off-by: Bartlomiej Zolnierkiewicz <bzolnier@gmail.com>
+Signed-off-by: Sergei Shtylyov <sshtylyov@ru.mvista.com>
+Description:
+
+ide: cable detection fixes (take 2)
+
+Tejun's recent eighty_ninty_three() fix has inspired me to do more thorough
+review of the cable detection code...
+
+* print user-friendly warning about limiting the maximum transfer speed
+  to UDMA33 (and the reason behind it) when 80-wire cable is not detected,
+  also while at it cleanup eighty_ninty_three() a bit
+
+* use eighty_ninty_three() in ide_ata66_check(), this actually fixes 3 bugs:
+  - bit 14 (word 93 validity check) == 1 && bit 13 (80-wire cable test) == 1
+    were used as 80-wire cable present test for CONFIG_IDEDMA_IVB=n case
+    (please see FIXME comment in eighty_ninty_three() for more details)
+  - CONFIG_IDEDMA_IVB=y/n cases were interchanged
+  - check for SATA devices was missing
+
+* remove private cable warnings from pdc_202xx{old,new} drivers now that core
+  code provides this functionality (plus, in pdc202xx_new case the test could
+  give false warnings for ATAPI devices because pdc202xx_new driver doesn't
+  even support ATAPI DMA)
+
+The patch deviates from the upstream because of a lot of cleanups that went into
+the kernel before this fix which I didn't backport...
+
+commit 7f8f48af0861c38c28d4abd550102643e0ea9e6a
+tree 6ec47ace87afbd96cc1144d423854b09d9f21d75
+parent 7662d046df09e80680b77b68de896beab45e675e
+author Bartlomiej Zolnierkiewicz <bzolnier@gmail.com> Thu, 10 May 2007 00:01:10 +0200
+committer Bartlomiej Zolnierkiewicz <bzolnier@gmail.com> Thu, 10 May 2007 00:01:10 +0200
+
+ drivers/ide/ide-iops.c         |   49 ++++++++++++++++++++++-------------------
+ drivers/ide/pci/pdc202xx_new.c |   16 -------------
+ drivers/ide/pci/pdc202xx_old.c |    5 ----
+ include/linux/ide.h            |    1 
+ mvl_patches/pro50-1120.c       |   16 +++++++++++++
+ 5 files changed, 44 insertions(+), 43 deletions(-)
+
+Index: linux-2.6.18/drivers/ide/ide-iops.c
+===================================================================
+--- linux-2.6.18.orig/drivers/ide/ide-iops.c
++++ linux-2.6.18/drivers/ide/ide-iops.c
+@@ -595,19 +595,34 @@ EXPORT_SYMBOL(ide_wait_stat);
+  */
+ u8 eighty_ninty_three (ide_drive_t *drive)
+ {
+-	if(HWIF(drive)->udma_four == 0)
+-		return 0;
++	ide_hwif_t *hwif = drive->hwif;
++	struct hd_driveid *id = drive->id;
++
++	if (hwif->udma_four == 0)
++		goto no_80w;
+ 
+ 	/* Check for SATA but only if we are ATA5 or higher */
+-	if (drive->id->hw_config == 0 && (drive->id->major_rev_num & 0x7FE0))
++	if (id->hw_config == 0 && (id->major_rev_num & 0x7FE0))
+ 		return 1;
+-	if (!(drive->id->hw_config & 0x6000))
+-		return 0;
++
+ #ifndef CONFIG_IDEDMA_IVB
+-	if(!(drive->id->hw_config & 0x4000))
++	if (id->hw_config & 0x4000)
++#else
++	if (id->hw_config & 0x6000)
++#endif
++		return 1;
++
++no_80w:
++	if (drive->udma33_warned == 1)
+ 		return 0;
+-#endif /* CONFIG_IDEDMA_IVB */
+-	return 1;
++
++	printk(KERN_WARNING "%s: %s side 80-wire cable detection failed, "
++			    "limiting max speed to UDMA33\n",
++			    drive->name, hwif->udma_four ? "drive" : "host");
++
++	drive->udma33_warned = 1;
++
++	return 0;
+ }
+ 
+ EXPORT_SYMBOL(eighty_ninty_three);
+@@ -617,23 +632,13 @@ int ide_ata66_check (ide_drive_t *drive,
+ 	if ((args->tfRegister[IDE_COMMAND_OFFSET] == WIN_SETFEATURES) &&
+ 	    (args->tfRegister[IDE_SECTOR_OFFSET] > XFER_UDMA_2) &&
+ 	    (args->tfRegister[IDE_FEATURE_OFFSET] == SETFEATURES_XFER)) {
+-#ifndef CONFIG_IDEDMA_IVB
+-		if ((drive->id->hw_config & 0x6000) == 0) {
+-#else /* !CONFIG_IDEDMA_IVB */
+-		if (((drive->id->hw_config & 0x2000) == 0) ||
+-		    ((drive->id->hw_config & 0x4000) == 0)) {
+-#endif /* CONFIG_IDEDMA_IVB */
+-			printk("%s: Speed warnings UDMA 3/4/5 is not "
+-				"functional.\n", drive->name);
+-			return 1;
+-		}
+-		if (!HWIF(drive)->udma_four) {
+-			printk("%s: Speed warnings UDMA 3/4/5 is not "
+-				"functional.\n",
+-				HWIF(drive)->name);
++		if (eighty_ninty_three(drive) == 0) {
++			printk(KERN_WARNING "%s: UDMA speeds >UDMA33 cannot "
++					    "be set\n", drive->name);
+ 			return 1;
+ 		}
+ 	}
++
+ 	return 0;
+ }
+ 
+Index: linux-2.6.18/drivers/ide/pci/pdc202xx_new.c
+===================================================================
+--- linux-2.6.18.orig/drivers/ide/pci/pdc202xx_new.c
++++ linux-2.6.18/drivers/ide/pci/pdc202xx_new.c
+@@ -37,8 +37,6 @@
+ #include <asm/pci-bridge.h>
+ #endif
+ 
+-#define PDC202_DEBUG_CABLE	0
+-
+ #undef DEBUG
+ 
+ #ifdef DEBUG
+@@ -244,17 +242,8 @@ static int config_chipset_for_dma(ide_dr
+ {
+ 	struct hd_driveid *id	= drive->id;
+ 	ide_hwif_t *hwif	= HWIF(drive);
+-	u8 ultra_66		= (id->dma_ultra & 0x0078) ? 1 : 0;
+-	u8 cable		= pdcnew_cable_detect(hwif);
+ 	u8 speed;
+ 
+-	if (ultra_66 && cable) {
+-		printk(KERN_WARNING "Warning: %s channel "
+-		       "requires an 80-pin cable for operation.\n",
+-		       hwif->channel ? "Secondary" : "Primary");
+-		printk(KERN_WARNING "%s reduced to Ultra33 mode.\n", drive->name);
+-	}
+-
+ 	if (drive->media != ide_disk)
+ 		return 0;
+ 
+@@ -568,11 +557,6 @@ static void __devinit init_hwif_pdc202ne
+ 	if (!noautodma)
+ 		hwif->autodma = 1;
+ 	hwif->drives[0].autodma = hwif->drives[1].autodma = hwif->autodma;
+-
+-#if PDC202_DEBUG_CABLE
+-	printk(KERN_DEBUG "%s: %s-pin cable\n",
+-		hwif->name, hwif->udma_four ? "80" : "40");
+-#endif /* PDC202_DEBUG_CABLE */
+ }
+ 
+ static int __devinit init_setup_pdcnew(struct pci_dev *dev, ide_pci_device_t *d)
+Index: linux-2.6.18/drivers/ide/pci/pdc202xx_old.c
+===================================================================
+--- linux-2.6.18.orig/drivers/ide/pci/pdc202xx_old.c
++++ linux-2.6.18/drivers/ide/pci/pdc202xx_old.c
+@@ -47,7 +47,6 @@
+ #include <asm/io.h>
+ #include <asm/irq.h>
+ 
+-#define PDC202_DEBUG_CABLE		0
+ #define PDC202XX_DEBUG_DRIVE_INFO	0
+ 
+ static const char *pdc_quirk_drives[] = {
+@@ -408,10 +407,6 @@ static void __devinit init_hwif_pdc202xx
+ 	if (!noautodma)
+ 		hwif->autodma = 1;
+ 	hwif->drives[0].autodma = hwif->drives[1].autodma = hwif->autodma;
+-#if PDC202_DEBUG_CABLE
+-	printk(KERN_DEBUG "%s: %s-pin cable\n",
+-		hwif->name, hwif->udma_four ? "80" : "40");
+-#endif /* PDC202_DEBUG_CABLE */	
+ }
+ 
+ static void __devinit init_dma_pdc202xx(ide_hwif_t *hwif, unsigned long dmabase)
+Index: linux-2.6.18/include/linux/ide.h
+===================================================================
+--- linux-2.6.18.orig/include/linux/ide.h
++++ linux-2.6.18/include/linux/ide.h
+@@ -592,6 +592,7 @@ typedef struct ide_drive_s {
+ 	unsigned remap_0_to_1	: 1;	/* 0=noremap, 1=remap 0->1 (for EZDrive) */
+ 	unsigned blocked        : 1;	/* 1=powermanagment told us not to do anything, so sleep nicely */
+ 	unsigned vdma		: 1;	/* 1=doing PIO over DMA 0=doing normal DMA */
++	unsigned udma33_warned	: 1;
+ 	unsigned addressing;		/*      : 3;
+ 					 *  0=28-bit
+ 					 *  1=48-bit
+Index: linux-2.6.18/mvl_patches/pro50-1120.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1120.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1120);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

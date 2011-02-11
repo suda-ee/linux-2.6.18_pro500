@@ -1,0 +1,339 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Remove_ppc_md.pci_map_irq_ppc_swizzle_fo
+# Date: Fri Oct 26 08:37:09 2007
+# Source: Kernel.org
+# MR: 25195
+# Type: Enhancement
+# Disposition: merged from Kernel.org
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# From 69108cf00679716bcab58acb3135390654c5bb99 Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Sat, 11 Nov 2006 17:24:52 +1100
+# Subject: [PATCH] [POWERPC] Remove ppc_md.pci_map_irq & ppc_swizzle for ARCH=powerpc
+# 
+# These were inherited from ARCH=ppc, but are not needed since parsing of interrupts
+# should be done via the of_* functions (who can do swizzling). If we ever need to
+# do non-standard swizzling on bridges without a device-node, then we might add
+# back a slightly different version of ppc_md.pci_swizzle but for now, that is not
+# the case.
+# 
+# I removed the couple of calls for these in 83xx. If that breaks something, then
+# there is a problem with the device-tree on these.
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=476
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Kernel.org
+MR: 25195
+Type: Enhancement
+Disposition: merged from Kernel.org
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+From 69108cf00679716bcab58acb3135390654c5bb99 Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Sat, 11 Nov 2006 17:24:52 +1100
+Subject: [PATCH] [POWERPC] Remove ppc_md.pci_map_irq & ppc_swizzle for ARCH=powerpc
+
+These were inherited from ARCH=ppc, but are not needed since parsing of interrupts
+should be done via the of_* functions (who can do swizzling). If we ever need to
+do non-standard swizzling on bridges without a device-node, then we might add
+back a slightly different version of ppc_md.pci_swizzle but for now, that is not
+the case.
+
+I removed the couple of calls for these in 83xx. If that breaks something, then
+there is a problem with the device-tree on these.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/kernel/pci_32.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_32.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_32.c
+@@ -1329,10 +1329,6 @@ pcibios_init(void)
+ 	if (pci_assign_all_buses && have_of)
+ 		pcibios_make_OF_bus_map();
+ 
+-	/* Do machine dependent PCI interrupt routing */
+-	if (ppc_md.pci_swizzle && ppc_md.pci_map_irq)
+-		pci_fixup_irqs(ppc_md.pci_swizzle, ppc_md.pci_map_irq);
+-
+ 	/* Call machine dependent fixup */
+ 	if (ppc_md.pcibios_fixup)
+ 		ppc_md.pcibios_fixup();
+@@ -1355,25 +1351,6 @@ pcibios_init(void)
+ 
+ subsys_initcall(pcibios_init);
+ 
+-unsigned char __init
+-common_swizzle(struct pci_dev *dev, unsigned char *pinp)
+-{
+-	struct pci_controller *hose = dev->sysdata;
+-
+-	if (dev->bus->number != hose->first_busno) {
+-		u8 pin = *pinp;
+-		do {
+-			pin = bridge_swizzle(pin, PCI_SLOT(dev->devfn));
+-			/* Move up the chain of bridges. */
+-			dev = dev->bus->self;
+-		} while (dev->bus->self);
+-		*pinp = pin;
+-
+-		/* The slot is the idsel of the last bridge. */
+-	}
+-	return PCI_SLOT(dev->devfn);
+-}
+-
+ resource_size_t resource_fixup(struct pci_dev * dev, struct resource * res,
+ 			     resource_size_t start, resource_size_t size)
+ {
+Index: linux-2.6.18/arch/powerpc/platforms/83xx/mpc832x_mds.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/83xx/mpc832x_mds.c
++++ linux-2.6.18/arch/powerpc/platforms/83xx/mpc832x_mds.c
+@@ -97,8 +97,6 @@ static void __init mpc832x_sys_setup_arc
+ #ifdef CONFIG_PCI
+ 	for (np = NULL; (np = of_find_node_by_type(np, "pci")) != NULL;)
+ 		add_bridge(np);
+-
+-	ppc_md.pci_swizzle = common_swizzle;
+ 	ppc_md.pci_exclude_device = mpc83xx_exclude_device;
+ #endif
+ 
+Index: linux-2.6.18/arch/powerpc/platforms/83xx/mpc8360e_pb.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/83xx/mpc8360e_pb.c
++++ linux-2.6.18/arch/powerpc/platforms/83xx/mpc8360e_pb.c
+@@ -102,8 +102,6 @@ static void __init mpc8360_sys_setup_arc
+ #ifdef CONFIG_PCI
+ 	for (np = NULL; (np = of_find_node_by_type(np, "pci")) != NULL;)
+ 		add_bridge(np);
+-
+-	ppc_md.pci_swizzle = common_swizzle;
+ 	ppc_md.pci_exclude_device = mpc83xx_exclude_device;
+ #endif
+ 
+Index: linux-2.6.18/include/asm-powerpc/machdep.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/machdep.h
++++ linux-2.6.18/include/asm-powerpc/machdep.h
+@@ -207,10 +207,6 @@ struct machdep_calls {
+ 	 * Returns 0 to allow assignment/enabling of the device. */
+ 	int  (*pcibios_enable_device_hook)(struct pci_dev *, int initial);
+ 
+-	/* For interrupt routing */
+-	unsigned char (*pci_swizzle)(struct pci_dev *, unsigned char *);
+-	int (*pci_map_irq)(struct pci_dev *, unsigned char, unsigned char);
+-
+ 	/* Called in indirect_* to avoid touching devices */
+ 	int (*pci_exclude_device)(struct pci_controller *, unsigned char, unsigned char);
+ 
+Index: linux-2.6.18/mvl_patches/pro50-0476.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0476.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(476);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

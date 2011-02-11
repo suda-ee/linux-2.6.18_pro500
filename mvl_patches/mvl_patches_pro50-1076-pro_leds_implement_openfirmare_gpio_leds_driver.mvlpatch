@@ -1,0 +1,490 @@
+#! /usr/bin/env bash
+# Patch: -pro_leds_implement_openfirmare_gpio_leds_driver
+# Date: Fri Apr 25 11:55:36 2008
+# Source: local
+# MR: 27564
+# Type: Enhancement
+# Disposition: submitted to linuxppc-dev, Richard Purdie
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# [PRO] leds: implement OpenFirmare GPIO LEDs driver
+# 
+# Despite leds-gpio and leds-of-gpio similar names and purposes, there
+# is actually very few code can be shared between the two (both drivers
+# are mostly the driver bindings anyway).
+# 
+#  drivers/leds/Kconfig        |    8 ++
+#  drivers/leds/Makefile       |    1 
+#  drivers/leds/leds-of-gpio.c |  206 +++++++++++++++++++++++++++++++++++++++++++
+#  3 files changed, 215 insertions(+), 0 deletions(-)
+# 
+
+PATCHNUM=1076
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: local
+MR: 27564
+Type: Enhancement
+Disposition: submitted to linuxppc-dev, Richard Purdie
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+[PRO] leds: implement OpenFirmare GPIO LEDs driver
+
+Despite leds-gpio and leds-of-gpio similar names and purposes, there
+is actually very few code can be shared between the two (both drivers
+are mostly the driver bindings anyway).
+
+ drivers/leds/Kconfig        |    8 +
+ drivers/leds/Makefile       |    1 
+ drivers/leds/leds-of-gpio.c |  206 ++++++++++++++++++++++++++++++++++++++++++++
+ mvl_patches/pro50-1076.c    |   16 +++
+ 4 files changed, 231 insertions(+)
+
+Index: linux-2.6.18/drivers/leds/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/leds/Kconfig
++++ linux-2.6.18/drivers/leds/Kconfig
+@@ -89,6 +89,14 @@ config LEDS_OMAP_PWM
+ 	  This options enables support for LEDs connected to GPIO lines
+ 	  controlled by a PWM timer on OMAP CPUs.
+ 
++config LEDS_OF_GPIO
++	tristate "LED Support for GPIO connected LEDs (OpenFirmware bindings)"
++	depends on LEDS_CLASS && GENERIC_GPIO && OF
++	help
++	  This option enables support for the LEDs connected to GPIO
++	  outputs. To be useful the particular board must have LEDs
++	  and they must be connected to the GPIO lines.
++
+ comment "LED Triggers"
+ 
+ config LEDS_TRIGGERS
+Index: linux-2.6.18/drivers/leds/Makefile
+===================================================================
+--- linux-2.6.18.orig/drivers/leds/Makefile
++++ linux-2.6.18/drivers/leds/Makefile
+@@ -15,6 +15,7 @@ obj-$(CONFIG_LEDS_AMS_DELTA)		+= leds-am
+ obj-$(CONFIG_LEDS_NET48XX)		+= leds-net48xx.o
+ obj-$(CONFIG_LEDS_OMAP)			+= leds-omap.o
+ obj-$(CONFIG_LEDS_OMAP_PWM)		+= leds-omap-pwm.o
++obj-$(CONFIG_LEDS_OF_GPIO)		+= leds-of-gpio.o
+ 
+ # LED Triggers
+ obj-$(CONFIG_LEDS_TRIGGER_TIMER)	+= ledtrig-timer.o
+Index: linux-2.6.18/drivers/leds/leds-of-gpio.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/leds/leds-of-gpio.c
+@@ -0,0 +1,206 @@
++/*
++ * LEDs driver for GPIOs (OpenFirmware bindings)
++ *
++ * Copyright (C) 2007 8D Technologies inc.
++ * Raphael Assenat <raph@8d.com>
++ * Copyright (C) 2008 MontaVista Software, Inc.
++ * Anton Vorontsov <avorontsov@ru.mvista.com>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#include <linux/kernel.h>
++#include <linux/spinlock.h>
++#include <linux/leds.h>
++#include <linux/workqueue.h>
++#include <asm/of_device.h>
++#include <asm/of_platform.h>
++#include <asm/gpio.h>
++
++struct of_gpio_led {
++	struct device_node *np;
++	struct led_classdev cdev;
++	struct work_struct work;
++	unsigned int gpio;
++	bool new_level;
++	bool can_sleep;
++	bool active_low;
++};
++
++static void gpio_led_work(void *data)
++{
++	struct of_gpio_led *led = data;
++
++	gpio_set_value_cansleep(led->gpio, led->new_level);
++}
++
++static void gpio_led_set(struct led_classdev *led_cdev,
++			 enum led_brightness value)
++{
++	struct of_gpio_led *led = container_of(led_cdev, struct of_gpio_led,
++					       cdev);
++	bool level;
++
++	if (value == LED_OFF)
++		level = false;
++	else
++		level = true;
++
++	if (led->active_low)
++		level = !level;
++
++	/* setting GPIOs with I2C/etc requires a preemptible task context */
++	if (led->can_sleep) {
++		if (preempt_count()) {
++			led->new_level = level;
++			schedule_work(&led->work);
++		} else {
++			gpio_set_value_cansleep(led->gpio, level);
++		}
++	} else {
++		gpio_set_value(led->gpio, level);
++	}
++}
++
++static int __devinit of_gpio_leds_probe(struct of_device *ofdev,
++					const struct of_device_id *match)
++{
++	int ret;
++	struct of_gpio_led *led;
++	struct device_node *np = ofdev->node;
++	const int *brightness;
++	int size;
++
++	led = kzalloc(sizeof(*led), GFP_KERNEL);
++	if (!led)
++		return -ENOMEM;
++
++	led->np = np;
++
++	ret = of_get_gpio(np, 0);
++	if (!gpio_is_valid(ret)) {
++		dev_err(&ofdev->dev, "gpio is invalid\n");
++		goto err_get_gpio;
++	}
++	led->gpio = ret;
++	led->can_sleep = gpio_cansleep(led->gpio);
++
++	led->cdev.name = of_get_property(np, "linux,name", NULL);
++	if (!led->cdev.name)
++		led->cdev.name = ofdev->dev.bus_id;
++	led->cdev.default_trigger = of_get_property(np,
++					"linux,default-trigger", NULL);
++	led->active_low = of_get_property(np, "linux,active-low", NULL) ?
++					  1 : 0;
++	led->cdev.brightness_set = gpio_led_set;
++	led->cdev.brightness = LED_OFF;
++	brightness = of_get_property(np, "linux,brightness", &size);
++	if (!brightness || size != sizeof(u32))
++		led->cdev.brightness = LED_OFF;
++	else
++		led->cdev.brightness = *brightness;
++
++	ret = gpio_request(led->gpio, ofdev->dev.bus_id);
++	if (ret < 0) {
++		dev_err(&ofdev->dev, "could not request gpio, status is %d\n",
++			ret);
++		goto err_gpio;
++	}
++
++	ret = gpio_direction_output(led->gpio, led->active_low);
++	if (ret) {
++		dev_err(&ofdev->dev, "gpio could not be an output, "
++			"status is %d\n", ret);
++		goto err_gpio;
++	}
++
++	INIT_WORK(&led->work, gpio_led_work, led);
++	gpio_led_set(&led->cdev, led->cdev.brightness);
++
++	ret = led_classdev_register(&ofdev->dev, &led->cdev);
++	if (ret < 0) {
++		dev_err(&ofdev->dev, "could register led cdev, status is %d\n",
++			ret);
++		gpio_free(led->gpio);
++		goto err_reg_cdev;
++	}
++
++	dev_set_drvdata(&ofdev->dev, led);
++
++	return 0;
++
++err_reg_cdev:
++	flush_scheduled_work();
++err_gpio:
++	gpio_free(led->gpio);
++err_get_gpio:
++	kfree(led);
++	return ret;
++}
++
++static int __devexit of_gpio_leds_remove(struct of_device *ofdev)
++{
++	struct of_gpio_led *led = dev_get_drvdata(&ofdev->dev);
++
++	led_classdev_unregister(&led->cdev);
++	flush_scheduled_work();
++	gpio_free(led->gpio);
++	of_node_put(led->np);
++	kfree(led);
++
++	return 0;
++}
++
++#ifdef CONFIG_PM
++static int of_gpio_led_suspend(struct of_device *ofdev, pm_message_t state)
++{
++	struct of_gpio_led *led = dev_get_drvdata(&ofdev->dev);
++
++	led_classdev_suspend(&led->cdev);
++	return 0;
++}
++
++static int of_gpio_led_resume(struct of_device *ofdev)
++{
++	struct of_gpio_led *led = dev_get_drvdata(&ofdev->dev);
++
++	led_classdev_resume(&led->cdev);
++	return 0;
++}
++#else
++#define of_gpio_led_suspend NULL
++#define of_gpio_led_resume NULL
++#endif /* CONFIG_PM */
++
++static struct of_device_id of_gpio_leds_match[] = {
++	{ .compatible = "gpio-led", },
++	{},
++};
++MODULE_DEVICE_TABLE(of, of_gpio_leds_match);
++
++static struct of_platform_driver of_gpio_leds_drv = {
++	.name = "of_gpio_leds",
++	.match_table = of_gpio_leds_match,
++	.probe = of_gpio_leds_probe,
++	.remove = __devexit_p(of_gpio_leds_remove),
++	.suspend = of_gpio_led_suspend,
++	.resume = of_gpio_led_resume,
++};
++
++static int __init of_gpio_leds_init(void)
++{
++	return of_register_platform_driver(&of_gpio_leds_drv);
++}
++module_init(of_gpio_leds_init);
++
++static void __exit of_gpio_leds_exit(void)
++{
++	of_unregister_platform_driver(&of_gpio_leds_drv);
++}
++module_exit(of_gpio_leds_exit);
++
++MODULE_DESCRIPTION("OF-platform GPIO LEDs driver");
++MODULE_AUTHOR("Anton Vorontsov <avorontsov@ru.mvista.com>");
++MODULE_LICENSE("GPL");
+Index: linux-2.6.18/mvl_patches/pro50-1076.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1076.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1076);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

@@ -1,0 +1,476 @@
+#! /usr/bin/env bash
+# Patch: -ucc_geth_napi_related_bug_fixes
+# Date: Wed Nov  7 15:17:18 2007
+# Source: Michael Reiss <michael.f.reiss@freescale.com>
+# MR: 24199
+# Type: Defect Fix
+# Disposition: backport from 2.6.22-rc1 (702ff12ce7e9643084232a8d50b0b1eec26026ae)
+# Signed-off-by: Michael Reiss <michael.f.reiss@freescale.com>
+# Signed-off-by: Michael Barkowski <michael.barkowski@freescale.com>
+# Signed-off-by: Kim Phillips <kim.phillips@freescale.com>
+# Signed-off-by: Jeff Garzik <jeff@garzik.org>
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# ucc_geth: NAPI-related bug fixes
+# 
+# Based partly on the gianfar driver, this patch fixes several
+# bugs which were causing NAPI to be completely unusable.
+# * An IRQ is still needed in NAPI, to kick off NAPI task,
+#   and for Tx processing.  Request the IRQ.
+# * If rx_work_limit = 0 we are not complete.
+# * While running Rx NAPI processing we must mask Rx events,
+#   including Rx busy.
+# * ucc_geth_rx function does not need a lock.
+#   Could lead to deadlock in NAPI case.
+# * There's no need to loop reading ucce multiple times in the ISR,
+#   so while adding the call to schedule NAPI which was not there,
+#   simplify the event processing into if-else format.
+# * Rx Busy now kicks off NAPI processing, while still
+#   being counted as an error.
+# 
+#  drivers/net/ucc_geth.c |   98 ++++++++++++++++++++++++++++--------------------
+#  drivers/net/ucc_geth.h |    3 +
+#  2 files changed, 61 insertions(+), 40 deletions(-)
+# 
+
+PATCHNUM=579
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Michael Reiss <michael.f.reiss@freescale.com>
+MR: 24199
+Type: Defect Fix
+Disposition: backport from 2.6.22-rc1 (702ff12ce7e9643084232a8d50b0b1eec26026ae)
+Signed-off-by: Michael Reiss <michael.f.reiss@freescale.com>
+Signed-off-by: Michael Barkowski <michael.barkowski@freescale.com>
+Signed-off-by: Kim Phillips <kim.phillips@freescale.com>
+Signed-off-by: Jeff Garzik <jeff@garzik.org>
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+ucc_geth: NAPI-related bug fixes
+
+Based partly on the gianfar driver, this patch fixes several
+bugs which were causing NAPI to be completely unusable.
+* An IRQ is still needed in NAPI, to kick off NAPI task,
+  and for Tx processing.  Request the IRQ.
+* If rx_work_limit = 0 we are not complete.
+* While running Rx NAPI processing we must mask Rx events,
+  including Rx busy.
+* ucc_geth_rx function does not need a lock.
+  Could lead to deadlock in NAPI case.
+* There's no need to loop reading ucce multiple times in the ISR,
+  so while adding the call to schedule NAPI which was not there,
+  simplify the event processing into if-else format.
+* Rx Busy now kicks off NAPI processing, while still
+  being counted as an error.
+
+ drivers/net/ucc_geth.c   |   98 +++++++++++++++++++++++++++--------------------
+ drivers/net/ucc_geth.h   |    3 +
+ mvl_patches/pro50-0579.c |   16 +++++++
+ 3 files changed, 77 insertions(+), 40 deletions(-)
+
+Index: linux-2.6.18/drivers/net/ucc_geth.c
+===================================================================
+--- linux-2.6.18.orig/drivers/net/ucc_geth.c
++++ linux-2.6.18/drivers/net/ucc_geth.c
+@@ -3418,7 +3418,6 @@ static int ucc_geth_rx(struct ucc_geth_p
+ 
+ 	ugeth_vdbg("%s: IN", __FUNCTION__);
+ 
+-	spin_lock(&ugeth->lock);
+ 	/* collect received buffers */
+ 	bd = ugeth->rxBd[rxQ];
+ 
+@@ -3466,7 +3465,6 @@ static int ucc_geth_rx(struct ucc_geth_p
+ 		skb = get_new_skb(ugeth, bd);
+ 		if (!skb) {
+ 			ugeth_warn("%s: No Rx Data Buffer", __FUNCTION__);
+-			spin_unlock(&ugeth->lock);
+ 			ugeth->stats.rx_dropped++;
+ 			break;
+ 		}
+@@ -3487,7 +3485,6 @@ static int ucc_geth_rx(struct ucc_geth_p
+ 	}
+ 
+ 	ugeth->rxBd[rxQ] = bd;
+-	spin_unlock(&ugeth->lock);
+ 	return howmany;
+ }
+ 
+@@ -3539,23 +3536,38 @@ static int ucc_geth_tx(struct net_device
+ static int ucc_geth_poll(struct net_device *dev, int *budget)
+ {
+ 	struct ucc_geth_private *ugeth = netdev_priv(dev);
++	struct ucc_geth_info *ug_info;
++	struct ucc_fast_private *uccf;
+ 	int howmany;
+-	int rx_work_limit = *budget;
+-	u8 rxQ = 0;
++	u8 i;
++	int rx_work_limit;
++	register u32 uccm;
+ 
++	ug_info = ugeth->ug_info;
++
++	rx_work_limit = *budget;
+ 	if (rx_work_limit > dev->quota)
+ 		rx_work_limit = dev->quota;
+ 
+-	howmany = ucc_geth_rx(ugeth, rxQ, rx_work_limit);
++	howmany = 0;
++
++	for (i = 0; i < ug_info->numQueuesRx; i++) {
++		howmany += ucc_geth_rx(ugeth, i, rx_work_limit);
++	}
+ 
+ 	dev->quota -= howmany;
+ 	rx_work_limit -= howmany;
+ 	*budget -= howmany;
+ 
+-	if (rx_work_limit >= 0)
++	if (rx_work_limit > 0) {
+ 		netif_rx_complete(dev);
++		uccf = ugeth->uccf;
++		uccm = in_be32(uccf->p_uccm);
++		uccm |= UCCE_RX_EVENTS;
++		out_be32(uccf->p_uccm, uccm);
++	}
+ 
+-	return (rx_work_limit < 0) ? 1 : 0;
++	return (rx_work_limit > 0) ? 0 : 1;
+ }
+ #endif				/* CONFIG_UGETH_NAPI */
+ 
+@@ -3566,10 +3578,13 @@ static irqreturn_t ucc_geth_irq_handler(
+ 	struct ucc_geth_private *ugeth = netdev_priv(dev);
+ 	struct ucc_fast_private *uccf;
+ 	struct ucc_geth_info *ug_info;
+-	register u32 ucce = 0;
+-	register u32 bit_mask = UCCE_RXBF_SINGLE_MASK;
+-	register u32 tx_mask = UCCE_TXBF_SINGLE_MASK;
+-	register u8 i;
++	register u32 ucce;
++	register u32 uccm;
++#ifndef CONFIG_UGETH_NAPI
++	register u32 rx_mask;
++#endif
++	register u32 tx_mask;
++	u8 i;
+ 
+ 	ugeth_vdbg("%s: IN", __FUNCTION__);
+ 
+@@ -3579,48 +3594,53 @@ static irqreturn_t ucc_geth_irq_handler(
+ 	uccf = ugeth->uccf;
+ 	ug_info = ugeth->ug_info;
+ 
+-	do {
+-		ucce |= (u32) (in_be32(uccf->p_ucce) & in_be32(uccf->p_uccm));
+-
+-		/* clear event bits for next time */
+-		/* Side effect here is to mask ucce variable
+-		for future processing below. */
+-		out_be32(uccf->p_ucce, ucce);	/* Clear with ones,
+-						but only bits in UCCM */
+-
+-		/* We ignore Tx interrupts because Tx confirmation is
+-		done inside Tx routine */
++	/* read and clear events */
++	ucce = (u32) in_be32(uccf->p_ucce);
++	uccm = (u32) in_be32(uccf->p_uccm);
++	ucce &= uccm;
++	out_be32(uccf->p_ucce, ucce);
+ 
++	/* check for receive events that require processing */
++	if (ucce & UCCE_RX_EVENTS) {
++#ifdef CONFIG_UGETH_NAPI
++		if (netif_rx_schedule_prep(dev)) {
++		uccm &= ~UCCE_RX_EVENTS;
++			out_be32(uccf->p_uccm, uccm);
++			__netif_rx_schedule(dev);
++		}
++#else
++		rx_mask = UCCE_RXBF_SINGLE_MASK;
+ 		for (i = 0; i < ug_info->numQueuesRx; i++) {
+-			if (ucce & bit_mask)
+-				ucc_geth_rx(ugeth, i,
+-					    (int)ugeth->ug_info->
+-					    bdRingLenRx[i]);
+-			ucce &= ~bit_mask;
+-			bit_mask <<= 1;
++			if (ucce & rx_mask)
++				ucc_geth_rx(ugeth, i, (int)ugeth->ug_info->bdRingLenRx[i]);
++			ucce &= ~rx_mask;
++			rx_mask <<= 1;
+ 		}
++#endif /* CONFIG_UGETH_NAPI */
++	}
+ 
++	/* Tx event processing */
++	if (ucce & UCCE_TX_EVENTS) {
++		spin_lock(&ugeth->lock);
++		tx_mask = UCCE_TXBF_SINGLE_MASK;
+ 		for (i = 0; i < ug_info->numQueuesTx; i++) {
+ 			if (ucce & tx_mask)
+ 				ucc_geth_tx(dev, i);
+ 			ucce &= ~tx_mask;
+ 			tx_mask <<= 1;
+ 		}
++		spin_unlock(&ugeth->lock);
++	}
+ 
+-		/* Exceptions */
++	/* Errors and other events */
++	if (ucce & UCCE_OTHER) {
+ 		if (ucce & UCCE_BSY) {
+-			ugeth_vdbg("Got BUSY irq!!!!");
+ 			ugeth->stats.rx_errors++;
+-			ucce &= ~UCCE_BSY;
+ 		}
+-		if (ucce & UCCE_OTHER) {
+-			ugeth_vdbg("Got frame with error (ucce - 0x%08x)!!!!",
+-				   ucce);
+-			ugeth->stats.rx_errors++;
+-			ucce &= ~ucce;
++		if (ucce & UCCE_TXE) {
++			ugeth->stats.tx_errors++;
+ 		}
+ 	}
+-	while (ucce);
+ 
+ 	return IRQ_HANDLED;
+ }
+@@ -3680,7 +3700,6 @@ static int ucc_geth_open(struct net_devi
+ 
+ 	phy_start(ugeth->phydev);
+ 
+-#ifndef CONFIG_UGETH_NAPI
+ 	err =
+ 	    request_irq(ugeth->ug_info->uf_info.irq, ucc_geth_irq_handler, 0,
+ 			"UCC Geth", dev);
+@@ -3690,7 +3709,6 @@ static int ucc_geth_open(struct net_devi
+ 		ucc_geth_stop(ugeth);
+ 		return err;
+ 	}
+-#endif				/* CONFIG_UGETH_NAPI */
+ 
+ 	err = ugeth_enable(ugeth, COMM_DIR_RX_AND_TX);
+ 	if (err) {
+Index: linux-2.6.18/drivers/net/ucc_geth.h
+===================================================================
+--- linux-2.6.18.orig/drivers/net/ucc_geth.h
++++ linux-2.6.18/drivers/net/ucc_geth.h
+@@ -205,6 +205,9 @@ struct ucc_geth {
+ #define UCCE_OTHER       (UCCE_SCAR | UCCE_GRA  | UCCE_CBPR | UCCE_BSY  |\
+ 			UCCE_RXC  | UCCE_TXC  | UCCE_TXE)
+ 
++#define UCCE_RX_EVENTS							(UCCE_RXF | UCCE_BSY)
++#define UCCE_TX_EVENTS							(UCCE_TXB | UCCE_TXE)
++
+ /* UCC GETH UPSMR (Protocol Specific Mode Register) */
+ #define UPSMR_ECM                               0x04000000	/* Enable CAM
+ 								   Miss or
+Index: linux-2.6.18/mvl_patches/pro50-0579.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0579.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(579);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

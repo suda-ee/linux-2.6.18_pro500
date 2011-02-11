@@ -1,0 +1,584 @@
+#! /usr/bin/env bash
+# Patch: -USB_Implement_support_for_split_endian_OHCI
+# Date: Fri Oct 26 08:36:38 2007
+# MR: 24856
+# From 11d1a4aa8d657478cb2e5d33f203ba8f01b9ac24 Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Fri, 15 Dec 2006 06:54:03 +1100
+# Subject: [PATCH] USB: Implement support for "split" endian OHCI
+# 
+# This patch separates support for big endian MMIO register access
+# and big endian descriptors in order to support the Toshiba SCC
+# implementation which has big endian registers but little endian
+# in-memory descriptors.
+# 
+# It simplifies the access functions a bit in ohci.h while at it.
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Acked-by: David Brownell <dbrownell@users.sourceforge.net>
+# Acked-by: Geoff Levand <geoffrey.levand@am.sony.com>
+# Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+
+PATCHNUM=467
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From 11d1a4aa8d657478cb2e5d33f203ba8f01b9ac24 Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Fri, 15 Dec 2006 06:54:03 +1100
+Subject: [PATCH] USB: Implement support for "split" endian OHCI
+
+This patch separates support for big endian MMIO register access
+and big endian descriptors in order to support the Toshiba SCC
+implementation which has big endian registers but little endian
+in-memory descriptors.
+
+It simplifies the access functions a bit in ohci.h while at it.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Acked-by: David Brownell <dbrownell@users.sourceforge.net>
+Acked-by: Geoff Levand <geoffrey.levand@am.sony.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+Index: linux-2.6.18/drivers/usb/host/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/Kconfig
++++ linux-2.6.18/drivers/usb/host/Kconfig
+@@ -125,7 +125,8 @@ config USB_OHCI_HCD_PPC_SOC
+ 	bool "OHCI support for on-chip PPC USB controller"
+ 	depends on USB_OHCI_HCD && (STB03xxx || PPC_MPC52xx)
+ 	default y
+-	select USB_OHCI_BIG_ENDIAN
++	select USB_OHCI_BIG_ENDIAN_DESC
++	select USB_OHCI_BIG_ENDIAN_MMIO
+ 	---help---
+ 	  Enables support for the USB controller on the MPC52xx or
+ 	  STB03xxx processor chip.  If unsure, say Y.
+@@ -139,7 +140,12 @@ config USB_OHCI_HCD_PCI
+ 	  Enables support for PCI-bus plug-in USB controller cards.
+ 	  If unsure, say Y.
+ 
+-config USB_OHCI_BIG_ENDIAN
++config USB_OHCI_BIG_ENDIAN_DESC
++	bool
++	depends on USB_OHCI_HCD
++	default n
++
++config USB_OHCI_BIG_ENDIAN_MMIO
+ 	bool
+ 	depends on USB_OHCI_HCD
+ 	default n
+Index: linux-2.6.18/drivers/usb/host/ohci-pci.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-pci.c
++++ linux-2.6.18/drivers/usb/host/ohci-pci.c
+@@ -85,6 +85,27 @@ static int __devinit ohci_quirk_zfmicro(
+ 	return 0;
+ }
+ 
++/* Check for Toshiba SCC OHCI which has big endian registers
++ * and little endian in memory data structures
++ */
++static int __devinit ohci_quirk_toshiba_scc(struct usb_hcd *hcd)
++{
++	struct ohci_hcd	*ohci = hcd_to_ohci (hcd);
++
++	/* That chip is only present in the southbridge of some
++	 * cell based platforms which are supposed to select
++	 * CONFIG_USB_OHCI_BIG_ENDIAN_MMIO. We verify here if
++	 * that was the case though.
++	 */
++#ifdef CONFIG_USB_OHCI_BIG_ENDIAN_MMIO
++	ohci->flags |= OHCI_QUIRK_BE_MMIO;
++	ohci_dbg (ohci, "enabled big endian Toshiba quirk\n");
++	return 0;
++#else
++	ohci_err (ohci, "unsupported big endian Toshiba quirk\n");
++	return -ENXIO;
++#endif
++}
+ 
+ /* List of quirks for OHCI */
+ static const struct pci_device_id ohci_pci_quirks[] = {
+@@ -104,9 +125,14 @@ static const struct pci_device_id ohci_p
+ 		PCI_DEVICE(PCI_VENDOR_ID_COMPAQ, 0xa0f8),
+ 		.driver_data = (unsigned long)ohci_quirk_zfmicro,
+ 	},
++	{
++		PCI_DEVICE(PCI_VENDOR_ID_TOSHIBA_2, 0x01b6),
++		.driver_data = (unsigned long)ohci_quirk_toshiba_scc,
++	},
+ 	/* FIXME for some of the early AMD 760 southbridges, OHCI
+ 	 * won't work at all.  blacklist them.
+ 	 */
++
+ 	{},
+ };
+ 
+Index: linux-2.6.18/drivers/usb/host/ohci-ppc-soc.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-ppc-soc.c
++++ linux-2.6.18/drivers/usb/host/ohci-ppc-soc.c
+@@ -72,7 +72,7 @@ static int usb_hcd_ppc_soc_probe(const s
+ 	}
+ 
+ 	ohci = hcd_to_ohci(hcd);
+-	ohci->flags |= OHCI_BIG_ENDIAN;
++	ohci->flags |= OHCI_QUIRK_BE_MMIO | OHCI_QUIRK_BE_DESC;
+ 	ohci_hcd_init(ohci);
+ 
+ 	retval = usb_add_hcd(hcd, irq, IRQF_DISABLED);
+Index: linux-2.6.18/drivers/usb/host/ohci.h
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci.h
++++ linux-2.6.18/drivers/usb/host/ohci.h
+@@ -393,8 +393,9 @@ struct ohci_hcd {
+ #define	OHCI_QUIRK_AMD756	0x01			/* erratum #4 */
+ #define	OHCI_QUIRK_SUPERIO	0x02			/* natsemi */
+ #define	OHCI_QUIRK_INITRESET	0x04			/* SiS, OPTi, ... */
+-#define	OHCI_BIG_ENDIAN		0x08			/* big endian HC */
+-#define	OHCI_QUIRK_ZFMICRO	0x10			/* Compaq ZFMicro chipset*/
++#define	OHCI_QUIRK_BE_DESC	0x08			/* BE descriptors */
++#define	OHCI_QUIRK_BE_MMIO	0x10			/* BE registers */
++#define	OHCI_QUIRK_ZFMICRO	0x20			/* Compaq ZFMicro chipset*/
+ 	// there are also chip quirks/bugs in init logic
+ 
+ };
+@@ -438,117 +439,156 @@ static inline struct usb_hcd *ohci_to_hc
+  * a minority (notably the IBM STB04XXX and the Motorola MPC5200
+  * processors) implement them in big endian format.
+  *
++ * In addition some more exotic implementations like the Toshiba
++ * Spider (aka SCC) cell southbridge are "mixed" endian, that is,
++ * they have a different endianness for registers vs. in-memory
++ * descriptors.
++ *
+  * This attempts to support either format at compile time without a
+  * runtime penalty, or both formats with the additional overhead
+  * of checking a flag bit.
++ *
++ * That leads to some tricky Kconfig rules howevber. There are
++ * different defaults based on some arch/ppc platforms, though
++ * the basic rules are:
++ *
++ * Controller type              Kconfig options needed
++ * ---------------              ----------------------
++ * little endian                CONFIG_USB_OHCI_LITTLE_ENDIAN
++ *
++ * fully big endian             CONFIG_USB_OHCI_BIG_ENDIAN_DESC _and_
++ *                              CONFIG_USB_OHCI_BIG_ENDIAN_MMIO
++ *
++ * mixed endian                 CONFIG_USB_OHCI_LITTLE_ENDIAN _and_
++ *                              CONFIG_USB_OHCI_BIG_ENDIAN_{MMIO,DESC}
++ *
++ * (If you have a mixed endian controller, you -must- also define
++ * CONFIG_USB_OHCI_LITTLE_ENDIAN or things will not work when building
++ * both your mixed endian and a fully big endian controller support in
++ * the same kernel image).
+  */
+ 
+-#ifdef CONFIG_USB_OHCI_BIG_ENDIAN
++#ifdef CONFIG_USB_OHCI_BIG_ENDIAN_DESC
++#ifdef CONFIG_USB_OHCI_LITTLE_ENDIAN
++#define big_endian_desc(ohci)	(ohci->flags & OHCI_QUIRK_BE_DESC)
++#else
++#define big_endian_desc(ohci)	1		/* only big endian */
++#endif
++#else
++#define big_endian_desc(ohci)	0		/* only little endian */
++#endif
+ 
++#ifdef CONFIG_USB_OHCI_BIG_ENDIAN_MMIO
+ #ifdef CONFIG_USB_OHCI_LITTLE_ENDIAN
+-#define big_endian(ohci)	(ohci->flags & OHCI_BIG_ENDIAN) /* either */
++#define big_endian_mmio(ohci)	(ohci->flags & OHCI_QUIRK_BE_MMIO)
++#else
++#define big_endian_mmio(ohci)	1		/* only big endian */
++#endif
+ #else
+-#define big_endian(ohci)	1		/* only big endian */
++#define big_endian_mmio(ohci)	0		/* only little endian */
+ #endif
+ 
+ /*
+  * Big-endian read/write functions are arch-specific.
+  * Other arches can be added if/when they're needed.
++ *
++ * REVISIT: arch/powerpc now has readl/writel_be, so the
++ * definition below can die once the STB04xxx support is
++ * finally ported over.
+  */
+-#if defined(CONFIG_PPC)
++#if defined(CONFIG_PPC) && !defined(CONFIG_PPC_MERGE)
+ #define readl_be(addr)		in_be32((__force unsigned *)addr)
+ #define writel_be(val, addr)	out_be32((__force unsigned *)addr, val)
+ #endif
+ 
+-static inline unsigned int ohci_readl (const struct ohci_hcd *ohci,
+-							__hc32 __iomem * regs)
++static inline unsigned int _ohci_readl (const struct ohci_hcd *ohci,
++					__hc32 __iomem * regs)
+ {
+-	return big_endian(ohci) ? readl_be (regs) : readl ((__force u32 *)regs);
++	return big_endian_mmio(ohci) ?
++		readl_be ((__force u32 *)regs) :
++		readl ((__force u32 *)regs);
+ }
+ 
+-static inline void ohci_writel (const struct ohci_hcd *ohci,
+-				const unsigned int val, __hc32 __iomem *regs)
++static inline void _ohci_writel (const struct ohci_hcd *ohci,
++				 const unsigned int val, __hc32 __iomem *regs)
+ {
+-	big_endian(ohci) ? writel_be (val, regs) :
+-			   writel (val, (__force u32 *)regs);
++	big_endian_mmio(ohci) ?
++		writel_be (val, (__force u32 *)regs) :
++		writel (val, (__force u32 *)regs);
+ }
+ 
+-#else	/* !CONFIG_USB_OHCI_BIG_ENDIAN */
+-
+-#define big_endian(ohci)	0		/* only little endian */
+-
+ #ifdef CONFIG_ARCH_LH7A404
+-	/* Marc Singer: at the time this code was written, the LH7A404
+-	 * had a problem reading the USB host registers.  This
+-	 * implementation of the ohci_readl function performs the read
+-	 * twice as a work-around.
+-	 */
+-static inline unsigned int
+-ohci_readl (const struct ohci_hcd *ohci, const __hc32 *regs)
+-{
+-	*(volatile __force unsigned int*) regs;
+-	return *(volatile __force unsigned int*) regs;
+-}
++/* Marc Singer: at the time this code was written, the LH7A404
++ * had a problem reading the USB host registers.  This
++ * implementation of the ohci_readl function performs the read
++ * twice as a work-around.
++ */
++#define ohci_readl(o,r)		(_ohci_readl(o,r),_ohci_readl(o,r))
++#define ohci_writel(o,v,r)	_ohci_writel(o,v,r)
+ #else
+-	/* Standard version of ohci_readl uses standard, platform
+-	 * specific implementation. */
+-static inline unsigned int
+-ohci_readl (const struct ohci_hcd *ohci, __hc32 __iomem * regs)
+-{
+-	return readl(regs);
+-}
++#define ohci_readl(o,r)		_ohci_readl(o,r)
++#define ohci_writel(o,v,r)	_ohci_writel(o,v,r)
+ #endif
+ 
+-static inline void ohci_writel (const struct ohci_hcd *ohci,
+-				const unsigned int val, __hc32 __iomem *regs)
+-{
+-	writel (val, regs);
+-}
+-
+-#endif	/* !CONFIG_USB_OHCI_BIG_ENDIAN */
+ 
+ /*-------------------------------------------------------------------------*/
+ 
+ /* cpu to ohci */
+ static inline __hc16 cpu_to_hc16 (const struct ohci_hcd *ohci, const u16 x)
+ {
+-	return big_endian(ohci) ? (__force __hc16)cpu_to_be16(x) : (__force __hc16)cpu_to_le16(x);
++	return big_endian_desc(ohci) ?
++		(__force __hc16)cpu_to_be16(x) :
++		(__force __hc16)cpu_to_le16(x);
+ }
+ 
+ static inline __hc16 cpu_to_hc16p (const struct ohci_hcd *ohci, const u16 *x)
+ {
+-	return big_endian(ohci) ? cpu_to_be16p(x) : cpu_to_le16p(x);
++	return big_endian_desc(ohci) ?
++		cpu_to_be16p(x) :
++		cpu_to_le16p(x);
+ }
+ 
+ static inline __hc32 cpu_to_hc32 (const struct ohci_hcd *ohci, const u32 x)
+ {
+-	return big_endian(ohci) ? (__force __hc32)cpu_to_be32(x) : (__force __hc32)cpu_to_le32(x);
++	return big_endian_desc(ohci) ?
++		(__force __hc32)cpu_to_be32(x) :
++		(__force __hc32)cpu_to_le32(x);
+ }
+ 
+ static inline __hc32 cpu_to_hc32p (const struct ohci_hcd *ohci, const u32 *x)
+ {
+-	return big_endian(ohci) ? cpu_to_be32p(x) : cpu_to_le32p(x);
++	return big_endian_desc(ohci) ?
++		cpu_to_be32p(x) :
++		cpu_to_le32p(x);
+ }
+ 
+ /* ohci to cpu */
+ static inline u16 hc16_to_cpu (const struct ohci_hcd *ohci, const __hc16 x)
+ {
+-	return big_endian(ohci) ? be16_to_cpu((__force __be16)x) : le16_to_cpu((__force __le16)x);
++	return big_endian_desc(ohci) ?
++		be16_to_cpu((__force __be16)x) :
++		le16_to_cpu((__force __le16)x);
+ }
+ 
+ static inline u16 hc16_to_cpup (const struct ohci_hcd *ohci, const __hc16 *x)
+ {
+-	return big_endian(ohci) ? be16_to_cpup((__force __be16 *)x) : le16_to_cpup((__force __le16 *)x);
++	return big_endian_desc(ohci) ?
++		be16_to_cpup((__force __be16 *)x) :
++		le16_to_cpup((__force __le16 *)x);
+ }
+ 
+ static inline u32 hc32_to_cpu (const struct ohci_hcd *ohci, const __hc32 x)
+ {
+-	return big_endian(ohci) ? be32_to_cpu((__force __be32)x) : le32_to_cpu((__force __le32)x);
++	return big_endian_desc(ohci) ?
++		be32_to_cpu((__force __be32)x) :
++		le32_to_cpu((__force __le32)x);
+ }
+ 
+ static inline u32 hc32_to_cpup (const struct ohci_hcd *ohci, const __hc32 *x)
+ {
+-	return big_endian(ohci) ? be32_to_cpup((__force __be32 *)x) : le32_to_cpup((__force __le32 *)x);
++	return big_endian_desc(ohci) ?
++		be32_to_cpup((__force __be32 *)x) :
++		le32_to_cpup((__force __le32 *)x);
+ }
+ 
+ /*-------------------------------------------------------------------------*/
+@@ -556,6 +596,9 @@ static inline u32 hc32_to_cpup (const st
+ /* HCCA frame number is 16 bits, but is accessed as 32 bits since not all
+  * hardware handles 16 bit reads.  That creates a different confusion on
+  * some big-endian SOC implementations.  Same thing happens with PSW access.
++ *
++ * FIXME: Deal with that as a runtime quirk when STB03xxx is ported over
++ * to arch/powerpc
+  */
+ 
+ #ifdef CONFIG_STB03xxx
+@@ -567,7 +610,7 @@ static inline u32 hc32_to_cpup (const st
+ static inline u16 ohci_frame_no(const struct ohci_hcd *ohci)
+ {
+ 	u32 tmp;
+-	if (big_endian(ohci)) {
++	if (big_endian_desc(ohci)) {
+ 		tmp = be32_to_cpup((__force __be32 *)&ohci->hcca->frame_no);
+ 		tmp >>= OHCI_BE_FRAME_NO_SHIFT;
+ 	} else
+@@ -579,7 +622,7 @@ static inline u16 ohci_frame_no(const st
+ static inline __hc16 *ohci_hwPSWp(const struct ohci_hcd *ohci,
+                                  const struct td *td, int index)
+ {
+-	return (__hc16 *)(big_endian(ohci) ?
++	return (__hc16 *)(big_endian_desc(ohci) ?
+ 			&td->hwPSW[index ^ 1] : &td->hwPSW[index]);
+ }
+ 
+Index: linux-2.6.18/mvl_patches/pro50-0467.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0467.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(467);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

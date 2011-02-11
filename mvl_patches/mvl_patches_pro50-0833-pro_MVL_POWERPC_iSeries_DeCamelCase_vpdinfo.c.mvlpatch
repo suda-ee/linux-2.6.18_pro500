@@ -1,0 +1,584 @@
+#! /usr/bin/env bash
+# Patch: -pro_MVL_POWERPC_iSeries_DeCamelCase_vpdinfo.c
+# Date: Wed Mar  5 11:42:19 2008
+# MR: 26747
+# Disposition: backport from
+# git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# Adjustments:
+#     Used iommu_devnode_init_iSeries(node) insted of
+#     iommu_devnode_init_iSeries(pdev, node).
+# 
+# From cd9afb34ed7e7fd3d1eb892b606019e032b0888b Mon Sep 17 00:00:00 2001
+# From: Stephen Rothwell <sfr@canb.auug.org.au>
+# Date: Fri, 7 Dec 2007 16:08:33 +1100
+# Subject: [PATCH] [POWERPC] iSeries: DeCamelCase vpdinfo.c
+# 
+# This is a purely mechanical transformation.
+# 
+# Signed-off-by: Stephen Rothwell <sfr@canb.auug.org.au>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=833
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26747
+Disposition: backport from
+git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+Adjustments:
+    Used iommu_devnode_init_iSeries(node) insted of
+    iommu_devnode_init_iSeries(pdev, node).
+
+From cd9afb34ed7e7fd3d1eb892b606019e032b0888b Mon Sep 17 00:00:00 2001
+From: Stephen Rothwell <sfr@canb.auug.org.au>
+Date: Fri, 7 Dec 2007 16:08:33 +1100
+Subject: [PATCH] [POWERPC] iSeries: DeCamelCase vpdinfo.c
+
+This is a purely mechanical transformation.
+
+Signed-off-by: Stephen Rothwell <sfr@canb.auug.org.au>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/platforms/iseries/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/iseries/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/iseries/pci.c
+@@ -228,7 +228,7 @@ void __init iSeries_pci_final_fixup(void
+ 		pdev->sysdata = node;
+ 		PCI_DN(node)->pcidev = pdev;
+ 		allocate_device_bars(pdev);
+-		iSeries_Device_Information(pdev, num_dev, bus, *sub_bus);
++		iseries_device_information(pdev, num_dev, bus, *sub_bus);
+ 		iommu_devnode_init_iSeries(node);
+ 	}
+ 	iSeries_activate_IRQs();
+Index: linux-2.6.18/arch/powerpc/platforms/iseries/pci.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/iseries/pci.h
++++ linux-2.6.18/arch/powerpc/platforms/iseries/pci.h
+@@ -47,7 +47,7 @@ struct pci_dev;				/* For Forward Refere
+ #define ISERIES_GET_DEVICE_FROM_SUBBUS(subbus)		((subbus >> 5) & 0x7)
+ #define ISERIES_GET_FUNCTION_FROM_SUBBUS(subbus)	((subbus >> 2) & 0x7)
+ 
+-extern void	iSeries_Device_Information(struct pci_dev *PciDev, int count,
++extern void	iseries_device_information(struct pci_dev *pdev, int count,
+ 			u16 bus, HvSubBusNumber subbus);
+ #ifdef CONFIG_PCI
+ extern void	iSeries_pcibios_init(void);
+Index: linux-2.6.18/arch/powerpc/platforms/iseries/vpdinfo.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/iseries/vpdinfo.c
++++ linux-2.6.18/arch/powerpc/platforms/iseries/vpdinfo.c
+@@ -44,113 +44,111 @@
+ /*
+  * Bus Vpd Tags
+  */
+-#define  VpdEndOfAreaTag   0x79
+-#define  VpdIdStringTag    0x82
+-#define  VpdVendorAreaTag  0x84
++#define VPD_END_OF_AREA		0x79
++#define VPD_ID_STRING		0x82
++#define VPD_VENDOR_AREA		0x84
+ 
+ /*
+  * Mfg Area Tags
+  */
+-#define  VpdFruFrameId    0x4649     // "FI"
+-#define  VpdSlotMapFormat 0x4D46     // "MF"
+-#define  VpdSlotMap       0x534D     // "SM"
++#define VPD_FRU_FRAME_ID	0x4649	/* "FI" */
++#define VPD_SLOT_MAP_FORMAT	0x4D46	/* "MF" */
++#define VPD_SLOT_MAP		0x534D	/* "SM" */
+ 
+ /*
+  * Structures of the areas
+  */
+-struct MfgVpdAreaStruct {
+-	u16 Tag;
+-	u8  TagLength;
+-	u8  AreaData1;
+-	u8  AreaData2;
++struct mfg_vpd_area {
++	u16	tag;
++	u8	length;
++	u8	data1;
++	u8	data2;
+ };
+-typedef struct MfgVpdAreaStruct MfgArea;
+ #define MFG_ENTRY_SIZE   3
+ 
+-struct SlotMapStruct {
+-	u8   AgentId;
+-	u8   SecondaryAgentId;
+-	u8   PhbId;
+-	char CardLocation[3];
+-	char Parms[8];
+-	char Reserved[2];
++struct slot_map {
++	u8	agent;
++	u8	secondary_agent;
++	u8	phb;
++	char	card_location[3];
++	char	parms[8];
++	char	reserved[2];
+ };
+-typedef struct SlotMapStruct SlotMap;
+ #define SLOT_ENTRY_SIZE   16
+ 
+ /*
+  * Parse the Slot Area
+  */
+-static void __init iSeries_Parse_SlotArea(SlotMap *MapPtr, int MapLen,
+-		HvAgentId agent, u8 *PhbId, char card[4])
++static void __init iseries_parse_slot_area(struct slot_map *map, int len,
++		HvAgentId agent, u8 *phb, char card[4])
+ {
+-	int SlotMapLen = MapLen;
+-	SlotMap *SlotMapPtr = MapPtr;
++	int slot_map_len = len;
++	struct slot_map *slot_map = map;
+ 
+ 	/*
+ 	 * Parse Slot label until we find the one requested
+ 	 */
+-	while (SlotMapLen > 0) {
+-		if (SlotMapPtr->AgentId == agent) {
++	while (slot_map_len > 0) {
++		if (slot_map->agent == agent) {
+ 			/*
+ 			 * If Phb wasn't found, grab the entry first one found.
+ 			 */
+-			if (*PhbId == 0xff)
+-				*PhbId = SlotMapPtr->PhbId;
++			if (*phb == 0xff)
++				*phb = slot_map->phb;
+ 			/* Found it, extract the data. */
+-			if (SlotMapPtr->PhbId == *PhbId) {
+-				memcpy(card, &SlotMapPtr->CardLocation, 3);
++			if (slot_map->phb == *phb) {
++				memcpy(card, &slot_map->card_location, 3);
+ 				card[3]  = 0;
+ 				break;
+ 			}
+ 		}
+ 		/* Point to the next Slot */
+-		SlotMapPtr = (SlotMap *)((char *)SlotMapPtr + SLOT_ENTRY_SIZE);
+-		SlotMapLen -= SLOT_ENTRY_SIZE;
++		slot_map = (struct slot_map *)((char *)slot_map + SLOT_ENTRY_SIZE);
++		slot_map_len -= SLOT_ENTRY_SIZE;
+ 	}
+ }
+ 
+ /*
+  * Parse the Mfg Area
+  */
+-static void __init iSeries_Parse_MfgArea(u8 *AreaData, int AreaLen,
+-		HvAgentId agent, u8 *PhbId,
++static void __init iseries_parse_mfg_area(u8 *area, int len,
++		HvAgentId agent, u8 *phb,
+ 		u8 *frame, char card[4])
+ {
+-	MfgArea *MfgAreaPtr = (MfgArea *)AreaData;
+-	int MfgAreaLen = AreaLen;
+-	u16 SlotMapFmt = 0;
++	struct mfg_vpd_area *mfg_area = (struct mfg_vpd_area *)area;
++	int mfg_area_len = len;
++	u16 slot_map_fmt = 0;
+ 
+ 	/* Parse Mfg Data */
+-	while (MfgAreaLen > 0) {
+-		int MfgTagLen = MfgAreaPtr->TagLength;
++	while (mfg_area_len > 0) {
++		int mfg_tag_len = mfg_area->length;
+ 		/* Frame ID         (FI 4649020310 ) */
+-		if (MfgAreaPtr->Tag == VpdFruFrameId)		/* FI  */
+-			*frame = MfgAreaPtr->AreaData1;
++		if (mfg_area->tag == VPD_FRU_FRAME_ID)
++			*frame = mfg_area->data1;
+ 		/* Slot Map Format  (MF 4D46020004 ) */
+-		else if (MfgAreaPtr->Tag == VpdSlotMapFormat)	/* MF  */
+-			SlotMapFmt = (MfgAreaPtr->AreaData1 * 256)
+-				+ MfgAreaPtr->AreaData2;
++		else if (mfg_area->tag == VPD_SLOT_MAP_FORMAT)
++			slot_map_fmt = (mfg_area->data1 * 256)
++				+ mfg_area->data2;
+ 		/* Slot Map         (SM 534D90 */
+-		else if (MfgAreaPtr->Tag == VpdSlotMap)	{	/* SM  */
+-			SlotMap *SlotMapPtr;
++		else if (mfg_area->tag == VPD_SLOT_MAP) {
++			struct slot_map *slot_map;
+ 
+-			if (SlotMapFmt == 0x1004)
+-				SlotMapPtr = (SlotMap *)((char *)MfgAreaPtr
++			if (slot_map_fmt == 0x1004)
++				slot_map = (struct slot_map *)((char *)mfg_area
+ 						+ MFG_ENTRY_SIZE + 1);
+ 			else
+-				SlotMapPtr = (SlotMap *)((char *)MfgAreaPtr
++				slot_map = (struct slot_map *)((char *)mfg_area
+ 						+ MFG_ENTRY_SIZE);
+-			iSeries_Parse_SlotArea(SlotMapPtr, MfgTagLen,
+-					agent, PhbId, card);
++			iseries_parse_slot_area(slot_map, mfg_tag_len,
++					agent, phb, card);
+ 		}
+ 		/*
+ 		 * Point to the next Mfg Area
+ 		 * Use defined size, sizeof give wrong answer
+ 		 */
+-		MfgAreaPtr = (MfgArea *)((char *)MfgAreaPtr + MfgTagLen
++		mfg_area = (struct mfg_vpd_area *)((char *)mfg_area + mfg_tag_len
+ 				+ MFG_ENTRY_SIZE);
+-		MfgAreaLen -= (MfgTagLen + MFG_ENTRY_SIZE);
++		mfg_area_len -= (mfg_tag_len + MFG_ENTRY_SIZE);
+ 	}
+ }
+ 
+@@ -158,79 +156,79 @@ static void __init iSeries_Parse_MfgArea
+  * Look for "BUS".. Data is not Null terminated.
+  * PHBID of 0xFF indicates PHB was not found in VPD Data.
+  */
+-static int __init iSeries_Parse_PhbId(u8 *AreaPtr, int AreaLength)
++static int __init iseries_parse_phbid(u8 *area, int len)
+ {
+-	u8 *PhbPtr = AreaPtr;
+-	int DataLen = AreaLength;
+-	char PhbId = 0xFF;
+-
+-	while (DataLen > 0) {
+-		if ((*PhbPtr == 'B') && (*(PhbPtr + 1) == 'U')
+-				&& (*(PhbPtr + 2) == 'S')) {
+-			PhbPtr += 3;
+-			while (*PhbPtr == ' ')
+-				++PhbPtr;
+-			PhbId = (*PhbPtr & 0x0F);
++	u8 *phb_ptr = area;
++	int data_len = len;
++	char phb = 0xFF;
++
++	while (data_len > 0) {
++		if ((*phb_ptr == 'B') && (*(phb_ptr + 1) == 'U')
++				&& (*(phb_ptr + 2) == 'S')) {
++			phb_ptr += 3;
++			while (*phb_ptr == ' ')
++				++phb_ptr;
++			phb = (*phb_ptr & 0x0F);
+ 			break;
+ 		}
+-		++PhbPtr;
+-		--DataLen;
++		++phb_ptr;
++		--data_len;
+ 	}
+-	return PhbId;
++	return phb;
+ }
+ 
+ /*
+  * Parse out the VPD Areas
+  */
+-static void __init iSeries_Parse_Vpd(u8 *VpdData, int VpdDataLen,
++static void __init iseries_parse_vpd(u8 *data, int vpd_data_len,
+ 		HvAgentId agent, u8 *frame, char card[4])
+ {
+-	u8 *TagPtr = VpdData;
+-	int DataLen = VpdDataLen - 3;
+-	u8 PhbId = 0xff;
+-
+-	while ((*TagPtr != VpdEndOfAreaTag) && (DataLen > 0)) {
+-		int AreaLen = *(TagPtr + 1) + (*(TagPtr + 2) * 256);
+-		u8 *AreaData  = TagPtr + 3;
+-
+-		if (*TagPtr == VpdIdStringTag)
+-			PhbId = iSeries_Parse_PhbId(AreaData, AreaLen);
+-		else if (*TagPtr == VpdVendorAreaTag)
+-			iSeries_Parse_MfgArea(AreaData, AreaLen,
+-					agent, &PhbId, frame, card);
++	u8 *tag_ptr = data;
++	int data_len = vpd_data_len - 3;
++	u8 phb = 0xff;
++
++	while ((*tag_ptr != VPD_END_OF_AREA) && (data_len > 0)) {
++		int len = *(tag_ptr + 1) + (*(tag_ptr + 2) * 256);
++		u8 *area  = tag_ptr + 3;
++
++		if (*tag_ptr == VPD_ID_STRING)
++			phb = iseries_parse_phbid(area, len);
++		else if (*tag_ptr == VPD_VENDOR_AREA)
++			iseries_parse_mfg_area(area, len,
++					agent, &phb, frame, card);
+ 		/* Point to next Area. */
+-		TagPtr  = AreaData + AreaLen;
+-		DataLen -= AreaLen;
++		tag_ptr  = area + len;
++		data_len -= len;
+ 	}
+ }
+ 
+-static int __init iSeries_Get_Location_Code(u16 bus, HvAgentId agent,
++static int __init iseries_get_location_code(u16 bus, HvAgentId agent,
+ 		u8 *frame, char card[4])
+ {
+ 	int status = 0;
+-	int BusVpdLen = 0;
+-	u8 *BusVpdPtr = kmalloc(BUS_VPDSIZE, GFP_KERNEL);
++	int bus_vpd_len = 0;
++	u8 *bus_vpd = kmalloc(BUS_VPDSIZE, GFP_KERNEL);
+ 
+-	if (BusVpdPtr == NULL) {
++	if (bus_vpd == NULL) {
+ 		printk("PCI: Bus VPD Buffer allocation failure.\n");
+ 		return 0;
+ 	}
+-	BusVpdLen = HvCallPci_getBusVpd(bus, iseries_hv_addr(BusVpdPtr),
++	bus_vpd_len = HvCallPci_getBusVpd(bus, iseries_hv_addr(bus_vpd),
+ 					BUS_VPDSIZE);
+-	if (BusVpdLen == 0) {
++	if (bus_vpd_len == 0) {
+ 		printk("PCI: Bus VPD Buffer zero length.\n");
+ 		goto out_free;
+ 	}
+-	/* printk("PCI: BusVpdPtr: %p, %d\n",BusVpdPtr, BusVpdLen); */
++	/* printk("PCI: bus_vpd: %p, %d\n",bus_vpd, bus_vpd_len); */
+ 	/* Make sure this is what I think it is */
+-	if (*BusVpdPtr != VpdIdStringTag) {	/* 0x82 */
++	if (*bus_vpd != VPD_ID_STRING) {
+ 		printk("PCI: Bus VPD Buffer missing starting tag.\n");
+ 		goto out_free;
+ 	}
+-	iSeries_Parse_Vpd(BusVpdPtr, BusVpdLen, agent, frame, card);
++	iseries_parse_vpd(bus_vpd, bus_vpd_len, agent, frame, card);
+ 	status = 1;
+ out_free:
+-	kfree(BusVpdPtr);
++	kfree(bus_vpd);
+ 	return status;
+ }
+ 
+@@ -243,7 +241,7 @@ out_free:
+  * PCI: Bus  0, Device 26, Vendor 0x12AE  Frame  1, Card  C10  Ethernet
+  * controller
+  */
+-void __init iSeries_Device_Information(struct pci_dev *PciDev, int count,
++void __init iseries_device_information(struct pci_dev *pdev, int count,
+ 		u16 bus, HvSubBusNumber subbus)
+ {
+ 	u8 frame = 0;
+@@ -253,10 +251,10 @@ void __init iSeries_Device_Information(s
+ 	agent = ISERIES_PCI_AGENTID(ISERIES_GET_DEVICE_FROM_SUBBUS(subbus),
+ 			ISERIES_GET_FUNCTION_FROM_SUBBUS(subbus));
+ 
+-	if (iSeries_Get_Location_Code(bus, agent, &frame, card)) {
++	if (iseries_get_location_code(bus, agent, &frame, card)) {
+ 		printk("%d. PCI: Bus%3d, Device%3d, Vendor %04X Frame%3d, "
+ 			"Card %4s  0x%04X\n", count, bus,
+-			PCI_SLOT(PciDev->devfn), PciDev->vendor, frame,
+-			card, (int)(PciDev->class >> 8));
++			PCI_SLOT(pdev->devfn), pdev->vendor, frame,
++			card, (int)(pdev->class >> 8));
+ 	}
+ }
+Index: linux-2.6.18/mvl_patches/pro50-0833.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0833.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(833);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

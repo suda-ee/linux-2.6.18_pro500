@@ -1,0 +1,1549 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_85xx_Cleaned_up_platform_dts_files
+# Date: Wed Jun 20 09:51:31 2007
+# MR: 22933
+# From 520948796335111cf91970efabca7e5d064db344 Mon Sep 17 00:00:00 2001
+# From: Kumar Gala <galak@kernel.crashing.org>
+# Date: Sat, 17 Feb 2007 16:04:23 -0600
+# Subject: [PATCH] [POWERPC] 85xx: Cleaned up platform dts files
+# 
+# * Fixed up top level compatible property for all boards
+# * Removed explicit linux,phandle usage. Use references and labels now
+# * Fixed phy-phandles for TSEC3/4 in mpc8548cds.dts
+# 
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+#  arch/powerpc/boot/dts/mpc8540ads.dts |  142 ++++++++++++++-----------------
+#  arch/powerpc/boot/dts/mpc8541cds.dts |  108 ++++++++++--------------
+#  arch/powerpc/boot/dts/mpc8548cds.dts |  129 ++++++++++++----------------
+#  arch/powerpc/boot/dts/mpc8555cds.dts |  108 ++++++++++--------------
+#  arch/powerpc/boot/dts/mpc8560ads.dts |  157 ++++++++++++++++-------------------
+#  5 files changed, 294 insertions(+), 350 deletions(-)
+# 
+
+PATCHNUM=45
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 22933
+From 520948796335111cf91970efabca7e5d064db344 Mon Sep 17 00:00:00 2001
+From: Kumar Gala <galak@kernel.crashing.org>
+Date: Sat, 17 Feb 2007 16:04:23 -0600
+Subject: [PATCH] [POWERPC] 85xx: Cleaned up platform dts files
+
+* Fixed up top level compatible property for all boards
+* Removed explicit linux,phandle usage. Use references and labels now
+* Fixed phy-phandles for TSEC3/4 in mpc8548cds.dts
+
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+ arch/powerpc/boot/dts/mpc8540ads.dts |  142 ++++++++++++++-----------------
+ arch/powerpc/boot/dts/mpc8541cds.dts |  108 ++++++++++--------------
+ arch/powerpc/boot/dts/mpc8548cds.dts |  129 ++++++++++++----------------
+ arch/powerpc/boot/dts/mpc8555cds.dts |  108 ++++++++++--------------
+ arch/powerpc/boot/dts/mpc8560ads.dts |  157 ++++++++++++++++-------------------
+ mvl_patches/pro50-0045.c             |   16 +++
+ 6 files changed, 310 insertions(+), 350 deletions(-)
+
+diff --git a/arch/powerpc/boot/dts/mpc8540ads.dts b/arch/powerpc/boot/dts/mpc8540ads.dts
+index 5f41c1f..3c0917f 100644
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8540ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8540ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8540ads.dts
+@@ -12,16 +12,14 @@
+ 
+ / {
+ 	model = "MPC8540ADS";
+-	compatible = "MPC85xxADS";
++	compatible = "MPC8540ADS", "MPC85xxADS";
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+-	linux,phandle = <100>;
+ 
+ 	cpus {
+ 		#cpus = <1>;
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+-		linux,phandle = <200>;
+ 
+ 		PowerPC,8540@0 {
+ 			device_type = "cpu";
+@@ -34,13 +32,11 @@
+ 			bus-frequency = <0>;	// 166 MHz
+ 			clock-frequency = <0>;	// 825 MHz, from uboot
+ 			32-bit;
+-			linux,phandle = <201>;
+ 		};
+ 	};
+ 
+ 	memory {
+ 		device_type = "memory";
+-		linux,phandle = <300>;
+ 		reg = <00000000 08000000>;	// 128M at 0x0
+ 	};
+ 
+@@ -58,7 +54,7 @@
+ 			compatible = "fsl-i2c";
+ 			reg = <3000 100>;
+ 			interrupts = <1b 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 			dfsrr;
+ 		};
+ 
+@@ -68,24 +64,20 @@
+ 			device_type = "mdio";
+ 			compatible = "gianfar";
+ 			reg = <24520 20>;
+-			linux,phandle = <24520>;
+-			ethernet-phy@0 {
+-				linux,phandle = <2452000>;
+-				interrupt-parent = <40000>;
++			phy0: ethernet-phy@0 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <35 1>;
+ 				reg = <0>;
+ 				device_type = "ethernet-phy";
+ 			};
+-			ethernet-phy@1 {
+-				linux,phandle = <2452001>;
+-				interrupt-parent = <40000>;
++			phy1: ethernet-phy@1 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <35 1>;
+ 				reg = <1>;
+ 				device_type = "ethernet-phy";
+ 			};
+-			ethernet-phy@3 {
+-				linux,phandle = <2452003>;
+-				interrupt-parent = <40000>;
++			phy3: ethernet-phy@3 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <37 1>;
+ 				reg = <3>;
+ 				device_type = "ethernet-phy";
+@@ -102,8 +94,8 @@
+ 			address = [ 00 E0 0C 00 73 00 ];
+ 			local-mac-address = [ 00 E0 0C 00 73 00 ];
+ 			interrupts = <d 2 e 2 12 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452000>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy0>;
+ 		};
+ 
+ 		ethernet@25000 {
+@@ -116,8 +108,8 @@
+ 			address = [ 00 E0 0C 00 73 01 ];
+ 			local-mac-address = [ 00 E0 0C 00 73 01 ];
+ 			interrupts = <13 2 14 2 18 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452001>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy1>;
+ 		};
+ 
+ 		ethernet@26000 {
+@@ -130,8 +122,8 @@
+ 			address = [ 00 E0 0C 00 73 02 ];
+ 			local-mac-address = [ 00 E0 0C 00 73 02 ];
+ 			interrupts = <19 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452003>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy3>;
+ 		};
+ 
+ 		serial@4500 {
+@@ -140,7 +132,7 @@
+ 			reg = <4500 100>; 	// reg base, size
+ 			clock-frequency = <0>; 	// should we fill in in uboot?
+ 			interrupts = <1a 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 		};
+ 
+ 		serial@4600 {
+@@ -149,85 +141,84 @@
+ 			reg = <4600 100>;	// reg base, size
+ 			clock-frequency = <0>; 	// should we fill in in uboot?
+ 			interrupts = <1a 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 		};
+ 		pci@8000 {
+-			linux,phandle = <8000>;
+ 			interrupt-map-mask = <f800 0 0 7>;
+ 			interrupt-map = <
+ 
+ 				/* IDSEL 0x02 */
+-				1000 0 0 1 40000 31 1
+-				1000 0 0 2 40000 32 1
+-				1000 0 0 3 40000 33 1
+-				1000 0 0 4 40000 34 1
++				1000 0 0 1 &mpic 31 1
++				1000 0 0 2 &mpic 32 1
++				1000 0 0 3 &mpic 33 1
++				1000 0 0 4 &mpic 34 1
+ 
+ 				/* IDSEL 0x03 */
+-				1800 0 0 1 40000 34 1
+-				1800 0 0 2 40000 31 1
+-				1800 0 0 3 40000 32 1
+-				1800 0 0 4 40000 33 1
++				1800 0 0 1 &mpic 34 1
++				1800 0 0 2 &mpic 31 1
++				1800 0 0 3 &mpic 32 1
++				1800 0 0 4 &mpic 33 1
+ 
+ 				/* IDSEL 0x04 */
+-				2000 0 0 1 40000 33 1
+-				2000 0 0 2 40000 34 1
+-				2000 0 0 3 40000 31 1
+-				2000 0 0 4 40000 32 1
++				2000 0 0 1 &mpic 33 1
++				2000 0 0 2 &mpic 34 1
++				2000 0 0 3 &mpic 31 1
++				2000 0 0 4 &mpic 32 1
+ 
+ 				/* IDSEL 0x05 */
+-				2800 0 0 1 40000 32 1
+-				2800 0 0 2 40000 33 1
+-				2800 0 0 3 40000 34 1
+-				2800 0 0 4 40000 31 1
++				2800 0 0 1 &mpic 32 1
++				2800 0 0 2 &mpic 33 1
++				2800 0 0 3 &mpic 34 1
++				2800 0 0 4 &mpic 31 1
+ 
+ 				/* IDSEL 0x0c */
+-				6000 0 0 1 40000 31 1
+-				6000 0 0 2 40000 32 1
+-				6000 0 0 3 40000 33 1
+-				6000 0 0 4 40000 34 1
++				6000 0 0 1 &mpic 31 1
++				6000 0 0 2 &mpic 32 1
++				6000 0 0 3 &mpic 33 1
++				6000 0 0 4 &mpic 34 1
+ 
+ 				/* IDSEL 0x0d */
+-				6800 0 0 1 40000 34 1
+-				6800 0 0 2 40000 31 1
+-				6800 0 0 3 40000 32 1
+-				6800 0 0 4 40000 33 1
++				6800 0 0 1 &mpic 34 1
++				6800 0 0 2 &mpic 31 1
++				6800 0 0 3 &mpic 32 1
++				6800 0 0 4 &mpic 33 1
+ 
+ 				/* IDSEL 0x0e */
+-				7000 0 0 1 40000 33 1
+-				7000 0 0 2 40000 34 1
+-				7000 0 0 3 40000 31 1
+-				7000 0 0 4 40000 32 1
++				7000 0 0 1 &mpic 33 1
++				7000 0 0 2 &mpic 34 1
++				7000 0 0 3 &mpic 31 1
++				7000 0 0 4 &mpic 32 1
+ 
+ 				/* IDSEL 0x0f */
+-				7800 0 0 1 40000 32 1
+-				7800 0 0 2 40000 33 1
+-				7800 0 0 3 40000 34 1
+-				7800 0 0 4 40000 31 1
++				7800 0 0 1 &mpic 32 1
++				7800 0 0 2 &mpic 33 1
++				7800 0 0 3 &mpic 34 1
++				7800 0 0 4 &mpic 31 1
+ 
+ 				/* IDSEL 0x12 */
+-				9000 0 0 1 40000 31 1
+-				9000 0 0 2 40000 32 1
+-				9000 0 0 3 40000 33 1
+-				9000 0 0 4 40000 34 1
++				9000 0 0 1 &mpic 31 1
++				9000 0 0 2 &mpic 32 1
++				9000 0 0 3 &mpic 33 1
++				9000 0 0 4 &mpic 34 1
+ 
+ 				/* IDSEL 0x13 */
+-				9800 0 0 1 40000 34 1
+-				9800 0 0 2 40000 31 1
+-				9800 0 0 3 40000 32 1
+-				9800 0 0 4 40000 33 1
++				9800 0 0 1 &mpic 34 1
++				9800 0 0 2 &mpic 31 1
++				9800 0 0 3 &mpic 32 1
++				9800 0 0 4 &mpic 33 1
+ 
+ 				/* IDSEL 0x14 */
+-				a000 0 0 1 40000 33 1
+-				a000 0 0 2 40000 34 1
+-				a000 0 0 3 40000 31 1
+-				a000 0 0 4 40000 32 1
++				a000 0 0 1 &mpic 33 1
++				a000 0 0 2 &mpic 34 1
++				a000 0 0 3 &mpic 31 1
++				a000 0 0 4 &mpic 32 1
+ 
+ 				/* IDSEL 0x15 */
+-				a800 0 0 1 40000 32 1
+-				a800 0 0 2 40000 33 1
+-				a800 0 0 3 40000 34 1
+-				a800 0 0 4 40000 31 1>;
+-			interrupt-parent = <40000>;
++				a800 0 0 1 &mpic 32 1
++				a800 0 0 2 &mpic 33 1
++				a800 0 0 3 &mpic 34 1
++				a800 0 0 4 &mpic 31 1>;
++			interrupt-parent = <&mpic>;
+ 			interrupts = <08 2>;
+ 			bus-range = <0 0>;
+ 			ranges = <02000000 0 80000000 80000000 0 20000000
+@@ -241,8 +232,7 @@
+ 			device_type = "pci";
+ 		};
+ 
+-		pic@40000 {
+-			linux,phandle = <40000>;
++		mpic: pic@40000 {
+ 			clock-frequency = <0>;
+ 			interrupt-controller;
+ 			#address-cells = <0>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8541cds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8541cds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8541cds.dts
+@@ -12,16 +12,14 @@
+ 
+ / {
+ 	model = "MPC8541CDS";
+-	compatible = "MPC85xxCDS";
++	compatible = "MPC8541CDS", "MPC85xxCDS";
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+-	linux,phandle = <100>;
+ 
+ 	cpus {
+ 		#cpus = <1>;
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+-		linux,phandle = <200>;
+ 
+ 		PowerPC,8541@0 {
+ 			device_type = "cpu";
+@@ -34,13 +32,11 @@
+ 			bus-frequency = <0>;	// 166 MHz
+ 			clock-frequency = <0>;	// 825 MHz, from uboot
+ 			32-bit;
+-			linux,phandle = <201>;
+ 		};
+ 	};
+ 
+ 	memory {
+ 		device_type = "memory";
+-		linux,phandle = <300>;
+ 		reg = <00000000 08000000>;	// 128M at 0x0
+ 	};
+ 
+@@ -58,7 +54,7 @@
+ 			compatible = "fsl-i2c";
+ 			reg = <3000 100>;
+ 			interrupts = <1b 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 			dfsrr;
+ 		};
+ 
+@@ -68,17 +64,14 @@
+ 			device_type = "mdio";
+ 			compatible = "gianfar";
+ 			reg = <24520 20>;
+-			linux,phandle = <24520>;
+-			ethernet-phy@0 {
+-				linux,phandle = <2452000>;
+-				interrupt-parent = <40000>;
++			phy0: ethernet-phy@0 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <35 0>;
+ 				reg = <0>;
+ 				device_type = "ethernet-phy";
+ 			};
+-			ethernet-phy@1 {
+-				linux,phandle = <2452001>;
+-				interrupt-parent = <40000>;
++			phy1: ethernet-phy@1 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <35 0>;
+ 				reg = <1>;
+ 				device_type = "ethernet-phy";
+@@ -94,8 +87,8 @@
+ 			reg = <24000 1000>;
+ 			local-mac-address = [ 00 E0 0C 00 73 00 ];
+ 			interrupts = <d 2 e 2 12 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452000>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy0>;
+ 		};
+ 
+ 		ethernet@25000 {
+@@ -107,8 +100,8 @@
+ 			reg = <25000 1000>;
+ 			local-mac-address = [ 00 E0 0C 00 73 01 ];
+ 			interrupts = <13 2 14 2 18 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452001>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy1>;
+ 		};
+ 
+ 		serial@4500 {
+@@ -117,7 +110,7 @@
+ 			reg = <4500 100>; 	// reg base, size
+ 			clock-frequency = <0>; 	// should we fill in in uboot?
+ 			interrupts = <1a 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 		};
+ 
+ 		serial@4600 {
+@@ -126,57 +119,56 @@
+ 			reg = <4600 100>;	// reg base, size
+ 			clock-frequency = <0>; 	// should we fill in in uboot?
+ 			interrupts = <1a 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 		};
+ 
+-		pci@8000 {
+-			linux,phandle = <8000>;
++		pci1: pci@8000 {
+ 			interrupt-map-mask = <1f800 0 0 7>;
+ 			interrupt-map = <
+ 
+ 				/* IDSEL 0x10 */
+-				08000 0 0 1 40000 30 1
+-				08000 0 0 2 40000 31 1
+-				08000 0 0 3 40000 32 1
+-				08000 0 0 4 40000 33 1
++				08000 0 0 1 &mpic 30 1
++				08000 0 0 2 &mpic 31 1
++				08000 0 0 3 &mpic 32 1
++				08000 0 0 4 &mpic 33 1
+ 
+ 				/* IDSEL 0x11 */
+-				08800 0 0 1 40000 30 1
+-				08800 0 0 2 40000 31 1
+-				08800 0 0 3 40000 32 1
+-				08800 0 0 4 40000 33 1
++				08800 0 0 1 &mpic 30 1
++				08800 0 0 2 &mpic 31 1
++				08800 0 0 3 &mpic 32 1
++				08800 0 0 4 &mpic 33 1
+ 
+ 				/* IDSEL 0x12 (Slot 1) */
+-				09000 0 0 1 40000 30 1
+-				09000 0 0 2 40000 31 1
+-				09000 0 0 3 40000 32 1
+-				09000 0 0 4 40000 33 1
++				09000 0 0 1 &mpic 30 1
++				09000 0 0 2 &mpic 31 1
++				09000 0 0 3 &mpic 32 1
++				09000 0 0 4 &mpic 33 1
+ 
+ 				/* IDSEL 0x13 (Slot 2) */
+-				09800 0 0 1 40000 31 1
+-				09800 0 0 2 40000 32 1
+-				09800 0 0 3 40000 33 1
+-				09800 0 0 4 40000 30 1
++				09800 0 0 1 &mpic 31 1
++				09800 0 0 2 &mpic 32 1
++				09800 0 0 3 &mpic 33 1
++				09800 0 0 4 &mpic 30 1
+ 
+ 				/* IDSEL 0x14 (Slot 3) */
+-				0a000 0 0 1 40000 32 1
+-				0a000 0 0 2 40000 33 1
+-				0a000 0 0 3 40000 30 1
+-				0a000 0 0 4 40000 31 1
++				0a000 0 0 1 &mpic 32 1
++				0a000 0 0 2 &mpic 33 1
++				0a000 0 0 3 &mpic 30 1
++				0a000 0 0 4 &mpic 31 1
+ 
+ 				/* IDSEL 0x15 (Slot 4) */
+-				0a800 0 0 1 40000 33 1
+-				0a800 0 0 2 40000 30 1
+-				0a800 0 0 3 40000 31 1
+-				0a800 0 0 4 40000 32 1
++				0a800 0 0 1 &mpic 33 1
++				0a800 0 0 2 &mpic 30 1
++				0a800 0 0 3 &mpic 31 1
++				0a800 0 0 4 &mpic 32 1
+ 
+ 				/* Bus 1 (Tundra Bridge) */
+ 				/* IDSEL 0x12 (ISA bridge) */
+-				19000 0 0 1 40000 30 1
+-				19000 0 0 2 40000 31 1
+-				19000 0 0 3 40000 32 1
+-				19000 0 0 4 40000 33 1>;
+-			interrupt-parent = <40000>;
++				19000 0 0 1 &mpic 30 1
++				19000 0 0 2 &mpic 31 1
++				19000 0 0 3 &mpic 32 1
++				19000 0 0 4 &mpic 33 1>;
++			interrupt-parent = <&mpic>;
+ 			interrupts = <08 2>;
+ 			bus-range = <0 0>;
+ 			ranges = <02000000 0 80000000 80000000 0 20000000
+@@ -200,21 +192,20 @@
+ 				compatible = "chrp,iic";
+ 				big-endian;
+ 				interrupts = <1>;
+-				interrupt-parent = <8000>;
++				interrupt-parent = <&pci1>;
+ 			};
+ 		};
+ 
+ 		pci@9000 {
+-			linux,phandle = <9000>;
+ 			interrupt-map-mask = <f800 0 0 7>;
+ 			interrupt-map = <
+ 
+ 				/* IDSEL 0x15 */
+-				a800 0 0 1 40000 3b 1
+-				a800 0 0 2 40000 3b 1
+-				a800 0 0 3 40000 3b 1
+-				a800 0 0 4 40000 3b 1>;
+-			interrupt-parent = <40000>;
++				a800 0 0 1 &mpic 3b 1
++				a800 0 0 2 &mpic 3b 1
++				a800 0 0 3 &mpic 3b 1
++				a800 0 0 4 &mpic 3b 1>;
++			interrupt-parent = <&mpic>;
+ 			interrupts = <09 2>;
+ 			bus-range = <0 0>;
+ 			ranges = <02000000 0 a0000000 a0000000 0 20000000
+@@ -228,8 +219,7 @@
+ 			device_type = "pci";
+ 		};
+ 
+-		pic@40000 {
+-			linux,phandle = <40000>;
++		mpic: pic@40000 {
+ 			clock-frequency = <0>;
+ 			interrupt-controller;
+ 			#address-cells = <0>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8548cds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8548cds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8548cds.dts
+@@ -12,16 +12,14 @@
+ 
+ / {
+ 	model = "MPC8548CDS";
+-	compatible = "MPC85xxCDS";
++	compatible = "MPC8548CDS", "MPC85xxCDS";
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+-	linux,phandle = <100>;
+ 
+ 	cpus {
+ 		#cpus = <1>;
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+-		linux,phandle = <200>;
+ 
+ 		PowerPC,8548@0 {
+ 			device_type = "cpu";
+@@ -34,13 +32,11 @@
+ 			bus-frequency = <0>;	// 166 MHz
+ 			clock-frequency = <0>;	// 825 MHz, from uboot
+ 			32-bit;
+-			linux,phandle = <201>;
+ 		};
+ 	};
+ 
+ 	memory {
+ 		device_type = "memory";
+-		linux,phandle = <300>;
+ 		reg = <00000000 08000000>;	// 128M at 0x0
+ 	};
+ 
+@@ -58,7 +54,7 @@
+ 			compatible = "fsl-i2c";
+ 			reg = <3000 100>;
+ 			interrupts = <1b 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 			dfsrr;
+ 		};
+ 
+@@ -68,32 +64,26 @@
+ 			device_type = "mdio";
+ 			compatible = "gianfar";
+ 			reg = <24520 20>;
+-			linux,phandle = <24520>;
+-			ethernet-phy@0 {
+-				linux,phandle = <2452000>;
+-				interrupt-parent = <40000>;
++			phy0: ethernet-phy@0 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <35 0>;
+ 				reg = <0>;
+ 				device_type = "ethernet-phy";
+ 			};
+-			ethernet-phy@1 {
+-				linux,phandle = <2452001>;
+-				interrupt-parent = <40000>;
++			phy1: ethernet-phy@1 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <35 0>;
+ 				reg = <1>;
+ 				device_type = "ethernet-phy";
+ 			};
+-
+-			ethernet-phy@2 {
+-				linux,phandle = <2452002>;
+-				interrupt-parent = <40000>;
++			phy2: ethernet-phy@2 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <35 0>;
+ 				reg = <2>;
+ 				device_type = "ethernet-phy";
+ 			};
+-			ethernet-phy@3 {
+-				linux,phandle = <2452003>;
+-				interrupt-parent = <40000>;
++			phy3: ethernet-phy@3 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <35 0>;
+ 				reg = <3>;
+ 				device_type = "ethernet-phy";
+@@ -109,8 +99,8 @@
+ 			reg = <24000 1000>;
+ 			local-mac-address = [ 00 E0 0C 00 73 00 ];
+ 			interrupts = <d 2 e 2 12 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452000>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy0>;
+ 		};
+ 
+ 		ethernet@25000 {
+@@ -122,10 +112,11 @@
+ 			reg = <25000 1000>;
+ 			local-mac-address = [ 00 E0 0C 00 73 01 ];
+ 			interrupts = <13 2 14 2 18 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452001>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy1>;
+ 		};
+ 
++/* eTSEC 3/4 are currently broken
+ 		ethernet@26000 {
+ 			#address-cells = <1>;
+ 			#size-cells = <0>;
+@@ -135,11 +126,10 @@
+ 			reg = <26000 1000>;
+ 			local-mac-address = [ 00 E0 0C 00 73 02 ];
+ 			interrupts = <f 2 10 2 11 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452001>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy2>;
+ 		};
+ 
+-/* eTSEC 4 is currently broken
+ 		ethernet@27000 {
+ 			#address-cells = <1>;
+ 			#size-cells = <0>;
+@@ -149,8 +139,8 @@
+ 			reg = <27000 1000>;
+ 			local-mac-address = [ 00 E0 0C 00 73 03 ];
+ 			interrupts = <15 2 16 2 17 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452001>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy3>;
+ 		};
+  */
+ 
+@@ -160,7 +150,7 @@
+ 			reg = <4500 100>; 	// reg base, size
+ 			clock-frequency = <0>; 	// should we fill in in uboot?
+ 			interrupts = <1a 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 		};
+ 
+ 		serial@4600 {
+@@ -169,57 +159,56 @@
+ 			reg = <4600 100>;	// reg base, size
+ 			clock-frequency = <0>; 	// should we fill in in uboot?
+ 			interrupts = <1a 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 		};
+ 
+-		pci@8000 {
+-			linux,phandle = <8000>;
++		pci1: pci@8000 {
+ 			interrupt-map-mask = <1f800 0 0 7>;
+ 			interrupt-map = <
+ 
+ 				/* IDSEL 0x10 */
+-				08000 0 0 1 40000 30 1
+-				08000 0 0 2 40000 31 1
+-				08000 0 0 3 40000 32 1
+-				08000 0 0 4 40000 33 1
++				08000 0 0 1 &mpic 30 1
++				08000 0 0 2 &mpic 31 1
++				08000 0 0 3 &mpic 32 1
++				08000 0 0 4 &mpic 33 1
+ 
+ 				/* IDSEL 0x11 */
+-				08800 0 0 1 40000 30 1
+-				08800 0 0 2 40000 31 1
+-				08800 0 0 3 40000 32 1
+-				08800 0 0 4 40000 33 1
++				08800 0 0 1 &mpic 30 1
++				08800 0 0 2 &mpic 31 1
++				08800 0 0 3 &mpic 32 1
++				08800 0 0 4 &mpic 33 1
+ 
+ 				/* IDSEL 0x12 (Slot 1) */
+-				09000 0 0 1 40000 30 1
+-				09000 0 0 2 40000 31 1
+-				09000 0 0 3 40000 32 1
+-				09000 0 0 4 40000 33 1
++				09000 0 0 1 &mpic 30 1
++				09000 0 0 2 &mpic 31 1
++				09000 0 0 3 &mpic 32 1
++				09000 0 0 4 &mpic 33 1
+ 
+ 				/* IDSEL 0x13 (Slot 2) */
+-				09800 0 0 1 40000 31 1
+-				09800 0 0 2 40000 32 1
+-				09800 0 0 3 40000 33 1
+-				09800 0 0 4 40000 30 1
++				09800 0 0 1 &mpic 31 1
++				09800 0 0 2 &mpic 32 1
++				09800 0 0 3 &mpic 33 1
++				09800 0 0 4 &mpic 30 1
+ 
+ 				/* IDSEL 0x14 (Slot 3) */
+-				0a000 0 0 1 40000 32 1
+-				0a000 0 0 2 40000 33 1
+-				0a000 0 0 3 40000 30 1
+-				0a000 0 0 4 40000 31 1
++				0a000 0 0 1 &mpic 32 1
++				0a000 0 0 2 &mpic 33 1
++				0a000 0 0 3 &mpic 30 1
++				0a000 0 0 4 &mpic 31 1
+ 
+ 				/* IDSEL 0x15 (Slot 4) */
+-				0a800 0 0 1 40000 33 1
+-				0a800 0 0 2 40000 30 1
+-				0a800 0 0 3 40000 31 1
+-				0a800 0 0 4 40000 32 1
++				0a800 0 0 1 &mpic 33 1
++				0a800 0 0 2 &mpic 30 1
++				0a800 0 0 3 &mpic 31 1
++				0a800 0 0 4 &mpic 32 1
+ 
+ 				/* Bus 1 (Tundra Bridge) */
+ 				/* IDSEL 0x12 (ISA bridge) */
+-				19000 0 0 1 40000 30 1
+-				19000 0 0 2 40000 31 1
+-				19000 0 0 3 40000 32 1
+-				19000 0 0 4 40000 33 1>;
+-			interrupt-parent = <40000>;
++				19000 0 0 1 &mpic 30 1
++				19000 0 0 2 &mpic 31 1
++				19000 0 0 3 &mpic 32 1
++				19000 0 0 4 &mpic 33 1>;
++			interrupt-parent = <&mpic>;
+ 			interrupts = <08 2>;
+ 			bus-range = <0 0>;
+ 			ranges = <02000000 0 80000000 80000000 0 20000000
+@@ -243,21 +232,20 @@
+ 				compatible = "chrp,iic";
+ 				big-endian;
+ 				interrupts = <1>;
+-				interrupt-parent = <8000>;
++				interrupt-parent = <&pci1>;
+ 			};
+ 		};
+ 
+ 		pci@9000 {
+-			linux,phandle = <9000>;
+ 			interrupt-map-mask = <f800 0 0 7>;
+ 			interrupt-map = <
+ 
+ 				/* IDSEL 0x15 */
+-				a800 0 0 1 40000 3b 1
+-				a800 0 0 2 40000 3b 1
+-				a800 0 0 3 40000 3b 1
+-				a800 0 0 4 40000 3b 1>;
+-			interrupt-parent = <40000>;
++				a800 0 0 1 &mpic 3b 1
++				a800 0 0 2 &mpic 3b 1
++				a800 0 0 3 &mpic 3b 1
++				a800 0 0 4 &mpic 3b 1>;
++			interrupt-parent = <&mpic>;
+ 			interrupts = <09 2>;
+ 			bus-range = <0 0>;
+ 			ranges = <02000000 0 a0000000 a0000000 0 20000000
+@@ -271,8 +259,7 @@
+ 			device_type = "pci";
+ 		};
+ 
+-		pic@40000 {
+-			linux,phandle = <40000>;
++		mpic: pic@40000 {
+ 			clock-frequency = <0>;
+ 			interrupt-controller;
+ 			#address-cells = <0>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8555cds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8555cds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8555cds.dts
+@@ -12,16 +12,14 @@
+ 
+ / {
+ 	model = "MPC8555CDS";
+-	compatible = "MPC85xxCDS";
++	compatible = "MPC8555CDS", "MPC85xxCDS";
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+-	linux,phandle = <100>;
+ 
+ 	cpus {
+ 		#cpus = <1>;
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+-		linux,phandle = <200>;
+ 
+ 		PowerPC,8555@0 {
+ 			device_type = "cpu";
+@@ -34,13 +32,11 @@
+ 			bus-frequency = <0>;	// 166 MHz
+ 			clock-frequency = <0>;	// 825 MHz, from uboot
+ 			32-bit;
+-			linux,phandle = <201>;
+ 		};
+ 	};
+ 
+ 	memory {
+ 		device_type = "memory";
+-		linux,phandle = <300>;
+ 		reg = <00000000 08000000>;	// 128M at 0x0
+ 	};
+ 
+@@ -58,7 +54,7 @@
+ 			compatible = "fsl-i2c";
+ 			reg = <3000 100>;
+ 			interrupts = <1b 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 			dfsrr;
+ 		};
+ 
+@@ -68,17 +64,14 @@
+ 			device_type = "mdio";
+ 			compatible = "gianfar";
+ 			reg = <24520 20>;
+-			linux,phandle = <24520>;
+-			ethernet-phy@0 {
+-				linux,phandle = <2452000>;
+-				interrupt-parent = <40000>;
++			phy0: ethernet-phy@0 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <35 0>;
+ 				reg = <0>;
+ 				device_type = "ethernet-phy";
+ 			};
+-			ethernet-phy@1 {
+-				linux,phandle = <2452001>;
+-				interrupt-parent = <40000>;
++			phy1: ethernet-phy@1 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <35 0>;
+ 				reg = <1>;
+ 				device_type = "ethernet-phy";
+@@ -94,8 +87,8 @@
+ 			reg = <24000 1000>;
+ 			local-mac-address = [ 00 E0 0C 00 73 00 ];
+ 			interrupts = <0d 2 0e 2 12 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452000>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy0>;
+ 		};
+ 
+ 		ethernet@25000 {
+@@ -107,8 +100,8 @@
+ 			reg = <25000 1000>;
+ 			local-mac-address = [ 00 E0 0C 00 73 01 ];
+ 			interrupts = <13 2 14 2 18 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452001>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy1>;
+ 		};
+ 
+ 		serial@4500 {
+@@ -117,7 +110,7 @@
+ 			reg = <4500 100>; 	// reg base, size
+ 			clock-frequency = <0>; 	// should we fill in in uboot?
+ 			interrupts = <1a 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 		};
+ 
+ 		serial@4600 {
+@@ -126,57 +119,56 @@
+ 			reg = <4600 100>;	// reg base, size
+ 			clock-frequency = <0>; 	// should we fill in in uboot?
+ 			interrupts = <1a 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 		};
+ 
+-		pci@8000 {
+-			linux,phandle = <8000>;
++		pci1: pci@8000 {
+ 			interrupt-map-mask = <1f800 0 0 7>;
+ 			interrupt-map = <
+ 
+ 				/* IDSEL 0x10 */
+-				08000 0 0 1 40000 30 1
+-				08000 0 0 2 40000 31 1
+-				08000 0 0 3 40000 32 1
+-				08000 0 0 4 40000 33 1
++				08000 0 0 1 &mpic 30 1
++				08000 0 0 2 &mpic 31 1
++				08000 0 0 3 &mpic 32 1
++				08000 0 0 4 &mpic 33 1
+ 
+ 				/* IDSEL 0x11 */
+-				08800 0 0 1 40000 30 1
+-				08800 0 0 2 40000 31 1
+-				08800 0 0 3 40000 32 1
+-				08800 0 0 4 40000 33 1
++				08800 0 0 1 &mpic 30 1
++				08800 0 0 2 &mpic 31 1
++				08800 0 0 3 &mpic 32 1
++				08800 0 0 4 &mpic 33 1
+ 
+ 				/* IDSEL 0x12 (Slot 1) */
+-				09000 0 0 1 40000 30 1
+-				09000 0 0 2 40000 31 1
+-				09000 0 0 3 40000 32 1
+-				09000 0 0 4 40000 33 1
++				09000 0 0 1 &mpic 30 1
++				09000 0 0 2 &mpic 31 1
++				09000 0 0 3 &mpic 32 1
++				09000 0 0 4 &mpic 33 1
+ 
+ 				/* IDSEL 0x13 (Slot 2) */
+-				09800 0 0 1 40000 31 1
+-				09800 0 0 2 40000 32 1
+-				09800 0 0 3 40000 33 1
+-				09800 0 0 4 40000 30 1
++				09800 0 0 1 &mpic 31 1
++				09800 0 0 2 &mpic 32 1
++				09800 0 0 3 &mpic 33 1
++				09800 0 0 4 &mpic 30 1
+ 
+ 				/* IDSEL 0x14 (Slot 3) */
+-				0a000 0 0 1 40000 32 1
+-				0a000 0 0 2 40000 33 1
+-				0a000 0 0 3 40000 30 1
+-				0a000 0 0 4 40000 31 1
++				0a000 0 0 1 &mpic 32 1
++				0a000 0 0 2 &mpic 33 1
++				0a000 0 0 3 &mpic 30 1
++				0a000 0 0 4 &mpic 31 1
+ 
+ 				/* IDSEL 0x15 (Slot 4) */
+-				0a800 0 0 1 40000 33 1
+-				0a800 0 0 2 40000 30 1
+-				0a800 0 0 3 40000 31 1
+-				0a800 0 0 4 40000 32 1
++				0a800 0 0 1 &mpic 33 1
++				0a800 0 0 2 &mpic 30 1
++				0a800 0 0 3 &mpic 31 1
++				0a800 0 0 4 &mpic 32 1
+ 
+ 				/* Bus 1 (Tundra Bridge) */
+ 				/* IDSEL 0x12 (ISA bridge) */
+-				19000 0 0 1 40000 30 1
+-				19000 0 0 2 40000 31 1
+-				19000 0 0 3 40000 32 1
+-				19000 0 0 4 40000 33 1>;
+-			interrupt-parent = <40000>;
++				19000 0 0 1 &mpic 30 1
++				19000 0 0 2 &mpic 31 1
++				19000 0 0 3 &mpic 32 1
++				19000 0 0 4 &mpic 33 1>;
++			interrupt-parent = <&mpic>;
+ 			interrupts = <08 2>;
+ 			bus-range = <0 0>;
+ 			ranges = <02000000 0 80000000 80000000 0 20000000
+@@ -200,21 +192,20 @@
+ 				compatible = "chrp,iic";
+ 				big-endian;
+ 				interrupts = <1>;
+-				interrupt-parent = <8000>;
++				interrupt-parent = <&pci1>;
+ 			};
+ 		};
+ 
+ 		pci@9000 {
+-			linux,phandle = <9000>;
+ 			interrupt-map-mask = <f800 0 0 7>;
+ 			interrupt-map = <
+ 
+ 				/* IDSEL 0x15 */
+-				a800 0 0 1 40000 3b 1
+-				a800 0 0 2 40000 3b 1
+-				a800 0 0 3 40000 3b 1
+-				a800 0 0 4 40000 3b 1>;
+-			interrupt-parent = <40000>;
++				a800 0 0 1 &mpic 3b 1
++				a800 0 0 2 &mpic 3b 1
++				a800 0 0 3 &mpic 3b 1
++				a800 0 0 4 &mpic 3b 1>;
++			interrupt-parent = <&mpic>;
+ 			interrupts = <09 2>;
+ 			bus-range = <0 0>;
+ 			ranges = <02000000 0 a0000000 a0000000 0 20000000
+@@ -228,8 +219,7 @@
+ 			device_type = "pci";
+ 		};
+ 
+-		pic@40000 {
+-			linux,phandle = <40000>;
++		mpic: pic@40000 {
+ 			clock-frequency = <0>;
+ 			interrupt-controller;
+ 			#address-cells = <0>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8560ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8560ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8560ads.dts
+@@ -12,16 +12,14 @@
+ 
+ / {
+ 	model = "MPC8560ADS";
+-	compatible = "MPC85xxADS";
++	compatible = "MPC8560ADS", "MPC85xxADS";
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+-	linux,phandle = <100>;
+ 
+ 	cpus {
+ 		#cpus = <1>;
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+-		linux,phandle = <200>;
+ 
+ 		PowerPC,8560@0 {
+ 			device_type = "cpu";
+@@ -34,14 +32,12 @@
+ 			bus-frequency = <13ab6680>;
+ 			clock-frequency = <312c8040>;
+ 			32-bit;
+-			linux,phandle = <201>;
+ 			linux,boot-cpu;
+ 		};
+ 	};
+ 
+ 	memory {
+ 		device_type = "memory";
+-		linux,phandle = <300>;
+ 		reg = <00000000 10000000>;
+ 	};
+ 
+@@ -58,33 +54,28 @@
+ 			device_type = "mdio";
+ 			compatible = "gianfar";
+ 			reg = <24520 20>;
+-			linux,phandle = <24520>;
+ 			#address-cells = <1>;
+ 			#size-cells = <0>;
+-			ethernet-phy@0 {
+-				linux,phandle = <2452000>;
+-				interrupt-parent = <40000>;
++			phy0: ethernet-phy@0 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <35 1>;
+ 				reg = <0>;
+ 				device_type = "ethernet-phy";
+ 			};
+-			ethernet-phy@1 {
+-				linux,phandle = <2452001>;
+-				interrupt-parent = <40000>;
++			phy1: ethernet-phy@1 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <35 1>;
+ 				reg = <1>;
+ 				device_type = "ethernet-phy";
+ 			};
+-			ethernet-phy@2 {
+-				linux,phandle = <2452002>;
+-				interrupt-parent = <40000>;
++			phy2: ethernet-phy@2 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <37 1>;
+ 				reg = <2>;
+ 				device_type = "ethernet-phy";
+ 			};
+-			ethernet-phy@3 {
+-				linux,phandle = <2452003>;
+-				interrupt-parent = <40000>;
++			phy3: ethernet-phy@3 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <37 1>;
+ 				reg = <3>;
+ 				device_type = "ethernet-phy";
+@@ -98,8 +89,8 @@
+ 			reg = <24000 1000>;
+ 			address = [ 00 00 0C 00 00 FD ];
+ 			interrupts = <d 2 e 2 12 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452000>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy0>;
+ 		};
+ 
+ 		ethernet@25000 {
+@@ -111,12 +102,11 @@
+ 			reg = <25000 1000>;
+ 			address = [ 00 00 0C 00 01 FD ];
+ 			interrupts = <13 2 14 2 18 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452001>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy1>;
+ 		};
+ 
+ 		pci@8000 {
+-			linux,phandle = <8000>;
+ 			#interrupt-cells = <1>;
+ 			#size-cells = <2>;
+ 			#address-cells = <3>;
+@@ -128,96 +118,94 @@
+ 			interrupt-map = <
+ 
+ 					/* IDSEL 0x2 */
+-					 1000 0 0 1 40000 31 1
+-					 1000 0 0 2 40000 32 1
+-					 1000 0 0 3 40000 33 1
+-					 1000 0 0 4 40000 34 1
++					 1000 0 0 1 &mpic 31 1
++					 1000 0 0 2 &mpic 32 1
++					 1000 0 0 3 &mpic 33 1
++					 1000 0 0 4 &mpic 34 1
+ 
+ 					/* IDSEL 0x3 */
+-					 1800 0 0 1 40000 34 1
+-					 1800 0 0 2 40000 31 1
+-					 1800 0 0 3 40000 32 1
+-					 1800 0 0 4 40000 33 1
++					 1800 0 0 1 &mpic 34 1
++					 1800 0 0 2 &mpic 31 1
++					 1800 0 0 3 &mpic 32 1
++					 1800 0 0 4 &mpic 33 1
+ 
+ 					/* IDSEL 0x4 */
+-					 2000 0 0 1 40000 33 1
+-					 2000 0 0 2 40000 34 1
+-					 2000 0 0 3 40000 31 1
+-					 2000 0 0 4 40000 32 1
++					 2000 0 0 1 &mpic 33 1
++					 2000 0 0 2 &mpic 34 1
++					 2000 0 0 3 &mpic 31 1
++					 2000 0 0 4 &mpic 32 1
+ 
+ 					/* IDSEL 0x5  */
+-					 2800 0 0 1 40000 32 1
+-					 2800 0 0 2 40000 33 1
+-					 2800 0 0 3 40000 34 1
+-					 2800 0 0 4 40000 31 1
++					 2800 0 0 1 &mpic 32 1
++					 2800 0 0 2 &mpic 33 1
++					 2800 0 0 3 &mpic 34 1
++					 2800 0 0 4 &mpic 31 1
+ 
+ 					/* IDSEL 12 */
+-					 6000 0 0 1 40000 31 1
+-					 6000 0 0 2 40000 32 1
+-					 6000 0 0 3 40000 33 1
+-					 6000 0 0 4 40000 34 1
++					 6000 0 0 1 &mpic 31 1
++					 6000 0 0 2 &mpic 32 1
++					 6000 0 0 3 &mpic 33 1
++					 6000 0 0 4 &mpic 34 1
+ 
+ 					/* IDSEL 13 */
+-					 6800 0 0 1 40000 34 1
+-					 6800 0 0 2 40000 31 1
+-					 6800 0 0 3 40000 32 1
+-					 6800 0 0 4 40000 33 1
++					 6800 0 0 1 &mpic 34 1
++					 6800 0 0 2 &mpic 31 1
++					 6800 0 0 3 &mpic 32 1
++					 6800 0 0 4 &mpic 33 1
+ 
+ 					/* IDSEL 14*/
+-					 7000 0 0 1 40000 33 1
+-					 7000 0 0 2 40000 34 1
+-					 7000 0 0 3 40000 31 1
+-					 7000 0 0 4 40000 32 1
++					 7000 0 0 1 &mpic 33 1
++					 7000 0 0 2 &mpic 34 1
++					 7000 0 0 3 &mpic 31 1
++					 7000 0 0 4 &mpic 32 1
+ 
+ 					/* IDSEL 15 */
+-					 7800 0 0 1 40000 32 1
+-					 7800 0 0 2 40000 33 1
+-					 7800 0 0 3 40000 34 1
+-					 7800 0 0 4 40000 31 1
++					 7800 0 0 1 &mpic 32 1
++					 7800 0 0 2 &mpic 33 1
++					 7800 0 0 3 &mpic 34 1
++					 7800 0 0 4 &mpic 31 1
+ 
+ 					/* IDSEL 18 */
+-					 9000 0 0 1 40000 31 1
+-					 9000 0 0 2 40000 32 1
+-					 9000 0 0 3 40000 33 1
+-					 9000 0 0 4 40000 34 1
++					 9000 0 0 1 &mpic 31 1
++					 9000 0 0 2 &mpic 32 1
++					 9000 0 0 3 &mpic 33 1
++					 9000 0 0 4 &mpic 34 1
+ 
+ 					/* IDSEL 19 */
+-					 9800 0 0 1 40000 34 1
+-					 9800 0 0 2 40000 31 1
+-					 9800 0 0 3 40000 32 1
+-					 9800 0 0 4 40000 33 1
++					 9800 0 0 1 &mpic 34 1
++					 9800 0 0 2 &mpic 31 1
++					 9800 0 0 3 &mpic 32 1
++					 9800 0 0 4 &mpic 33 1
+ 
+ 					/* IDSEL 20 */
+-					 a000 0 0 1 40000 33 1
+-					 a000 0 0 2 40000 34 1
+-					 a000 0 0 3 40000 31 1
+-					 a000 0 0 4 40000 32 1
++					 a000 0 0 1 &mpic 33 1
++					 a000 0 0 2 &mpic 34 1
++					 a000 0 0 3 &mpic 31 1
++					 a000 0 0 4 &mpic 32 1
+ 
+ 					/* IDSEL 21 */
+-					 a800 0 0 1 40000 32 1
+-					 a800 0 0 2 40000 33 1
+-					 a800 0 0 3 40000 34 1
+-					 a800 0 0 4 40000 31 1>;
++					 a800 0 0 1 &mpic 32 1
++					 a800 0 0 2 &mpic 33 1
++					 a800 0 0 3 &mpic 34 1
++					 a800 0 0 4 &mpic 31 1>;
+ 
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 			interrupts = <8 0>;
+ 			bus-range = <0 0>;
+ 			ranges = <02000000 0 80000000 80000000 0 20000000
+ 				  01000000 0 00000000 e2000000 0 01000000>;
+ 		};
+ 
+-		pic@40000 {
+-			linux,phandle = <40000>;
++		mpic: pic@40000 {
+ 			interrupt-controller;
+ 			#address-cells = <0>;
+ 			#interrupt-cells = <2>;
+-			reg = <40000 20100>;
++			reg = <40000 40000>;
+ 			built-in;
+ 			device_type = "open-pic";
+ 		};
+ 
+ 		cpm@e0000000 {
+-			linux,phandle = <e0000000>;
+ 			#address-cells = <1>;
+ 			#size-cells = <1>;
+ 			#interrupt-cells = <2>;
+@@ -228,13 +216,12 @@
+ 			command-proc = <919c0>;
+ 			brg-frequency = <9d5b340>;
+ 
+-			pic@90c00 {
+-				linux,phandle = <90c00>;
++			cpmpic: pic@90c00 {
+ 				interrupt-controller;
+ 				#address-cells = <0>;
+ 				#interrupt-cells = <2>;
+ 				interrupts = <1e 0>;
+-				interrupt-parent = <40000>;
++				interrupt-parent = <&mpic>;
+ 				reg = <90c00 80>;
+ 				built-in;
+ 				device_type = "cpm-pic";
+@@ -251,7 +238,7 @@
+ 				tx-clock = <1>;
+ 				current-speed = <1c200>;
+ 				interrupts = <28 8>;
+-				interrupt-parent = <90c00>;
++				interrupt-parent = <&cpmpic>;
+ 			};
+ 
+ 			scc@91a20 {
+@@ -265,7 +252,7 @@
+ 				tx-clock = <2>;
+ 				current-speed = <1c200>;
+ 				interrupts = <29 8>;
+-				interrupt-parent = <90c00>;
++				interrupt-parent = <&cpmpic>;
+ 			};
+ 
+ 			fcc@91320 {
+@@ -279,8 +266,8 @@
+ 				rx-clock = <15>;
+ 				tx-clock = <16>;
+ 				interrupts = <21 8>;
+-				interrupt-parent = <90c00>;
+-				phy-handle = <2452002>;
++				interrupt-parent = <&cpmpic>;
++				phy-handle = <&phy2>;
+ 			};
+ 
+ 			fcc@91340 {
+@@ -294,8 +281,8 @@
+ 				rx-clock = <17>;
+ 				tx-clock = <18>;
+ 				interrupts = <22 8>;
+-				interrupt-parent = <90c00>;
+-				phy-handle = <2452003>;
++				interrupt-parent = <&cpmpic>;
++				phy-handle = <&phy3>;
+ 			};
+ 		};
+ 	};
+Index: linux-2.6.18/mvl_patches/pro50-0045.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0045.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(45);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

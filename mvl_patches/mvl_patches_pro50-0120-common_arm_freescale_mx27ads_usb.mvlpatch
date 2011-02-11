@@ -1,0 +1,1395 @@
+#! /usr/bin/env bash
+# Patch: -common_arm_freescale_mx27ads_usb
+# Date: Wed Aug 29 07:27:49 2007
+# Source: Freescale Semiconductor, Inc.
+# MR: 24415
+# Type: Integration
+# Disposition: merged from freescales's git
+# Signed-off-by: Nikita Youshchenko <nyoushchenko@ru.mvista.com>
+# Description:
+#    USB support in arch files 
+#    And driver for tranceiver isp1301 configured staticallywithout otg support 
+# 
+#     Code was taken from bsp-imx27ads-rel2 branch of freescale git tree,
+#     that could be found at
+#     http://opensource.freescale.com/pub/scm/linux-2.6-mx.git
+# 
+# 
+
+PATCHNUM=120
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Freescale Semiconductor, Inc.
+MR: 24415
+Type: Integration
+Disposition: merged from freescales's git
+Signed-off-by: Nikita Youshchenko <nyoushchenko@ru.mvista.com>
+Description:
+   USB support in arch files 
+   And driver for tranceiver isp1301 configured staticallywithout otg support 
+
+    Code was taken from bsp-imx27ads-rel2 branch of freescale git tree,
+    that could be found at
+    http://opensource.freescale.com/pub/scm/linux-2.6-mx.git
+
+
+Index: linux-2.6.18/arch/arm/mach-mx2/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-mx2/Kconfig
++++ linux-2.6.18/arch/arm/mach-mx2/Kconfig
+@@ -8,4 +8,93 @@ config MACH_MX27ADS
+ 	  Include support for MX27ADS platform. This includes specific
+ 	  configurations for the board and its peripherals.
+ 
++config USB_MXC_H1_PORT
++	bool "Enable USB Host1 port (FS only)"
++	depends on USB_EHCI_HCD
++	select USB_EHCI_ROOT_HUB_TT
++	default y
++	help
++	  Enable Host1 port on USB ARC controller.
++
++config USB_MXC_H2_PORT
++	bool "Enable USB Host2 port (HS/FS)"
++	depends on USB_EHCI_HCD
++	select USB_EHCI_ROOT_HUB_TT
++	default y
++	select ISP1504_MXC
++	help
++	  Enable Host2 port on USB ARC controller.
++
++config USB_MXC_OTG_PORT
++	bool "Enable USB OTG port"
++	depends on USB_EHCI_HCD || USB_GADGET_ARC
++	default y
++	help
++	  Enable Host2 port on USB ARC controller.
++
++choice
++	prompt "USB OTG port mode"
++	depends on USB_MXC_OTG_PORT
++	help
++	  Select operation mode of ARC USB OTG port.
++
++	  OTG port of may work as USB host, as USB gadget, or both (USB OTG).
++
++config USB_MXC_OTG_PORT_HOST
++	bool "USB host"
++	depends on USB_EHCI_HCD
++	select USB_EHCI_ROOT_HUB_TT
++	help
++	  Configure ARC USB OTG port to work as USB host.
++
++config USB_MXC_OTG_PORT_GADGET
++	bool "USB gadget"
++	depends on USB_GADGET_ARC
++	help
++	  Configure ARC USB OTG port to work as USB gadget.
++
++config USB_MXC_OTG_PORT_OTG
++	bool "USB OTG"
++	depends on USB_EHCI_HCD && USB_GADGET_ARC
++	select USB_EHCI_ROOT_HUB_TT
++	select ARCH_MXC_OTG
++	select USB_OTG
++	help
++	  Enable OTG support on ARC USB OTG port.
++
++endchoice
++
++choice
++	prompt "Transceiver for USB OTG port"
++	depends on USB_MXC_OTG_PORT
++	help
++	  Select either full speed or high speed transciever to use with
++	  ARC USB OTG port.
++
++config USB_MXC_OTG_PORT_FS
++	bool "Full Speed"
++	depends on !USB_MXC_OTG_PORT_OTG
++	select ISP1301_MXC
++	help
++	  Select this to use ISP1301 Full Speed transceiver.
++
++config USB_MXC_OTG_PORT_HS
++	bool "High Speed"
++	select ISP1504_MXC
++	help
++	  Select this to use ISP1504 High Speed transceiver.
++
++endchoice
++
+ endmenu
++
++config ISP1301_MXC
++	bool
++	select I2C_MXC
++
++config ISP1504_MXC
++	bool
++
++config ARCH_MXC_OTG
++	bool
++
+Index: linux-2.6.18/arch/arm/mach-mx2/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-mx2/Makefile
++++ linux-2.6.18/arch/arm/mach-mx2/Makefile
+@@ -4,5 +4,6 @@
+ 
+ # Object file lists.
+ 
+-obj-y		:= mm.o time.o clock.o cpu.o dma.o gpio_mux.o devices.o
++obj-y		:= mm.o time.o clock.o cpu.o dma.o gpio_mux.o devices.o usb.o
+ obj-$(CONFIG_MACH_MX27ADS)	+= mx27ads.o mx27ads_gpio.o
++obj-$(CONFIG_ISP1301_MXC)	+= isp1301.o
+Index: linux-2.6.18/arch/arm/mach-mx2/isp1301.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/mach-mx2/isp1301.c
+@@ -0,0 +1,174 @@
++/*
++ * Copyright 2005-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++
++#include <linux/i2c.h>
++#include <asm/arch/mxc_i2c.h>
++#include <asm/arch/isp1301.h>
++
++static int isp1301_attach(struct i2c_adapter *adap);
++static int isp1301_detach(struct i2c_client *client);
++
++static struct i2c_driver isp1301_i2c_driver = {
++	.driver = {
++		   .owner = THIS_MODULE,
++		   .name = "isp1301 Client",
++		   },
++	.attach_adapter = isp1301_attach,
++	.detach_client = isp1301_detach,
++};
++
++static struct i2c_client isp1301_i2c_client = {
++	.name = "isp1301 I2C dev",
++	.addr = ISP1301_DEV_ADDR,
++	.driver = &isp1301_i2c_driver,
++};
++
++static int isp1301_detect_client(struct i2c_adapter *adapter, int address,
++				 int kind)
++{
++	isp1301_i2c_client.adapter = adapter;
++	if (i2c_attach_client(&isp1301_i2c_client)) {
++		isp1301_i2c_client.adapter = NULL;
++		printk(KERN_ERR "isp1301_attach: i2c_attach_client failed\n");
++		return -1;
++	}
++
++	printk(KERN_INFO "isp1301 Detected\n");
++	return 0;
++}
++
++static unsigned short normal_i2c[] = { ISP1301_DEV_ADDR, I2C_CLIENT_END };
++
++/* Magic definition of all other variables and things */
++I2C_CLIENT_INSMOD;
++
++/*!
++ * isp1301 I2C attach function
++ *
++ * @param adapter            struct i2c_adapter *
++ * @return  Error code indicating success or failure
++ */
++static int isp1301_attach(struct i2c_adapter *adap)
++{
++	return i2c_probe(adap, &addr_data, &isp1301_detect_client);
++}
++
++/*!
++ * isp1301 I2C detach function
++ *
++ * @param client            struct i2c_client *
++ * @return  Error code indicating success or failure
++ */
++static int isp1301_detach(struct i2c_client *client)
++{
++	int err;
++
++	if (!isp1301_i2c_client.adapter)
++		return -1;
++
++	err = i2c_detach_client(&isp1301_i2c_client);
++	isp1301_i2c_client.adapter = NULL;
++
++	return err;
++}
++
++static int isp1301_i2c_client_xfer(unsigned int addr, char *reg, int reg_len,
++				   char *buf, int num, int tran_flag)
++{
++	struct i2c_msg msg[2];
++	int ret;
++
++	msg[0].addr = addr;
++	msg[0].len = reg_len;
++	msg[0].buf = reg;
++	msg[0].flags = tran_flag;
++	msg[0].flags &= ~I2C_M_RD;
++
++	msg[1].addr = addr;
++	msg[1].len = num;
++	msg[1].buf = buf;
++	msg[1].flags = tran_flag;
++
++	if (tran_flag & 1) {
++		msg[1].flags |= I2C_M_RD;
++	} else {
++		msg[1].flags &= ~I2C_M_RD;
++	}
++
++	ret = i2c_transfer(isp1301_i2c_client.adapter, msg, 2);
++	if (ret >= 0)
++		return 0;
++
++	return ret;
++}
++
++void isp1301_init(void)
++{
++	i2c_add_driver(&isp1301_i2c_driver);
++}
++
++void isp1301_uninit(void)
++{
++	i2c_del_driver(&isp1301_i2c_driver);
++}
++
++/* Write ISP1301 register*/
++static inline void isp1301_write_reg(char reg, char data)
++{
++	isp1301_i2c_client_xfer(ISP1301_DEV_ADDR, &reg, 1, &data, 1, 0);
++}
++
++/* read ISP1301 register*/
++static inline char isp1301_read_reg(char reg)
++{
++	char data;
++	isp1301_i2c_client_xfer(ISP1301_DEV_ADDR, &reg, 1, &data, 1, 1);
++	return data;
++}
++
++/* set ISP1301 as USB host*/
++void isp1301_set_serial_host(void)
++{
++	isp1301_write_reg(ISP1301_CTRL_REG1_CLR, 0xFF);
++	isp1301_write_reg(ISP1301_CTRL_REG1_SET,
++			  (VBUS_DRV | DP_PULLDOWN | DM_PULLDOWN));
++	isp1301_write_reg(ISP1301_MODE_REG1_SET, DAT_SE0);	/* SE0 state */
++}
++
++/* set ISP1301 as USB device*/
++void isp1301_set_serial_dev(void)
++{
++	isp1301_write_reg(ISP1301_MODE_REG1_CLR, 0xFF);
++	/* FS mode, DP pull down, DM pull down */
++	isp1301_write_reg(ISP1301_CTRL_REG1_SET,
++			  (DP_PULLDOWN | DM_PULLDOWN | DP_PULLUP));
++}
++
++void isp1301_set_vbus_power(int on)
++{
++	if (on) {
++		/* disable D+ pull-up */
++		isp1301_write_reg(ISP1301_CTRL_REG1_CLR, DP_PULLUP);
++		/* enable D+ pull-down */
++		isp1301_write_reg(ISP1301_CTRL_REG1_SET, DP_PULLDOWN);
++		/* turn on Vbus */
++		isp1301_write_reg(ISP1301_CTRL_REG1_SET, VBUS_DRV);
++	} else {
++		/* D+ pull up, D- pull down  */
++		isp1301_write_reg(ISP1301_CTRL_REG1_SET,
++				  (DP_PULLUP | DM_PULLDOWN));
++		/* disable D- pull up, disable D+ pull down */
++		isp1301_write_reg(ISP1301_CTRL_REG1_CLR,
++				  (DM_PULLUP | DP_PULLDOWN));
++	}
++}
+Index: linux-2.6.18/arch/arm/mach-mx2/usb.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/mach-mx2/usb.c
+@@ -0,0 +1,782 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ *
++ *	otg_{get,set}_transceiver() are from arm/plat-omap/usb.c.
++ *	which is Copyright (C) 2004 Texas Instruments, Inc.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++
++/*!
++ * @defgroup USB_MX27 ARC OTG USB Driver for i.MX27
++ * @ingroup USB
++ */
++
++/*!
++ * @file mach-mx27/usb.c
++ *
++ * @brief platform related part of usb driver.
++ * @ingroup USB_MX27
++ */
++
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <linux/init.h>
++#include <linux/err.h>
++#include <linux/platform_device.h>
++#include <linux/usb_otg.h>
++#include <linux/delay.h>
++#include <linux/clk.h>
++
++#include <asm/io.h>
++#include <asm/irq.h>
++#include <asm/system.h>
++#include <asm/hardware.h>
++#include <asm/mach-types.h>
++
++#include <asm/arch/board.h>
++#include <asm/arch/arc_otg.h>
++#include <asm/arch/gpio.h>
++
++#ifdef CONFIG_ISP1504_MXC
++#include <asm/arch/isp1504.h>
++#endif
++
++#ifdef CONFIG_ISP1301_MXC
++#include <asm/arch/isp1301.h>
++#endif
++
++#define PBC3_CLEAR	PBC_BCTRL3_CLEAR_REG
++#define PBC3_SET	PBC_BCTRL3_SET_REG
++
++#define ISP1504_TIMEOUT	100
++
++#undef DEBUG
++#undef VERBOSE
++
++extern void gpio_usbh1_active(void);
++extern void gpio_usbh1_inactive(void);
++extern void gpio_usbh2_active(void);
++extern void gpio_usbh2_inactive(void);
++extern void gpio_usbotg_hs_active(void);
++extern void gpio_usbotg_hs_inactive(void);
++extern void gpio_usbotg_fs_active(void);
++extern void gpio_usbotg_fs_inactive(void);
++
++static struct clk *usb_clk;
++static struct clk *usb_ahb_clk;
++static unsigned long timeout;
++extern int clk_get_usecount(struct clk *clk);
++
++/*
++ * make sure USB_CLK is running at 60 MHz +/- 1000 Hz
++ */
++static int check_usbclk(void)
++{
++	unsigned long freq;
++
++	usb_ahb_clk = clk_get(NULL, "usb_ahb_clk");
++	clk_enable(usb_ahb_clk);
++	clk_put(usb_ahb_clk);
++
++	usb_clk = clk_get(NULL, "usb_clk");
++	freq = clk_get_rate(usb_clk);
++	clk_put(usb_clk);
++	if ((freq < 59999000) || (freq > 60001000)) {
++		printk(KERN_ERR "USB_CLK=%lu, should be 60MHz\n", freq);
++		return -1;
++	}
++	return 0;
++}
++
++#ifdef CONFIG_ISP1504_MXC
++/*!
++ * read ULPI register 'reg' thru VIEWPORT register 'view'
++ *
++ * @param       reg   register to read
++ * @param       view  the ULPI VIEWPORT register address
++ * @return	return isp1504 register value
++ */
++u8 isp1504_read(int reg, volatile u32 * view)
++{
++	u32 data;
++
++	/* make sure interface is running */
++	if (!(__raw_readl(view) && ULPIVW_SS)) {
++		__raw_writel(ULPIVW_WU, view);
++		timeout = jiffies + ISP1504_TIMEOUT;
++		do {		/* wait for wakeup */
++			if (time_after(jiffies, timeout)) {
++				printk(KERN_ERR "%s: TIMEOUT\n", __FUNCTION__);
++				return -ETIMEDOUT;
++			}
++			data = __raw_readl(view);
++		} while (data & ULPIVW_WU);
++	}
++
++	/* read the register */
++	__raw_writel((ULPIVW_RUN | (reg << ULPIVW_ADDR_SHIFT)), view);
++
++	timeout = jiffies + ISP1504_TIMEOUT;
++	do {			/* wait for completion */
++		if (time_after(jiffies, timeout)) {
++			printk(KERN_ERR "%s: TIMEOUT\n", __FUNCTION__);
++			return -ETIMEDOUT;
++		}
++		data = __raw_readl(view);
++	} while (data & ULPIVW_RUN);
++
++	return (u8) (data >> ULPIVW_RDATA_SHIFT) & ULPIVW_RDATA_MASK;
++}
++EXPORT_SYMBOL(isp1504_read);
++
++/*!
++ * set bits into OTG ISP1504 register 'reg' thru VIEWPORT register 'view'
++ *
++ * @param       bits  set value
++ * @param	reg   which register
++ * @param       view  the ULPI VIEWPORT register address
++ */
++void isp1504_set(u8 bits, int reg, volatile u32 * view)
++{
++	u32 data;
++
++	/* make sure interface is running */
++	if (!(__raw_readl(view) && ULPIVW_SS)) {
++		printk(KERN_INFO "\nSS=0\n");
++		__raw_writel(ULPIVW_WU, view);
++		timeout = jiffies + ISP1504_TIMEOUT;
++		do {		/* wait for wakeup */
++			if (time_after(jiffies, timeout)) {
++				printk(KERN_ERR "%s: TIMEOUT\n", __FUNCTION__);
++				return;
++			}
++			data = __raw_readl(view);
++		} while (data & ULPIVW_WU);
++	}
++
++	__raw_writel((ULPIVW_RUN | ULPIVW_WRITE |
++		      ((reg + ISP1504_REG_SET) << ULPIVW_ADDR_SHIFT) |
++		      ((bits & ULPIVW_WDATA_MASK) << ULPIVW_WDATA_SHIFT)),
++		     view);
++
++	timeout = jiffies + ISP1504_TIMEOUT;
++	while (__raw_readl(view) & ULPIVW_RUN) {  /* wait for completion */
++		if (time_after(jiffies, timeout)) {
++			printk(KERN_ERR "%s: TIMEOUT\n", __FUNCTION__);
++			return;
++		}
++	}
++}
++EXPORT_SYMBOL(isp1504_set);
++
++/*!
++ * clear bits in OTG ISP1504 register 'reg' thru VIEWPORT register 'view'
++ *
++ * @param       bits  bits to clear
++ * @param	reg   in this register
++ * @param       view  the ULPI VIEWPORT register address
++ */
++void isp1504_clear(u8 bits, int reg, volatile u32 * view)
++{
++	__raw_writel((ULPIVW_RUN | ULPIVW_WRITE |
++		      ((reg + ISP1504_REG_CLEAR) << ULPIVW_ADDR_SHIFT) |
++		      ((bits & ULPIVW_WDATA_MASK) << ULPIVW_WDATA_SHIFT)),
++		     view);
++
++	timeout = jiffies + ISP1504_TIMEOUT;
++	while (__raw_readl(view) & ULPIVW_RUN) {  /* wait for completion */
++		if (time_after(jiffies, timeout)) {
++			printk(KERN_ERR "%s: TIMEOUT\n", __FUNCTION__);
++			return;
++		}
++	}
++}
++EXPORT_SYMBOL(isp1504_clear);
++
++/*!
++ * set vbus power
++ *
++ * @param       on    power on or off
++ * @param       view  the ULPI view register address
++ */
++static void __attribute((unused)) ulpi_set_vbus_power(int on,
++						      volatile u32 * view)
++{
++	pr_debug("%s: on=%d  view=0x%p\n", __FUNCTION__, on, view);
++
++	pr_debug("%s: ULPI Vendor ID 0x%x    Product ID 0x%x\n", __FUNCTION__,
++		 (isp1504_read(ISP1504_VID_HIGH, view) << 8) |
++		 isp1504_read(ISP1504_VID_LOW, view),
++		 (isp1504_read(ISP1504_PID_HIGH, view) << 8) |
++		 isp1504_read(ISP1504_PID_LOW, view));
++
++	pr_debug("%s: OTG Control before = 0x%x\n", __FUNCTION__,
++		 isp1504_read(ISP1504_OTGCTL, view));
++
++	if (on) {
++		isp1504_set(DRV_VBUS_EXT |	/* enable external Vbus */
++			    DRV_VBUS |	/* enable internal Vbus */
++			    USE_EXT_VBUS_IND |	/* use external indicator */
++			    CHRG_VBUS,	/* charge Vbus */
++			    ISP1504_OTGCTL, view);
++
++	} else {
++		isp1504_clear(DRV_VBUS_EXT |	/* disable external Vbus */
++			      DRV_VBUS,	/* disable internal Vbus */
++			      ISP1504_OTGCTL, view);
++
++		isp1504_set(USE_EXT_VBUS_IND |	/* use external indicator */
++			    DISCHRG_VBUS,	/* discharge Vbus */
++			    ISP1504_OTGCTL, view);
++	}
++
++	pr_debug("%s: OTG Control after = 0x%x\n\n", __FUNCTION__,
++		 isp1504_read(ISP1504_OTGCTL, view));
++}
++#endif
++
++#ifdef CONFIG_USB_MXC_H1_PORT
++static void usbh1_set_xcvr(void)
++{
++	UH1_PORTSC1 &= ~PORTSC_PTS_MASK;
++	UH1_PORTSC1 |= PORTSC_PTS_SERIAL;
++}
++
++static int usbh1_init(void)
++{
++	pr_debug("%s: grab H1 pins\n", __FUNCTION__);
++
++	clk_enable(usb_clk);
++	pr_debug("%s: usb_clk usecount %d\n\n", __FUNCTION__,
++		 clk_get_usecount(usb_clk));
++
++	gpio_usbh1_active();
++	mdelay(1);
++
++	__raw_writew(PBC_BCTRL3_FSH_MOD, PBC3_CLEAR);	/* single ended */
++	__raw_writew(PBC_BCTRL3_FSH_VBUS_EN, PBC3_CLEAR);	/* enable FSH VBUS */
++
++	USBCTRL &= ~(UCTRL_H1SIC_MASK | UCTRL_BPE);	/* disable bypass mode */
++	USBCTRL |= UCTRL_H1SIC_SU6 |	/* single-ended / unidir. */
++	    UCTRL_H1WIE | UCTRL_H1DT |	/* disable H1 TLL */
++	    UCTRL_H1PM;		/* power mask */
++
++	usbh1_set_xcvr();
++	return 0;
++}
++
++static void usbh1_uninit(void)
++{
++	pr_debug("%s: \n", __FUNCTION__);
++
++	__raw_writew(PBC_BCTRL3_FSH_VBUS_EN, PBC3_SET);	/* disable FSH VBUS */
++
++	gpio_usbh1_inactive();	/* release our pins */
++	clk_disable(usb_clk);
++	pr_debug("%s: usb_clk usecount %d\n\n", __FUNCTION__,
++		 clk_get_usecount(usb_clk));
++}
++
++static u64 usbh1_dmamask = ~((u32)0);
++
++static struct arc_usb_config usbh1_config = {
++	.name            = "Host 1",
++	.platform_init   = usbh1_init,
++	.platform_uninit = usbh1_uninit,
++	.xcvr_type       = PORTSC_PTS_SERIAL,
++	.usbmode         = (u32) &UH1_USBMODE,
++	.power_budget    = 500,		/* 500 mA max power */
++};
++
++static struct resource usbh1_resources[] = {
++	{
++		.start = (u32) (USB_H1REGS_BASE),
++		.end   = (u32) (USB_H1REGS_BASE + 0x1ff),
++		.flags = IORESOURCE_MEM,
++	},
++	{
++		.start = MXC_INT_USB1,
++		.flags = IORESOURCE_IRQ,
++	},
++};
++#endif	/* CONFIG_USB_MXC_H1_PORT */
++
++#ifdef CONFIG_USB_MXC_H2_PORT
++static void usbh2_set_xcvr(void)
++{
++	UH2_PORTSC1 &= ~PORTSC_PTS_MASK;	/* set ULPI xcvr */
++	UH2_PORTSC1 |= PORTSC_PTS_ULPI;
++
++	/* need to reset the controller here so that the ID pin
++	 * is correctly detected.
++	 */
++	UH2_USBCMD |= UCMD_RESET;
++
++	/* allow controller to reset, and leave time for
++	 * the ULPI transceiver to reset too.
++	 */
++	mdelay(10);
++
++	/* Turn off the usbpll for ulpi tranceivers */
++	clk_disable(usb_clk);
++	pr_debug("%s: usb_clk usecount %d\n\n", __FUNCTION__,
++		 clk_get_usecount(usb_clk));
++}
++
++static int usbh2_init(void)
++{
++	pr_debug("%s: grab H2 pins\n", __FUNCTION__);
++
++	__raw_writew(PBC_BCTRL3_HSH_EN, PBC3_CLEAR);	/* enable OTG_VBUS_EN */
++	clk_enable(usb_clk);
++	pr_debug("%s: usb_clk usecount %d\n\n", __FUNCTION__,
++		 clk_get_usecount(usb_clk));
++
++	gpio_usbh2_active();	/* grab our pins */
++	mdelay(1);
++
++	USBCTRL &= ~(UCTRL_BPE);	/* disable bypass mode */
++	USBCTRL |= UCTRL_H2WIE |	/* wakeup intr enable */
++	    UCTRL_H2UIE |	/* ULPI intr enable */
++	    UCTRL_H2DT |	/* disable H2 TLL */
++	    UCTRL_H2PM;		/* power mask */
++
++	pr_debug("%s: success\n", __FUNCTION__);
++	usbh2_set_xcvr();	/* set transceiver type */
++	return 0;
++}
++
++static void usbh2_uninit(void)
++{
++	pr_debug("%s: \n", __FUNCTION__);
++
++	__raw_writew(PBC_BCTRL3_HSH_EN, PBC3_SET);	/* disable HSH */
++
++	gpio_usbh2_inactive();	/* release our pins */
++}
++
++static void usbh2_set_vbus_power(int on)
++{
++	pr_debug("%s: on=%d\n", __FUNCTION__, on);
++	ulpi_set_vbus_power(on, &UH2_ULPIVIEW);
++}
++
++static u64 usbh2_dmamask = ~((u32)0);
++
++static struct arc_usb_config usbh2_config = {
++	.name            = "Host 2",
++	.platform_init   = usbh2_init,
++	.platform_uninit = usbh2_uninit,
++	.set_vbus_power  = usbh2_set_vbus_power,
++	.xcvr_type       = PORTSC_PTS_ULPI,
++	.usbmode         = (u32) &UH2_USBMODE,
++	.power_budget    = 500,		/* 500 mA max power */
++};
++
++static struct resource usbh2_resources[] = {
++	{
++		.start = (u32) (USB_H2REGS_BASE),
++		.end   = (u32) (USB_H2REGS_BASE + 0x1ff),
++		.flags = IORESOURCE_MEM,
++	},
++	{
++		.start = MXC_INT_USB2,
++		.flags = IORESOURCE_IRQ,
++	},
++};
++#endif	/* CONFIG_USB_MXC_H2_PORT */
++
++#ifdef CONFIG_USB_MXC_OTG_PORT
++#ifdef CONFIG_USB_MXC_OTG_PORT_HS
++static int otg_used = 0;	/* OTG use-count */
++
++static void otg_hs_set_xcvr(void)
++{
++	u32 tmp;
++
++	/* set ULPI xcvr */
++	tmp = UOG_PORTSC1 & ~PORTSC_PTS_MASK;
++	tmp |= PORTSC_PTS_ULPI;
++	UOG_PORTSC1 = tmp;
++
++	/* need to reset the controller here so that the ID pin
++	 * is correctly detected.
++	 */
++	UOG_USBCMD |= UCMD_RESET;
++
++	/* allow controller to reset, and leave time for
++	 * the ULPI transceiver to reset too.
++	 */
++	mdelay(10);
++
++	/* Turn off the usbpll for ulpi tranceivers */
++	clk_disable(usb_clk);
++	pr_debug("%s: usb_pll usecount %d\n\n", __FUNCTION__,
++		 clk_get_usecount(usb_clk));
++}
++
++static int otg_hs_init(void)
++{
++	if (!otg_used) {
++		pr_debug("%s: grab OTG-HS pins\n", __FUNCTION__);
++
++		/* enable OTG/HS */
++		clk_enable(usb_clk);
++		pr_debug("%s: usb_clk usecount %d\n\n", __FUNCTION__,
++			 clk_get_usecount(usb_clk));
++		__raw_writew(PBC_BCTRL3_OTG_HS_EN, PBC3_CLEAR);
++
++		gpio_usbotg_hs_active();	/* grab our pins */
++		mdelay(1);
++
++		USBCTRL &= ~UCTRL_BPE;	/* disable bypass mode */
++		USBCTRL |= UCTRL_OUIE |	/* ULPI intr enable */
++		    UCTRL_OWIE |	/* OTG wakeup intr enable */
++		    UCTRL_OPM;	/* power mask */
++
++		otg_hs_set_xcvr();	/* set transciever type */
++	}
++
++	isp1504_set(ID_PULL_UP, ISP1504_OTGCTL, &UOG_ULPIVIEW);
++#ifdef DEBUG
++	if (!(isp1504_read(ISP1504_OTGCTL, &UOG_ULPIVIEW) & ID_PULL_UP)) {
++		printk(KERN_ERR "ID_PULL_UP not set in OTGCTL!!\n");
++	}
++#endif
++
++	otg_used++;
++	return 0;
++}
++
++static void otg_hs_uninit(void)
++{
++	pr_debug("%s: \n", __FUNCTION__);
++
++	otg_used--;
++	if (!otg_used) {
++		/* disable  OTG/HS */
++		__raw_writew(PBC_BCTRL3_OTG_HS_EN, PBC3_SET);
++
++		pr_debug("%s: free OTG-HS pins\n", __FUNCTION__);
++		gpio_usbotg_hs_inactive();	/* release our pins */
++	}
++}
++
++static void otg_hs_set_vbus_power(int on)
++{
++	pr_debug("%s: on=%d\n", __FUNCTION__, on);
++	ulpi_set_vbus_power(on, &UOG_ULPIVIEW);
++}
++
++#if defined(CONFIG_USB_MXC_OTG_PORT_HOST) || \
++    defined(CONFIG_USB_MXC_OTG_PORT_OTG)
++static u64 usbotg_host_dmamask = ~((u32)0);
++
++static struct arc_usb_config usbotg_host_config = {
++	.name            = "OTG HS Host",
++	.platform_init   = otg_hs_init,
++	.platform_uninit = otg_hs_uninit,
++	.set_vbus_power  = otg_hs_set_vbus_power,
++	.xcvr_type       = PORTSC_PTS_ULPI,
++	.usbmode         = (u32) &UOG_USBMODE,
++	.does_otg        = 1,
++	.power_budget    = 500,		/* 500 mA max power */
++};
++#endif	/* CONFIG_USB_MXC_OTG_PORT_HOST || CONFIG_USB_MXC_OTG_PORT_OTG */
++
++#if defined(CONFIG_USB_MXC_OTG_PORT_GADGET) || \
++    defined(CONFIG_USB_MXC_OTG_PORT_OTG)
++static u64 udc_dmamask = ~((u32)0);
++
++static struct arc_usb_config udc_config = {
++	.name            = "OTG HS Gadget",
++	.platform_init   = otg_hs_init,
++	.platform_uninit = otg_hs_uninit,
++	.set_vbus_power  = otg_hs_set_vbus_power,
++	.xcvr_type       = PORTSC_PTS_ULPI,
++	.usbmode         = (u32) &UOG_USBMODE,
++};
++#endif	/* CONFIG_USB_MXC_OTG_PORT_GADGET || CONFIG_USB_MXC_OTG_PORT_OTG */
++#endif	/* CONFIG_USB_MXC_OTG_PORT_HS */
++
++#ifdef CONFIG_USB_MXC_OTG_PORT_FS
++static void otg_fs_set_xcvr(void)
++{
++	u32 tmp;
++
++	tmp = UOG_PORTSC1 & ~PORTSC_PTS_MASK;
++	tmp |= PORTSC_PTS_SERIAL;
++	UOG_PORTSC1 = tmp;
++}
++
++#if defined(CONFIG_USB_MXC_OTG_PORT_HOST) || \
++    defined(CONFIG_USB_MXC_OTG_PORT_OTG)
++static int otg_fs_host_init(void)
++{
++	pr_debug("%s: grab OTG-FS pins\n", __FUNCTION__);
++	clk_enable(usb_clk);
++	pr_debug("%s: usb_clk usecount %d\n\n", __FUNCTION__,
++		 clk_get_usecount(usb_clk));
++
++	isp1301_init();
++
++	isp1301_set_serial_host();
++	gpio_usbotg_fs_active();	/* grab our pins */
++	mdelay(1);
++
++	/* enable OTG VBUS */
++	__raw_writew(PBC_BCTRL3_OTG_VBUS_EN, PBC3_CLEAR);
++
++	otg_fs_set_xcvr();	/* set transceiver type */
++
++	USBCTRL &= ~(UCTRL_OSIC_MASK | UCTRL_BPE);	/* disable bypass mode */
++	USBCTRL |= UCTRL_OSIC_SU6 |	/* single-ended, unidir, 6 wire */
++	    UCTRL_OWIE |	/* OTG wakeup intr enable */
++	    UCTRL_OPM;		/* power mask */
++
++	/* need reset */
++	UOG_USBCMD |= UCMD_RESET;
++	mdelay(10);
++
++	return 0;
++}
++
++static void otg_fs_host_uninit(void)
++{
++	pr_debug("%s: \n", __FUNCTION__);
++
++	__raw_writew(PBC_BCTRL3_OTG_VBUS_EN, PBC3_SET);	/* disable OTG VBUS */
++
++	isp1301_uninit();
++
++	gpio_usbotg_fs_inactive();	/* release our pins */
++	clk_disable(usb_clk);
++	pr_debug("%s: usb_clk usecount %d\n\n", __FUNCTION__,
++		 clk_get_usecount(usb_clk));
++}
++
++static u64 usbotg_host_dmamask = ~((u32)0);
++
++static struct arc_usb_config usbotg_host_config = {
++	.name            = "OTG FS Host",
++	.platform_init   = otg_fs_host_init,
++	.platform_uninit = otg_fs_host_uninit,
++	.set_vbus_power  = isp1301_set_vbus_power,
++	.xcvr_type       = PORTSC_PTS_SERIAL,
++	.usbmode         = (u32) &UOG_USBMODE,
++	.does_otg        = 1,
++	.power_budget    = 500,		/* 500 mA max power */
++};
++#endif	/* CONFIG_USB_MXC_OTG_PORT_HOST || CONFIG_USB_MXC_OTG_PORT_OTG */
++
++#if defined(CONFIG_USB_MXC_OTG_PORT_GADGET) || \
++    defined(CONFIG_USB_MXC_OTG_PORT_OTG)
++int otg_fs_dev_init(void)
++{
++	pr_debug("%s: grab OTG-FS pins\n", __FUNCTION__);
++
++	clk_enable(usb_clk);
++	pr_debug("%s: usb_clk usecount %d\n\n", __FUNCTION__,
++		 clk_get_usecount(usb_clk));
++
++	isp1301_init();
++
++	isp1301_set_serial_dev();
++	gpio_usbotg_fs_active();	/* grab our pins */
++	mdelay(1);
++
++	/* disable OTG VBUS */
++	__raw_writew(PBC_BCTRL3_OTG_VBUS_EN, PBC3_SET);
++
++	otg_fs_set_xcvr();	/* set transceiver type */
++
++	USBCTRL &= ~(UCTRL_OSIC_MASK | UCTRL_BPE);	/* disable bypass */
++	USBCTRL |= UCTRL_OSIC_DU6 |	/* differential, unidir, 6 wire */
++	    UCTRL_OWIE |	/* OTG wakeup intr enable */
++	    UCTRL_OPM;		/* power mask */
++
++	USB_OTG_MIRROR = 0xd;
++	return 0;
++}
++
++static void otg_fs_dev_uninit(void)
++{
++	pr_debug("%s: \n", __FUNCTION__);
++
++	/* disable OTG VBUS */
++	__raw_writew(PBC_BCTRL3_OTG_VBUS_EN, PBC3_SET);
++
++	isp1301_uninit();
++	gpio_usbotg_fs_inactive();	/* release our pins */
++	clk_disable(usb_clk);
++	pr_debug("%s: usb_clk usecount %d\n\n", __FUNCTION__,
++		 clk_get_usecount(usb_clk));
++}
++
++static u64 udc_dmamask = ~((u32)0);
++
++static struct arc_usb_config udc_config = {
++	.name            = "OTG FS Gadget",
++	.platform_init   = otg_fs_dev_init,
++	.platform_uninit = otg_fs_dev_uninit,
++	.set_vbus_power  = isp1301_set_vbus_power,
++	.xcvr_type       = PORTSC_PTS_SERIAL,
++	.usbmode         = (u32) &UOG_USBMODE,
++};
++#endif	/* CONFIG_USB_MXC_OTG_PORT_GADGET || CONFIG_USB_MXC_OTG_PORT_OTG */
++#endif	/* CONFIG_USB_MXC_OTG_PORT_FS */
++
++#ifdef CONFIG_USB_MXC_OTG_PORT_OTG
++static struct otg_transceiver *xceiv;
++
++struct otg_transceiver *otg_get_transceiver(void)
++{
++	pr_debug("%s xceiv=0x%p\n\n", __FUNCTION__, xceiv);
++	if (xceiv)
++		get_device(xceiv->dev);
++	return xceiv;
++}
++EXPORT_SYMBOL(otg_get_transceiver);
++
++int otg_set_transceiver(struct otg_transceiver *x)
++{
++	pr_debug("%s xceiv=0x%p  x=0x%p\n\n", __FUNCTION__, xceiv, x);
++	if (xceiv && x)
++		return -EBUSY;
++	xceiv = x;
++	return 0;
++}
++EXPORT_SYMBOL(otg_set_transceiver);
++
++static struct arc_xcvr_config isp1504_config = {
++	.name            = "isp1504",
++	.platform_init   = otg_hs_init,
++	.platform_uninit = otg_hs_uninit,
++	.regs            = (void *)&UOG_ID,
++};
++
++static struct resource isp1504_resources[] = {
++	{
++		.start = MXC_INT_USB3,
++		.flags = IORESOURCE_IRQ,
++	},
++};
++
++static u64 isp1504_dmamask = ~((u32)0);
++#endif	/* CONFIG_USB_MXC_OTG_PORT_OTG */
++
++static struct resource otg_resources[] = {
++	{
++		.start = (u32) (USB_OTGREGS_BASE),
++		.end   = (u32) (USB_OTGREGS_BASE + 0x1ff),
++		.flags = IORESOURCE_MEM,
++	},
++	{
++		.start = MXC_INT_USB3,
++		.flags = IORESOURCE_IRQ,
++	},
++};
++#endif	/* CONFIG_USB_MXC_OTG_PORT */
++
++static struct platform_device mxcusb_devices[] = {
++#ifdef CONFIG_USB_MXC_H1_PORT
++	{
++	 .name = "arc-ehci",
++	 .id = 0,
++	 .dev = {
++		.dma_mask = &usbh1_dmamask,
++		.coherent_dma_mask = ~((u32)0),
++		.platform_data = &usbh1_config,
++	 },
++	 .num_resources = ARRAY_SIZE(usbh1_resources),
++	 .resource = usbh1_resources,
++	},
++#endif
++#ifdef CONFIG_USB_MXC_H2_PORT
++	{
++	 .name = "arc-ehci",
++	 .id = 1,
++	 .dev = {
++		.dma_mask = &usbh2_dmamask,
++		.coherent_dma_mask = ~((u32)0),
++		.platform_data = &usbh2_config,
++	 },
++	 .num_resources = ARRAY_SIZE(usbh2_resources),
++	 .resource = usbh2_resources,
++	},
++#endif
++#if defined(CONFIG_USB_MXC_OTG_PORT_HOST) || \
++    defined(CONFIG_USB_MXC_OTG_PORT_OTG)
++	{
++	 .name = "arc-ehci",
++	 .id = 2,
++	 .dev = {
++		.dma_mask = &usbotg_host_dmamask,
++		.coherent_dma_mask = ~((u32)0),
++		.platform_data = &usbotg_host_config,
++	 },
++	 .num_resources = ARRAY_SIZE(otg_resources),
++	 .resource = otg_resources,
++	},
++#endif
++#if defined(CONFIG_USB_MXC_OTG_PORT_GADGET) || \
++    defined(CONFIG_USB_MXC_OTG_PORT_OTG)
++	{
++	 .name = "arc_udc",
++	 .id   = -1,
++	 .dev  = {
++		.dma_mask          = &udc_dmamask,
++		.coherent_dma_mask = ~((u32)0),
++		.platform_data     = &udc_config,
++		},
++	 .num_resources = ARRAY_SIZE(otg_resources),
++	 .resource      = otg_resources,
++	},
++#endif
++#ifdef CONFIG_USB_MXC_OTG_PORT_OTG
++	{
++	 .name = "isp1504_arc",
++	 .id   = -1,
++	 .dev  = {
++		.dma_mask          = &isp1504_dmamask,
++		.coherent_dma_mask = ~((u32)0),
++		.platform_data     = &isp1504_config,
++		},
++	 .num_resources = ARRAY_SIZE(isp1504_resources),
++	 .resource      = isp1504_resources,
++	},
++#endif
++};
++
++static int __init mx27_usb_init(void)
++{
++	int i, res;
++
++	if (check_usbclk() != 0)
++		return -EINVAL;
++
++	for (i = 0; i < ARRAY_SIZE(mxcusb_devices); i++) {
++		struct platform_device *pdev = &mxcusb_devices[i];
++		res = platform_device_register(pdev);
++		if (res) {
++			dev_err(&(pdev->dev), "unable to register device\n");
++			for(; i >= 0; i--)
++				platform_device_unregister(&mxcusb_devices[i]);
++			return res;
++		}
++	}
++
++	return 0;
++}
++
++arch_initcall(mx27_usb_init);
+Index: linux-2.6.18/include/asm-arm/arch-mxc/isp1301.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/isp1301.h
+@@ -0,0 +1,73 @@
++
++/*
++ * Copyright 2005-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++#ifndef __ASM_ARCH_MXC_ISP1301_H__
++#define __ASM_ARCH_MXC_ISP1301_H__
++
++/* ISP1301 register addresses,all register of ISP1301
++ * is one-byte length register
++ */
++
++/* ISP1301: I2C device address */
++#define ISP1301_DEV_ADDR 		0x2D
++
++/* ISP 1301 register set*/
++#define ISP1301_MODE_REG1_SET		0x04
++#define ISP1301_MODE_REG1_CLR		0x05
++
++#define ISP1301_CTRL_REG1_SET		0x06
++#define ISP1301_CTRL_REG1_CLR		0x07
++
++#define ISP1301_INT_SRC_REG		0x08
++#define ISP1301_INT_LAT_REG_SET		0x0a
++#define ISP1301_INT_LAT_REG_CLR		0x0b
++#define ISP1301_INT_FALSE_REG_SET	0x0c
++#define ISP1301_INT_FALSE_REG_CLR	0x0d
++#define ISP1301_INT_TRUE_REG_SET	0x0e
++#define ISP1301_INT_TRUE_REG_CLR	0x0f
++
++#define ISP1301_CTRL_REG2_SET		0x10
++#define ISP1301_CTRL_REG2_CLR		0x11
++
++#define ISP1301_MODE_REG2_SET		0x12
++#define ISP1301_MODE_REG2_CLR		0x13
++
++#define ISP1301_BCD_DEV_REG0		0x14
++#define ISP1301_BCD_DEV_REG1		0x15
++
++/* OTG Control register bit description */
++#define DP_PULLUP			0x01
++#define DM_PULLUP			0x02
++#define DP_PULLDOWN			0x04
++#define DM_PULLDOWN			0x08
++#define ID_PULLDOWN			0x10
++#define VBUS_DRV			0x20
++#define VBUS_DISCHRG			0x40
++#define VBUS_CHRG			0x80
++
++/* Mode Control 1 register bit description */
++#define SPEED_REG  			0x01
++#define SUSPEND_REG			0x02
++#define DAT_SE0				0x04
++#define TRANSP_EN			0x08
++#define BDIS_ACON_EN			0x10
++#define OE_INT_EN			0x20
++#define UART_EN				0x40
++
++void isp1301_set_vbus_power(int on);
++void isp1301_set_serial_dev(void);
++void isp1301_set_serial_host(void);
++void isp1301_init(void);
++void isp1301_uninit(void);
++
++#endif
+Index: linux-2.6.18/mvl_patches/pro50-0120.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0120.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(120);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

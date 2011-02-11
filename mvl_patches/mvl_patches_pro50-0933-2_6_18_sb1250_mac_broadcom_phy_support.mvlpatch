@@ -1,0 +1,478 @@
+#! /usr/bin/env bash
+# Patch: -2_6_18_sb1250_mac_broadcom_phy_support
+# Date: Wed Mar  5 16:43:43 2008
+# Source: Maciej W. Rozycki <macro@linux-mips.org>
+# MR: 26854
+# Type: Enhancement
+# Disposition: backport from 2.6.20-rc1 (c4b41c9f077392803cd548000f3a2312dcd4a122)
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# 
+# commit c4b41c9f077392803cd548000f3a2312dcd4a122
+# Author: Maciej W. Rozycki <macro@linux-mips.org>
+# Date:   Tue Oct 3 16:18:13 2006 +0100
+# 
+#     [PATCH] 2.6.18: sb1250-mac: Broadcom PHY support
+#     
+#      This patch adds support for interrupt-driven operation of the Broadcom
+#     Gigabit Ethernet PHYs.  I have included device IDs for the parts used on
+#     Broadcom SiByte evaluation boards; more can be added as a need arises.
+#     They are apparently generally software-compatible with one another.
+#     
+#     Signed-off-by: Maciej W. Rozycki <macro@linux-mips.org>
+#     
+#     patch-mips-2.6.18-20060920-broadcom-phy-15
+#     Signed-off-by: Jeff Garzik <jeff@garzik.org>
+# 
+#  drivers/net/phy/Kconfig    |    6 ++
+#  drivers/net/phy/Makefile   |    1 
+#  drivers/net/phy/broadcom.c |  175 ++++++++++++++++++++++++++++++++++++++++++++
+#  3 files changed, 182 insertions(+), 0 deletions(-)
+# 
+
+PATCHNUM=933
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Maciej W. Rozycki <macro@linux-mips.org>
+MR: 26854
+Type: Enhancement
+Disposition: backport from 2.6.20-rc1 (c4b41c9f077392803cd548000f3a2312dcd4a122)
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+
+commit c4b41c9f077392803cd548000f3a2312dcd4a122
+Author: Maciej W. Rozycki <macro@linux-mips.org>
+Date:   Tue Oct 3 16:18:13 2006 +0100
+
+    [PATCH] 2.6.18: sb1250-mac: Broadcom PHY support
+    
+     This patch adds support for interrupt-driven operation of the Broadcom
+    Gigabit Ethernet PHYs.  I have included device IDs for the parts used on
+    Broadcom SiByte evaluation boards; more can be added as a need arises.
+    They are apparently generally software-compatible with one another.
+    
+    Signed-off-by: Maciej W. Rozycki <macro@linux-mips.org>
+    
+    patch-mips-2.6.18-20060920-broadcom-phy-15
+    Signed-off-by: Jeff Garzik <jeff@garzik.org>
+
+ drivers/net/phy/Kconfig    |    6 +
+ drivers/net/phy/Makefile   |    1 
+ drivers/net/phy/broadcom.c |  175 +++++++++++++++++++++++++++++++++++++++++++++
+ mvl_patches/pro50-0933.c   |   16 ++++
+ 4 files changed, 198 insertions(+)
+
+Index: linux-2.6.18/drivers/net/phy/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/net/phy/Kconfig
++++ linux-2.6.18/drivers/net/phy/Kconfig
+@@ -62,6 +62,12 @@ config ICPLUS_PHY
+ 	---help---
+ 	  Currently supports the IP175C PHY.
+ 
++config BROADCOM_PHY
++	tristate "Drivers for Broadcom PHYs"
++	depends on PHYLIB
++	---help---
++	  Currently supports the BCM5411, BCM5421 and BCM5461 PHYs.
++
+ config FIXED_PHY
+ 	tristate "Drivers for PHY emulation on fixed speed/link"
+ 	depends on PHYLIB
+Index: linux-2.6.18/drivers/net/phy/Makefile
+===================================================================
+--- linux-2.6.18.orig/drivers/net/phy/Makefile
++++ linux-2.6.18/drivers/net/phy/Makefile
+@@ -10,5 +10,6 @@ obj-$(CONFIG_LXT_PHY)		+= lxt.o
+ obj-$(CONFIG_QSEMI_PHY)		+= qsemi.o
+ obj-$(CONFIG_SMSC_PHY)		+= smsc.o
+ obj-$(CONFIG_VITESSE_PHY)	+= vitesse.o
++obj-$(CONFIG_BROADCOM_PHY)	+= broadcom.o
+ obj-$(CONFIG_FIXED_PHY)		+= fixed.o
+ obj-$(CONFIG_ICPLUS_PHY)	+= icplus.o
+Index: linux-2.6.18/drivers/net/phy/broadcom.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/net/phy/broadcom.c
+@@ -0,0 +1,175 @@
++/*
++ *	drivers/net/phy/broadcom.c
++ *
++ *	Broadcom BCM5411, BCM5421 and BCM5461 Gigabit Ethernet
++ *	transceivers.
++ *
++ *	Copyright (c) 2006  Maciej W. Rozycki
++ *
++ *	Inspired by code written by Amy Fong.
++ *
++ *	This program is free software; you can redistribute it and/or
++ *	modify it under the terms of the GNU General Public License
++ *	as published by the Free Software Foundation; either version
++ *	2 of the License, or (at your option) any later version.
++ */
++
++#include <linux/module.h>
++#include <linux/phy.h>
++
++#define MII_BCM54XX_ECR		0x10	/* BCM54xx extended control register */
++#define MII_BCM54XX_ECR_IM	0x1000	/* Interrupt mask */
++#define MII_BCM54XX_ECR_IF	0x0800	/* Interrupt force */
++
++#define MII_BCM54XX_ESR		0x11	/* BCM54xx extended status register */
++#define MII_BCM54XX_ESR_IS	0x1000	/* Interrupt status */
++
++#define MII_BCM54XX_ISR		0x1a	/* BCM54xx interrupt status register */
++#define MII_BCM54XX_IMR		0x1b	/* BCM54xx interrupt mask register */
++#define MII_BCM54XX_INT_CRCERR	0x0001	/* CRC error */
++#define MII_BCM54XX_INT_LINK	0x0002	/* Link status changed */
++#define MII_BCM54XX_INT_SPEED	0x0004	/* Link speed change */
++#define MII_BCM54XX_INT_DUPLEX	0x0008	/* Duplex mode changed */
++#define MII_BCM54XX_INT_LRS	0x0010	/* Local receiver status changed */
++#define MII_BCM54XX_INT_RRS	0x0020	/* Remote receiver status changed */
++#define MII_BCM54XX_INT_SSERR	0x0040	/* Scrambler synchronization error */
++#define MII_BCM54XX_INT_UHCD	0x0080	/* Unsupported HCD negotiated */
++#define MII_BCM54XX_INT_NHCD	0x0100	/* No HCD */
++#define MII_BCM54XX_INT_NHCDL	0x0200	/* No HCD link */
++#define MII_BCM54XX_INT_ANPR	0x0400	/* Auto-negotiation page received */
++#define MII_BCM54XX_INT_LC	0x0800	/* All counters below 128 */
++#define MII_BCM54XX_INT_HC	0x1000	/* Counter above 32768 */
++#define MII_BCM54XX_INT_MDIX	0x2000	/* MDIX status change */
++#define MII_BCM54XX_INT_PSERR	0x4000	/* Pair swap error */
++
++MODULE_DESCRIPTION("Broadcom PHY driver");
++MODULE_AUTHOR("Maciej W. Rozycki");
++MODULE_LICENSE("GPL");
++
++static int bcm54xx_config_init(struct phy_device *phydev)
++{
++	int reg, err;
++
++	reg = phy_read(phydev, MII_BCM54XX_ECR);
++	if (reg < 0)
++		return reg;
++
++	/* Mask interrupts globally.  */
++	reg |= MII_BCM54XX_ECR_IM;
++	err = phy_write(phydev, MII_BCM54XX_ECR, reg);
++	if (err < 0)
++		return err;
++
++	/* Unmask events we are interested in.  */
++	reg = ~(MII_BCM54XX_INT_DUPLEX |
++		MII_BCM54XX_INT_SPEED |
++		MII_BCM54XX_INT_LINK);
++	err = phy_write(phydev, MII_BCM54XX_IMR, reg);
++	if (err < 0)
++		return err;
++	return 0;
++}
++
++static int bcm54xx_ack_interrupt(struct phy_device *phydev)
++{
++	int reg;
++
++	/* Clear pending interrupts.  */
++	reg = phy_read(phydev, MII_BCM54XX_ISR);
++	if (reg < 0)
++		return reg;
++
++	return 0;
++}
++
++static int bcm54xx_config_intr(struct phy_device *phydev)
++{
++	int reg, err;
++
++	reg = phy_read(phydev, MII_BCM54XX_ECR);
++	if (reg < 0)
++		return reg;
++
++	if (phydev->interrupts == PHY_INTERRUPT_ENABLED)
++		reg &= ~MII_BCM54XX_ECR_IM;
++	else
++		reg |= MII_BCM54XX_ECR_IM;
++
++	err = phy_write(phydev, MII_BCM54XX_ECR, reg);
++	return err;
++}
++
++static struct phy_driver bcm5411_driver = {
++	.phy_id		= 0x00206070,
++	.phy_id_mask	= 0xfffffff0,
++	.name		= "Broadcom BCM5411",
++	.features	= PHY_GBIT_FEATURES,
++	.flags		= PHY_HAS_MAGICANEG | PHY_HAS_INTERRUPT,
++	.config_init	= bcm54xx_config_init,
++	.config_aneg	= genphy_config_aneg,
++	.read_status	= genphy_read_status,
++	.ack_interrupt	= bcm54xx_ack_interrupt,
++	.config_intr	= bcm54xx_config_intr,
++	.driver 	= { .owner = THIS_MODULE },
++};
++
++static struct phy_driver bcm5421_driver = {
++	.phy_id		= 0x002060e0,
++	.phy_id_mask	= 0xfffffff0,
++	.name		= "Broadcom BCM5421",
++	.features	= PHY_GBIT_FEATURES,
++	.flags		= PHY_HAS_MAGICANEG | PHY_HAS_INTERRUPT,
++	.config_init	= bcm54xx_config_init,
++	.config_aneg	= genphy_config_aneg,
++	.read_status	= genphy_read_status,
++	.ack_interrupt	= bcm54xx_ack_interrupt,
++	.config_intr	= bcm54xx_config_intr,
++	.driver 	= { .owner = THIS_MODULE },
++};
++
++static struct phy_driver bcm5461_driver = {
++	.phy_id		= 0x002060c0,
++	.phy_id_mask	= 0xfffffff0,
++	.name		= "Broadcom BCM5461",
++	.features	= PHY_GBIT_FEATURES,
++	.flags		= PHY_HAS_MAGICANEG | PHY_HAS_INTERRUPT,
++	.config_init	= bcm54xx_config_init,
++	.config_aneg	= genphy_config_aneg,
++	.read_status	= genphy_read_status,
++	.ack_interrupt	= bcm54xx_ack_interrupt,
++	.config_intr	= bcm54xx_config_intr,
++	.driver 	= { .owner = THIS_MODULE },
++};
++
++static int __init broadcom_init(void)
++{
++	int ret;
++
++	ret = phy_driver_register(&bcm5411_driver);
++	if (ret)
++		goto out_5411;
++	ret = phy_driver_register(&bcm5421_driver);
++	if (ret)
++		goto out_5421;
++	ret = phy_driver_register(&bcm5461_driver);
++	if (ret)
++		goto out_5461;
++	return ret;
++
++out_5461:
++	phy_driver_unregister(&bcm5421_driver);
++out_5421:
++	phy_driver_unregister(&bcm5411_driver);
++out_5411:
++	return ret;
++}
++
++static void __exit broadcom_exit(void)
++{
++	phy_driver_unregister(&bcm5461_driver);
++	phy_driver_unregister(&bcm5421_driver);
++	phy_driver_unregister(&bcm5411_driver);
++}
++
++module_init(broadcom_init);
++module_exit(broadcom_exit);
+Index: linux-2.6.18/mvl_patches/pro50-0933.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0933.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(933);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

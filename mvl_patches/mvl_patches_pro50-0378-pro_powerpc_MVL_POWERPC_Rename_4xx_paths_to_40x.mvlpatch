@@ -1,0 +1,3122 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_MVL_POWERPC_Rename_4xx_paths_to_40x
+# Date: Wed Sep 26 11:18:41 2007
+# MR: 24856
+# Adjustments:
+#     arch/powerpc/mm/Makefile and arch/powerpc/platforms/4xx/Kconfig changed
+# From 15f6527e8e63e793f8ab1ddce4ed3c487ebd0d42 Mon Sep 17 00:00:00 2001
+# From: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+# Date: Mon, 20 Aug 2007 07:27:07 -0500
+# Subject: [PATCH] [POWERPC] Rename 4xx paths to 40x
+# 
+# 4xx is a bit of a misnomer for certain things, as they really apply to PowerPC
+# 40x only.  Rename some of the files to clean this up.
+# 
+# Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+# Acked-by: David Gibson <david@gibson.dropbear.id.au>
+
+PATCHNUM=378
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+Adjustments:
+    arch/powerpc/mm/Makefile and arch/powerpc/platforms/4xx/Kconfig changed
+From 15f6527e8e63e793f8ab1ddce4ed3c487ebd0d42 Mon Sep 17 00:00:00 2001
+From: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+Date: Mon, 20 Aug 2007 07:27:07 -0500
+Subject: [PATCH] [POWERPC] Rename 4xx paths to 40x
+
+4xx is a bit of a misnomer for certain things, as they really apply to PowerPC
+40x only.  Rename some of the files to clean this up.
+
+Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+Acked-by: David Gibson <david@gibson.dropbear.id.au>
+Index: linux-2.6.18/arch/powerpc/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/Makefile
++++ linux-2.6.18/arch/powerpc/Makefile
+@@ -122,7 +122,7 @@ CFLAGS += $(cpu-as-y)
+ head-y				:= arch/powerpc/kernel/head_32.o
+ head-$(CONFIG_PPC64)		:= arch/powerpc/kernel/head_64.o
+ head-$(CONFIG_8xx)		:= arch/powerpc/kernel/head_8xx.o
+-head-$(CONFIG_4xx)		:= arch/powerpc/kernel/head_4xx.o
++head-$(CONFIG_40x)		:= arch/powerpc/kernel/head_40x.o
+ head-$(CONFIG_44x)		:= arch/powerpc/kernel/head_44x.o
+ head-$(CONFIG_FSL_BOOKE)	:= arch/powerpc/kernel/head_fsl_booke.o
+ 
+Index: linux-2.6.18/arch/powerpc/kernel/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/Makefile
++++ linux-2.6.18/arch/powerpc/kernel/Makefile
+@@ -43,7 +43,7 @@ ifeq ($(CONFIG_PPC_MERGE),y)
+ 
+ extra-$(CONFIG_PPC_STD_MMU)	:= head_32.o
+ extra-$(CONFIG_PPC64)		:= head_64.o
+-extra-$(CONFIG_40x)		:= head_4xx.o
++extra-$(CONFIG_40x)		:= head_40x.o
+ extra-$(CONFIG_44x)		:= head_44x.o
+ extra-$(CONFIG_FSL_BOOKE)	:= head_fsl_booke.o
+ extra-$(CONFIG_8xx)		:= head_8xx.o
+Index: linux-2.6.18/arch/powerpc/kernel/head_40x.S
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/kernel/head_40x.S
+@@ -0,0 +1,1021 @@
++/*
++ *    Copyright (c) 1995-1996 Gary Thomas <gdt@linuxppc.org>
++ *      Initial PowerPC version.
++ *    Copyright (c) 1996 Cort Dougan <cort@cs.nmt.edu>
++ *      Rewritten for PReP
++ *    Copyright (c) 1996 Paul Mackerras <paulus@cs.anu.edu.au>
++ *      Low-level exception handers, MMU support, and rewrite.
++ *    Copyright (c) 1997 Dan Malek <dmalek@jlc.net>
++ *      PowerPC 8xx modifications.
++ *    Copyright (c) 1998-1999 TiVo, Inc.
++ *      PowerPC 403GCX modifications.
++ *    Copyright (c) 1999 Grant Erickson <grant@lcse.umn.edu>
++ *      PowerPC 403GCX/405GP modifications.
++ *    Copyright 2000 MontaVista Software Inc.
++ *	PPC405 modifications
++ *      PowerPC 403GCX/405GP modifications.
++ * 	Author: MontaVista Software, Inc.
++ *         	frank_rowand@mvista.com or source@mvista.com
++ * 	   	debbie_chu@mvista.com
++ *
++ *
++ *    Module name: head_4xx.S
++ *
++ *    Description:
++ *      Kernel execution entry point code.
++ *
++ *    This program is free software; you can redistribute it and/or
++ *    modify it under the terms of the GNU General Public License
++ *    as published by the Free Software Foundation; either version
++ *    2 of the License, or (at your option) any later version.
++ *
++ */
++
++#include <asm/processor.h>
++#include <asm/page.h>
++#include <asm/mmu.h>
++#include <asm/pgtable.h>
++#include <asm/ibm4xx.h>
++#include <asm/cputable.h>
++#include <asm/thread_info.h>
++#include <asm/ppc_asm.h>
++#include <asm/asm-offsets.h>
++
++/* As with the other PowerPC ports, it is expected that when code
++ * execution begins here, the following registers contain valid, yet
++ * optional, information:
++ *
++ *   r3 - Board info structure pointer (DRAM, frequency, MAC address, etc.)
++ *   r4 - Starting address of the init RAM disk
++ *   r5 - Ending address of the init RAM disk
++ *   r6 - Start of kernel command line string (e.g. "mem=96m")
++ *   r7 - End of kernel command line string
++ *
++ * This is all going to change RSN when we add bi_recs.......  -- Dan
++ */
++	.text
++_GLOBAL(_stext)
++_GLOBAL(_start)
++
++	/* Save parameters we are passed.
++	*/
++	mr	r31,r3
++	mr	r30,r4
++	mr	r29,r5
++	mr	r28,r6
++	mr	r27,r7
++
++	/* We have to turn on the MMU right away so we get cache modes
++	 * set correctly.
++	 */
++	bl	initial_mmu
++
++/* We now have the lower 16 Meg mapped into TLB entries, and the caches
++ * ready to work.
++ */
++turn_on_mmu:
++	lis	r0,MSR_KERNEL@h
++	ori	r0,r0,MSR_KERNEL@l
++	mtspr	SPRN_SRR1,r0
++	lis	r0,start_here@h
++	ori	r0,r0,start_here@l
++	mtspr	SPRN_SRR0,r0
++	SYNC
++	rfi				/* enables MMU */
++	b	.			/* prevent prefetch past rfi */
++
++/*
++ * This area is used for temporarily saving registers during the
++ * critical exception prolog.
++ */
++	. = 0xc0
++crit_save:
++_GLOBAL(crit_r10)
++	.space	4
++_GLOBAL(crit_r11)
++	.space	4
++
++/*
++ * Exception vector entry code. This code runs with address translation
++ * turned off (i.e. using physical addresses). We assume SPRG3 has the
++ * physical address of the current task thread_struct.
++ * Note that we have to have decremented r1 before we write to any fields
++ * of the exception frame, since a critical interrupt could occur at any
++ * time, and it will write to the area immediately below the current r1.
++ */
++#define NORMAL_EXCEPTION_PROLOG						     \
++	mtspr	SPRN_SPRG0,r10;		/* save two registers to work with */\
++	mtspr	SPRN_SPRG1,r11;						     \
++	mtspr	SPRN_SPRG2,r1;						     \
++	mfcr	r10;			/* save CR in r10 for now	   */\
++	mfspr	r11,SPRN_SRR1;		/* check whether user or kernel    */\
++	andi.	r11,r11,MSR_PR;						     \
++	beq	1f;							     \
++	mfspr	r1,SPRN_SPRG3;		/* if from user, start at top of   */\
++	lwz	r1,THREAD_INFO-THREAD(r1); /* this thread's kernel stack   */\
++	addi	r1,r1,THREAD_SIZE;					     \
++1:	subi	r1,r1,INT_FRAME_SIZE;	/* Allocate an exception frame     */\
++	tophys(r11,r1);							     \
++	stw	r10,_CCR(r11);          /* save various registers	   */\
++	stw	r12,GPR12(r11);						     \
++	stw	r9,GPR9(r11);						     \
++	mfspr	r10,SPRN_SPRG0;						     \
++	stw	r10,GPR10(r11);						     \
++	mfspr	r12,SPRN_SPRG1;						     \
++	stw	r12,GPR11(r11);						     \
++	mflr	r10;							     \
++	stw	r10,_LINK(r11);						     \
++	mfspr	r10,SPRN_SPRG2;						     \
++	mfspr	r12,SPRN_SRR0;						     \
++	stw	r10,GPR1(r11);						     \
++	mfspr	r9,SPRN_SRR1;						     \
++	stw	r10,0(r11);						     \
++	rlwinm	r9,r9,0,14,12;		/* clear MSR_WE (necessary?)	   */\
++	stw	r0,GPR0(r11);						     \
++	SAVE_4GPRS(3, r11);						     \
++	SAVE_2GPRS(7, r11)
++
++/*
++ * Exception prolog for critical exceptions.  This is a little different
++ * from the normal exception prolog above since a critical exception
++ * can potentially occur at any point during normal exception processing.
++ * Thus we cannot use the same SPRG registers as the normal prolog above.
++ * Instead we use a couple of words of memory at low physical addresses.
++ * This is OK since we don't support SMP on these processors.
++ */
++#define CRITICAL_EXCEPTION_PROLOG					     \
++	stw	r10,crit_r10@l(0);	/* save two registers to work with */\
++	stw	r11,crit_r11@l(0);					     \
++	mfcr	r10;			/* save CR in r10 for now	   */\
++	mfspr	r11,SPRN_SRR3;		/* check whether user or kernel    */\
++	andi.	r11,r11,MSR_PR;						     \
++	lis	r11,critical_stack_top@h;				     \
++	ori	r11,r11,critical_stack_top@l;				     \
++	beq	1f;							     \
++	/* COMING FROM USER MODE */					     \
++	mfspr	r11,SPRN_SPRG3;		/* if from user, start at top of   */\
++	lwz	r11,THREAD_INFO-THREAD(r11); /* this thread's kernel stack */\
++	addi	r11,r11,THREAD_SIZE;					     \
++1:	subi	r11,r11,INT_FRAME_SIZE;	/* Allocate an exception frame     */\
++	tophys(r11,r11);						     \
++	stw	r10,_CCR(r11);          /* save various registers	   */\
++	stw	r12,GPR12(r11);						     \
++	stw	r9,GPR9(r11);						     \
++	mflr	r10;							     \
++	stw	r10,_LINK(r11);						     \
++	mfspr	r12,SPRN_DEAR;		/* save DEAR and ESR in the frame  */\
++	stw	r12,_DEAR(r11);		/* since they may have had stuff   */\
++	mfspr	r9,SPRN_ESR;		/* in them at the point where the  */\
++	stw	r9,_ESR(r11);		/* exception was taken		   */\
++	mfspr	r12,SPRN_SRR2;						     \
++	stw	r1,GPR1(r11);						     \
++	mfspr	r9,SPRN_SRR3;						     \
++	stw	r1,0(r11);						     \
++	tovirt(r1,r11);							     \
++	rlwinm	r9,r9,0,14,12;		/* clear MSR_WE (necessary?)	   */\
++	stw	r0,GPR0(r11);						     \
++	SAVE_4GPRS(3, r11);						     \
++	SAVE_2GPRS(7, r11)
++
++	/*
++	 * State at this point:
++	 * r9 saved in stack frame, now saved SRR3 & ~MSR_WE
++	 * r10 saved in crit_r10 and in stack frame, trashed
++	 * r11 saved in crit_r11 and in stack frame,
++	 *	now phys stack/exception frame pointer
++	 * r12 saved in stack frame, now saved SRR2
++	 * CR saved in stack frame, CR0.EQ = !SRR3.PR
++	 * LR, DEAR, ESR in stack frame
++	 * r1 saved in stack frame, now virt stack/excframe pointer
++	 * r0, r3-r8 saved in stack frame
++	 */
++
++/*
++ * Exception vectors.
++ */
++#define	START_EXCEPTION(n, label)					     \
++	. = n;								     \
++label:
++
++#define EXCEPTION(n, label, hdlr, xfer)				\
++	START_EXCEPTION(n, label);				\
++	NORMAL_EXCEPTION_PROLOG;				\
++	addi	r3,r1,STACK_FRAME_OVERHEAD;			\
++	xfer(n, hdlr)
++
++#define CRITICAL_EXCEPTION(n, label, hdlr)			\
++	START_EXCEPTION(n, label);				\
++	CRITICAL_EXCEPTION_PROLOG;				\
++	addi	r3,r1,STACK_FRAME_OVERHEAD;			\
++	EXC_XFER_TEMPLATE(hdlr, n+2, (MSR_KERNEL & ~(MSR_ME|MSR_DE|MSR_CE)), \
++			  NOCOPY, crit_transfer_to_handler,	\
++			  ret_from_crit_exc)
++
++#define EXC_XFER_TEMPLATE(hdlr, trap, msr, copyee, tfer, ret)	\
++	li	r10,trap;					\
++	stw	r10,_TRAP(r11);					\
++	lis	r10,msr@h;					\
++	ori	r10,r10,msr@l;					\
++	copyee(r10, r9);					\
++	bl	tfer;		 				\
++	.long	hdlr;						\
++	.long	ret
++
++#define COPY_EE(d, s)		rlwimi d,s,0,16,16
++#define NOCOPY(d, s)
++
++#define EXC_XFER_STD(n, hdlr)		\
++	EXC_XFER_TEMPLATE(hdlr, n, MSR_KERNEL, NOCOPY, transfer_to_handler_full, \
++			  ret_from_except_full)
++
++#define EXC_XFER_LITE(n, hdlr)		\
++	EXC_XFER_TEMPLATE(hdlr, n+1, MSR_KERNEL, NOCOPY, transfer_to_handler, \
++			  ret_from_except)
++
++#define EXC_XFER_EE(n, hdlr)		\
++	EXC_XFER_TEMPLATE(hdlr, n, MSR_KERNEL, COPY_EE, transfer_to_handler_full, \
++			  ret_from_except_full)
++
++#define EXC_XFER_EE_LITE(n, hdlr)	\
++	EXC_XFER_TEMPLATE(hdlr, n+1, MSR_KERNEL, COPY_EE, transfer_to_handler, \
++			  ret_from_except)
++
++
++/*
++ * 0x0100 - Critical Interrupt Exception
++ */
++	CRITICAL_EXCEPTION(0x0100, CriticalInterrupt, unknown_exception)
++
++/*
++ * 0x0200 - Machine Check Exception
++ */
++	CRITICAL_EXCEPTION(0x0200, MachineCheck, machine_check_exception)
++
++/*
++ * 0x0300 - Data Storage Exception
++ * This happens for just a few reasons.  U0 set (but we don't do that),
++ * or zone protection fault (user violation, write to protected page).
++ * If this is just an update of modified status, we do that quickly
++ * and exit.  Otherwise, we call heavywight functions to do the work.
++ */
++	START_EXCEPTION(0x0300,	DataStorage)
++	mtspr	SPRN_SPRG0, r10		/* Save some working registers */
++	mtspr	SPRN_SPRG1, r11
++#ifdef CONFIG_403GCX
++	stw     r12, 0(r0)
++	stw     r9, 4(r0)
++	mfcr    r11
++	mfspr   r12, SPRN_PID
++	stw     r11, 8(r0)
++	stw     r12, 12(r0)
++#else
++	mtspr	SPRN_SPRG4, r12
++	mtspr	SPRN_SPRG5, r9
++	mfcr	r11
++	mfspr	r12, SPRN_PID
++	mtspr	SPRN_SPRG7, r11
++	mtspr	SPRN_SPRG6, r12
++#endif
++
++	/* First, check if it was a zone fault (which means a user
++	* tried to access a kernel or read-protected page - always
++	* a SEGV).  All other faults here must be stores, so no
++	* need to check ESR_DST as well. */
++	mfspr	r10, SPRN_ESR
++	andis.	r10, r10, ESR_DIZ@h
++	bne	2f
++
++	mfspr	r10, SPRN_DEAR		/* Get faulting address */
++
++	/* If we are faulting a kernel address, we have to use the
++	 * kernel page tables.
++	 */
++	lis	r11, TASK_SIZE@h
++	cmplw	r10, r11
++	blt+	3f
++	lis	r11, swapper_pg_dir@h
++	ori	r11, r11, swapper_pg_dir@l
++	li	r9, 0
++	mtspr	SPRN_PID, r9		/* TLB will have 0 TID */
++	b	4f
++
++	/* Get the PGD for the current thread.
++	 */
++3:
++	mfspr	r11,SPRN_SPRG3
++	lwz	r11,PGDIR(r11)
++4:
++	tophys(r11, r11)
++	rlwimi	r11, r10, 12, 20, 29	/* Create L1 (pgdir/pmd) address */
++	lwz	r11, 0(r11)		/* Get L1 entry */
++	rlwinm.	r12, r11, 0, 0, 19	/* Extract L2 (pte) base address */
++	beq	2f			/* Bail if no table */
++
++	rlwimi	r12, r10, 22, 20, 29	/* Compute PTE address */
++	lwz	r11, 0(r12)		/* Get Linux PTE */
++
++	andi.	r9, r11, _PAGE_RW	/* Is it writeable? */
++	beq	2f			/* Bail if not */
++
++	/* Update 'changed'.
++	*/
++	ori	r11, r11, _PAGE_DIRTY|_PAGE_ACCESSED|_PAGE_HWWRITE
++	stw	r11, 0(r12)		/* Update Linux page table */
++
++	/* Most of the Linux PTE is ready to load into the TLB LO.
++	 * We set ZSEL, where only the LS-bit determines user access.
++	 * We set execute, because we don't have the granularity to
++	 * properly set this at the page level (Linux problem).
++	 * If shared is set, we cause a zero PID->TID load.
++	 * Many of these bits are software only.  Bits we don't set
++	 * here we (properly should) assume have the appropriate value.
++	 */
++	li	r12, 0x0ce2
++	andc	r11, r11, r12		/* Make sure 20, 21 are zero */
++
++	/* find the TLB index that caused the fault.  It has to be here.
++	*/
++	tlbsx	r9, 0, r10
++
++	tlbwe	r11, r9, TLB_DATA		/* Load TLB LO */
++
++	/* Done...restore registers and get out of here.
++	*/
++#ifdef CONFIG_403GCX
++	lwz     r12, 12(r0)
++	lwz     r11, 8(r0)
++	mtspr   SPRN_PID, r12
++	mtcr    r11
++	lwz     r9, 4(r0)
++	lwz     r12, 0(r0)
++#else
++	mfspr	r12, SPRN_SPRG6
++	mfspr	r11, SPRN_SPRG7
++	mtspr	SPRN_PID, r12
++	mtcr	r11
++	mfspr	r9, SPRN_SPRG5
++	mfspr	r12, SPRN_SPRG4
++#endif
++	mfspr	r11, SPRN_SPRG1
++	mfspr	r10, SPRN_SPRG0
++	PPC405_ERR77_SYNC
++	rfi			/* Should sync shadow TLBs */
++	b	.		/* prevent prefetch past rfi */
++
++2:
++	/* The bailout.  Restore registers to pre-exception conditions
++	 * and call the heavyweights to help us out.
++	 */
++#ifdef CONFIG_403GCX
++	lwz     r12, 12(r0)
++	lwz     r11, 8(r0)
++	mtspr   SPRN_PID, r12
++	mtcr    r11
++	lwz     r9, 4(r0)
++	lwz     r12, 0(r0)
++#else
++	mfspr	r12, SPRN_SPRG6
++	mfspr	r11, SPRN_SPRG7
++	mtspr	SPRN_PID, r12
++	mtcr	r11
++	mfspr	r9, SPRN_SPRG5
++	mfspr	r12, SPRN_SPRG4
++#endif
++	mfspr	r11, SPRN_SPRG1
++	mfspr	r10, SPRN_SPRG0
++	b	DataAccess
++
++/*
++ * 0x0400 - Instruction Storage Exception
++ * This is caused by a fetch from non-execute or guarded pages.
++ */
++	START_EXCEPTION(0x0400, InstructionAccess)
++	NORMAL_EXCEPTION_PROLOG
++	mr	r4,r12			/* Pass SRR0 as arg2 */
++	li	r5,0			/* Pass zero as arg3 */
++	EXC_XFER_EE_LITE(0x400, handle_page_fault)
++
++/* 0x0500 - External Interrupt Exception */
++	EXCEPTION(0x0500, HardwareInterrupt, do_IRQ, EXC_XFER_LITE)
++
++/* 0x0600 - Alignment Exception */
++	START_EXCEPTION(0x0600, Alignment)
++	NORMAL_EXCEPTION_PROLOG
++	mfspr	r4,SPRN_DEAR		/* Grab the DEAR and save it */
++	stw	r4,_DEAR(r11)
++	addi	r3,r1,STACK_FRAME_OVERHEAD
++	EXC_XFER_EE(0x600, alignment_exception)
++
++/* 0x0700 - Program Exception */
++	START_EXCEPTION(0x0700, ProgramCheck)
++	NORMAL_EXCEPTION_PROLOG
++	mfspr	r4,SPRN_ESR		/* Grab the ESR and save it */
++	stw	r4,_ESR(r11)
++	addi	r3,r1,STACK_FRAME_OVERHEAD
++	EXC_XFER_STD(0x700, program_check_exception)
++
++	EXCEPTION(0x0800, Trap_08, unknown_exception, EXC_XFER_EE)
++	EXCEPTION(0x0900, Trap_09, unknown_exception, EXC_XFER_EE)
++	EXCEPTION(0x0A00, Trap_0A, unknown_exception, EXC_XFER_EE)
++	EXCEPTION(0x0B00, Trap_0B, unknown_exception, EXC_XFER_EE)
++
++/* 0x0C00 - System Call Exception */
++	START_EXCEPTION(0x0C00,	SystemCall)
++	NORMAL_EXCEPTION_PROLOG
++	EXC_XFER_EE_LITE(0xc00, DoSyscall)
++
++	EXCEPTION(0x0D00, Trap_0D, unknown_exception, EXC_XFER_EE)
++	EXCEPTION(0x0E00, Trap_0E, unknown_exception, EXC_XFER_EE)
++	EXCEPTION(0x0F00, Trap_0F, unknown_exception, EXC_XFER_EE)
++
++/* 0x1000 - Programmable Interval Timer (PIT) Exception */
++	START_EXCEPTION(0x1000, Decrementer)
++	NORMAL_EXCEPTION_PROLOG
++	lis	r0,TSR_PIS@h
++	mtspr	SPRN_TSR,r0		/* Clear the PIT exception */
++	addi	r3,r1,STACK_FRAME_OVERHEAD
++	EXC_XFER_LITE(0x1000, timer_interrupt)
++
++#if 0
++/* NOTE:
++ * FIT and WDT handlers are not implemented yet.
++ */
++
++/* 0x1010 - Fixed Interval Timer (FIT) Exception
++*/
++	STND_EXCEPTION(0x1010,	FITException,		unknown_exception)
++
++/* 0x1020 - Watchdog Timer (WDT) Exception
++*/
++#ifdef CONFIG_BOOKE_WDT
++	CRITICAL_EXCEPTION(0x1020, WDTException, WatchdogException)
++#else
++	CRITICAL_EXCEPTION(0x1020, WDTException, unknown_exception)
++#endif
++#endif
++
++/* 0x1100 - Data TLB Miss Exception
++ * As the name implies, translation is not in the MMU, so search the
++ * page tables and fix it.  The only purpose of this function is to
++ * load TLB entries from the page table if they exist.
++ */
++	START_EXCEPTION(0x1100,	DTLBMiss)
++	mtspr	SPRN_SPRG0, r10		/* Save some working registers */
++	mtspr	SPRN_SPRG1, r11
++#ifdef CONFIG_403GCX
++	stw     r12, 0(r0)
++	stw     r9, 4(r0)
++	mfcr    r11
++	mfspr   r12, SPRN_PID
++	stw     r11, 8(r0)
++	stw     r12, 12(r0)
++#else
++	mtspr	SPRN_SPRG4, r12
++	mtspr	SPRN_SPRG5, r9
++	mfcr	r11
++	mfspr	r12, SPRN_PID
++	mtspr	SPRN_SPRG7, r11
++	mtspr	SPRN_SPRG6, r12
++#endif
++	mfspr	r10, SPRN_DEAR		/* Get faulting address */
++
++	/* If we are faulting a kernel address, we have to use the
++	 * kernel page tables.
++	 */
++	lis	r11, TASK_SIZE@h
++	cmplw	r10, r11
++	blt+	3f
++	lis	r11, swapper_pg_dir@h
++	ori	r11, r11, swapper_pg_dir@l
++	li	r9, 0
++	mtspr	SPRN_PID, r9		/* TLB will have 0 TID */
++	b	4f
++
++	/* Get the PGD for the current thread.
++	 */
++3:
++	mfspr	r11,SPRN_SPRG3
++	lwz	r11,PGDIR(r11)
++4:
++	tophys(r11, r11)
++	rlwimi	r11, r10, 12, 20, 29	/* Create L1 (pgdir/pmd) address */
++	lwz	r12, 0(r11)		/* Get L1 entry */
++	andi.	r9, r12, _PMD_PRESENT	/* Check if it points to a PTE page */
++	beq	2f			/* Bail if no table */
++
++	rlwimi	r12, r10, 22, 20, 29	/* Compute PTE address */
++	lwz	r11, 0(r12)		/* Get Linux PTE */
++	andi.	r9, r11, _PAGE_PRESENT
++	beq	5f
++
++	ori	r11, r11, _PAGE_ACCESSED
++	stw	r11, 0(r12)
++
++	/* Create TLB tag.  This is the faulting address plus a static
++	 * set of bits.  These are size, valid, E, U0.
++	*/
++	li	r12, 0x00c0
++	rlwimi	r10, r12, 0, 20, 31
++
++	b	finish_tlb_load
++
++2:	/* Check for possible large-page pmd entry */
++	rlwinm.	r9, r12, 2, 22, 24
++	beq	5f
++
++	/* Create TLB tag.  This is the faulting address, plus a static
++	 * set of bits (valid, E, U0) plus the size from the PMD.
++	 */
++	ori	r9, r9, 0x40
++	rlwimi	r10, r9, 0, 20, 31
++	mr	r11, r12
++
++	b	finish_tlb_load
++
++5:
++	/* The bailout.  Restore registers to pre-exception conditions
++	 * and call the heavyweights to help us out.
++	 */
++#ifdef CONFIG_403GCX
++	lwz     r12, 12(r0)
++	lwz     r11, 8(r0)
++	mtspr   SPRN_PID, r12
++	mtcr    r11
++	lwz     r9, 4(r0)
++	lwz     r12, 0(r0)
++#else
++	mfspr	r12, SPRN_SPRG6
++	mfspr	r11, SPRN_SPRG7
++	mtspr	SPRN_PID, r12
++	mtcr	r11
++	mfspr	r9, SPRN_SPRG5
++	mfspr	r12, SPRN_SPRG4
++#endif
++	mfspr	r11, SPRN_SPRG1
++	mfspr	r10, SPRN_SPRG0
++	b	DataAccess
++
++/* 0x1200 - Instruction TLB Miss Exception
++ * Nearly the same as above, except we get our information from different
++ * registers and bailout to a different point.
++ */
++	START_EXCEPTION(0x1200,	ITLBMiss)
++	mtspr	SPRN_SPRG0, r10		/* Save some working registers */
++	mtspr	SPRN_SPRG1, r11
++#ifdef CONFIG_403GCX
++	stw     r12, 0(r0)
++	stw     r9, 4(r0)
++	mfcr    r11
++	mfspr   r12, SPRN_PID
++	stw     r11, 8(r0)
++	stw     r12, 12(r0)
++#else
++	mtspr	SPRN_SPRG4, r12
++	mtspr	SPRN_SPRG5, r9
++	mfcr	r11
++	mfspr	r12, SPRN_PID
++	mtspr	SPRN_SPRG7, r11
++	mtspr	SPRN_SPRG6, r12
++#endif
++	mfspr	r10, SPRN_SRR0		/* Get faulting address */
++
++	/* If we are faulting a kernel address, we have to use the
++	 * kernel page tables.
++	 */
++	lis	r11, TASK_SIZE@h
++	cmplw	r10, r11
++	blt+	3f
++	lis	r11, swapper_pg_dir@h
++	ori	r11, r11, swapper_pg_dir@l
++	li	r9, 0
++	mtspr	SPRN_PID, r9		/* TLB will have 0 TID */
++	b	4f
++
++	/* Get the PGD for the current thread.
++	 */
++3:
++	mfspr	r11,SPRN_SPRG3
++	lwz	r11,PGDIR(r11)
++4:
++	tophys(r11, r11)
++	rlwimi	r11, r10, 12, 20, 29	/* Create L1 (pgdir/pmd) address */
++	lwz	r12, 0(r11)		/* Get L1 entry */
++	andi.	r9, r12, _PMD_PRESENT	/* Check if it points to a PTE page */
++	beq	2f			/* Bail if no table */
++
++	rlwimi	r12, r10, 22, 20, 29	/* Compute PTE address */
++	lwz	r11, 0(r12)		/* Get Linux PTE */
++	andi.	r9, r11, _PAGE_PRESENT
++	beq	5f
++
++	ori	r11, r11, _PAGE_ACCESSED
++	stw	r11, 0(r12)
++
++	/* Create TLB tag.  This is the faulting address plus a static
++	 * set of bits.  These are size, valid, E, U0.
++	*/
++	li	r12, 0x00c0
++	rlwimi	r10, r12, 0, 20, 31
++
++	b	finish_tlb_load
++
++2:	/* Check for possible large-page pmd entry */
++	rlwinm.	r9, r12, 2, 22, 24
++	beq	5f
++
++	/* Create TLB tag.  This is the faulting address, plus a static
++	 * set of bits (valid, E, U0) plus the size from the PMD.
++	 */
++	ori	r9, r9, 0x40
++	rlwimi	r10, r9, 0, 20, 31
++	mr	r11, r12
++
++	b	finish_tlb_load
++
++5:
++	/* The bailout.  Restore registers to pre-exception conditions
++	 * and call the heavyweights to help us out.
++	 */
++#ifdef CONFIG_403GCX
++	lwz     r12, 12(r0)
++	lwz     r11, 8(r0)
++	mtspr   SPRN_PID, r12
++	mtcr    r11
++	lwz     r9, 4(r0)
++	lwz     r12, 0(r0)
++#else
++	mfspr	r12, SPRN_SPRG6
++	mfspr	r11, SPRN_SPRG7
++	mtspr	SPRN_PID, r12
++	mtcr	r11
++	mfspr	r9, SPRN_SPRG5
++	mfspr	r12, SPRN_SPRG4
++#endif
++	mfspr	r11, SPRN_SPRG1
++	mfspr	r10, SPRN_SPRG0
++	b	InstructionAccess
++
++	EXCEPTION(0x1300, Trap_13, unknown_exception, EXC_XFER_EE)
++	EXCEPTION(0x1400, Trap_14, unknown_exception, EXC_XFER_EE)
++	EXCEPTION(0x1500, Trap_15, unknown_exception, EXC_XFER_EE)
++	EXCEPTION(0x1600, Trap_16, unknown_exception, EXC_XFER_EE)
++#ifdef CONFIG_IBM405_ERR51
++	/* 405GP errata 51 */
++	START_EXCEPTION(0x1700, Trap_17)
++	b DTLBMiss
++#else
++	EXCEPTION(0x1700, Trap_17, unknown_exception, EXC_XFER_EE)
++#endif
++	EXCEPTION(0x1800, Trap_18, unknown_exception, EXC_XFER_EE)
++	EXCEPTION(0x1900, Trap_19, unknown_exception, EXC_XFER_EE)
++	EXCEPTION(0x1A00, Trap_1A, unknown_exception, EXC_XFER_EE)
++	EXCEPTION(0x1B00, Trap_1B, unknown_exception, EXC_XFER_EE)
++	EXCEPTION(0x1C00, Trap_1C, unknown_exception, EXC_XFER_EE)
++	EXCEPTION(0x1D00, Trap_1D, unknown_exception, EXC_XFER_EE)
++	EXCEPTION(0x1E00, Trap_1E, unknown_exception, EXC_XFER_EE)
++	EXCEPTION(0x1F00, Trap_1F, unknown_exception, EXC_XFER_EE)
++
++/* Check for a single step debug exception while in an exception
++ * handler before state has been saved.  This is to catch the case
++ * where an instruction that we are trying to single step causes
++ * an exception (eg ITLB/DTLB miss) and thus the first instruction of
++ * the exception handler generates a single step debug exception.
++ *
++ * If we get a debug trap on the first instruction of an exception handler,
++ * we reset the MSR_DE in the _exception handler's_ MSR (the debug trap is
++ * a critical exception, so we are using SPRN_CSRR1 to manipulate the MSR).
++ * The exception handler was handling a non-critical interrupt, so it will
++ * save (and later restore) the MSR via SPRN_SRR1, which will still have
++ * the MSR_DE bit set.
++ */
++	/* 0x2000 - Debug Exception */
++	START_EXCEPTION(0x2000, DebugTrap)
++	CRITICAL_EXCEPTION_PROLOG
++
++	/*
++	 * If this is a single step or branch-taken exception in an
++	 * exception entry sequence, it was probably meant to apply to
++	 * the code where the exception occurred (since exception entry
++	 * doesn't turn off DE automatically).  We simulate the effect
++	 * of turning off DE on entry to an exception handler by turning
++	 * off DE in the SRR3 value and clearing the debug status.
++	 */
++	mfspr	r10,SPRN_DBSR		/* check single-step/branch taken */
++	andis.	r10,r10,DBSR_IC@h
++	beq+	2f
++
++	andi.	r10,r9,MSR_IR|MSR_PR	/* check supervisor + MMU off */
++	beq	1f			/* branch and fix it up */
++
++	mfspr   r10,SPRN_SRR2		/* Faulting instruction address */
++	cmplwi  r10,0x2100
++	bgt+    2f			/* address above exception vectors */
++
++	/* here it looks like we got an inappropriate debug exception. */
++1:	rlwinm	r9,r9,0,~MSR_DE		/* clear DE in the SRR3 value */
++	lis	r10,DBSR_IC@h		/* clear the IC event */
++	mtspr	SPRN_DBSR,r10
++	/* restore state and get out */
++	lwz	r10,_CCR(r11)
++	lwz	r0,GPR0(r11)
++	lwz	r1,GPR1(r11)
++	mtcrf	0x80,r10
++	mtspr	SPRN_SRR2,r12
++	mtspr	SPRN_SRR3,r9
++	lwz	r9,GPR9(r11)
++	lwz	r12,GPR12(r11)
++	lwz	r10,crit_r10@l(0)
++	lwz	r11,crit_r11@l(0)
++	PPC405_ERR77_SYNC
++	rfci
++	b	.
++
++	/* continue normal handling for a critical exception... */
++2:	mfspr	r4,SPRN_DBSR
++	addi	r3,r1,STACK_FRAME_OVERHEAD
++	EXC_XFER_TEMPLATE(DebugException, 0x2002, \
++		(MSR_KERNEL & ~(MSR_ME|MSR_DE|MSR_CE)), \
++		NOCOPY, crit_transfer_to_handler, ret_from_crit_exc)
++
++/*
++ * The other Data TLB exceptions bail out to this point
++ * if they can't resolve the lightweight TLB fault.
++ */
++DataAccess:
++	NORMAL_EXCEPTION_PROLOG
++	mfspr	r5,SPRN_ESR		/* Grab the ESR, save it, pass arg3 */
++	stw	r5,_ESR(r11)
++	mfspr	r4,SPRN_DEAR		/* Grab the DEAR, save it, pass arg2 */
++	EXC_XFER_EE_LITE(0x300, handle_page_fault)
++
++/* Other PowerPC processors, namely those derived from the 6xx-series
++ * have vectors from 0x2100 through 0x2F00 defined, but marked as reserved.
++ * However, for the 4xx-series processors these are neither defined nor
++ * reserved.
++ */
++
++	/* Damn, I came up one instruction too many to fit into the
++	 * exception space :-).  Both the instruction and data TLB
++	 * miss get to this point to load the TLB.
++	 * 	r10 - TLB_TAG value
++	 * 	r11 - Linux PTE
++	 *	r12, r9 - avilable to use
++	 *	PID - loaded with proper value when we get here
++	 *	Upon exit, we reload everything and RFI.
++	 * Actually, it will fit now, but oh well.....a common place
++	 * to load the TLB.
++	 */
++tlb_4xx_index:
++	.long	0
++finish_tlb_load:
++	/* load the next available TLB index.
++	*/
++	lwz	r9, tlb_4xx_index@l(0)
++	addi	r9, r9, 1
++	andi.	r9, r9, (PPC4XX_TLB_SIZE-1)
++	stw	r9, tlb_4xx_index@l(0)
++
++6:
++	/*
++	 * Clear out the software-only bits in the PTE to generate the
++	 * TLB_DATA value.  These are the bottom 2 bits of the RPM, the
++	 * top 3 bits of the zone field, and M.
++	 */
++	li	r12, 0x0ce2
++	andc	r11, r11, r12
++
++	tlbwe	r11, r9, TLB_DATA		/* Load TLB LO */
++	tlbwe	r10, r9, TLB_TAG		/* Load TLB HI */
++
++	/* Done...restore registers and get out of here.
++	*/
++#ifdef CONFIG_403GCX
++	lwz     r12, 12(r0)
++	lwz     r11, 8(r0)
++	mtspr   SPRN_PID, r12
++	mtcr    r11
++	lwz     r9, 4(r0)
++	lwz     r12, 0(r0)
++#else
++	mfspr	r12, SPRN_SPRG6
++	mfspr	r11, SPRN_SPRG7
++	mtspr	SPRN_PID, r12
++	mtcr	r11
++	mfspr	r9, SPRN_SPRG5
++	mfspr	r12, SPRN_SPRG4
++#endif
++	mfspr	r11, SPRN_SPRG1
++	mfspr	r10, SPRN_SPRG0
++	PPC405_ERR77_SYNC
++	rfi			/* Should sync shadow TLBs */
++	b	.		/* prevent prefetch past rfi */
++
++/* extern void giveup_fpu(struct task_struct *prev)
++ *
++ * The PowerPC 4xx family of processors do not have an FPU, so this just
++ * returns.
++ */
++_GLOBAL(giveup_fpu)
++	blr
++
++/* This is where the main kernel code starts.
++ */
++start_here:
++
++	/* ptr to current */
++	lis	r2,init_task@h
++	ori	r2,r2,init_task@l
++
++	/* ptr to phys current thread */
++	tophys(r4,r2)
++	addi	r4,r4,THREAD	/* init task's THREAD */
++	mtspr	SPRN_SPRG3,r4
++
++	/* stack */
++	lis	r1,init_thread_union@ha
++	addi	r1,r1,init_thread_union@l
++	li	r0,0
++	stwu	r0,THREAD_SIZE-STACK_FRAME_OVERHEAD(r1)
++
++	bl	early_init	/* We have to do this with MMU on */
++
++/*
++ * Decide what sort of machine this is and initialize the MMU.
++ */
++	mr	r3,r31
++	mr	r4,r30
++	mr	r5,r29
++	mr	r6,r28
++	mr	r7,r27
++	bl	machine_init
++	bl	MMU_init
++
++/* Go back to running unmapped so we can load up new values
++ * and change to using our exception vectors.
++ * On the 4xx, all we have to do is invalidate the TLB to clear
++ * the old 16M byte TLB mappings.
++ */
++	lis	r4,2f@h
++	ori	r4,r4,2f@l
++	tophys(r4,r4)
++	lis	r3,(MSR_KERNEL & ~(MSR_IR|MSR_DR))@h
++	ori	r3,r3,(MSR_KERNEL & ~(MSR_IR|MSR_DR))@l
++	mtspr	SPRN_SRR0,r4
++	mtspr	SPRN_SRR1,r3
++	rfi
++	b	.		/* prevent prefetch past rfi */
++
++/* Load up the kernel context */
++2:
++	sync			/* Flush to memory before changing TLB */
++	tlbia
++	isync			/* Flush shadow TLBs */
++
++	/* set up the PTE pointers for the Abatron bdiGDB.
++	*/
++	lis	r6, swapper_pg_dir@h
++	ori	r6, r6, swapper_pg_dir@l
++	lis	r5, abatron_pteptrs@h
++	ori	r5, r5, abatron_pteptrs@l
++	stw	r5, 0xf0(r0)	/* Must match your Abatron config file */
++	tophys(r5,r5)
++	stw	r6, 0(r5)
++
++/* Now turn on the MMU for real! */
++	lis	r4,MSR_KERNEL@h
++	ori	r4,r4,MSR_KERNEL@l
++	lis	r3,start_kernel@h
++	ori	r3,r3,start_kernel@l
++	mtspr	SPRN_SRR0,r3
++	mtspr	SPRN_SRR1,r4
++	rfi			/* enable MMU and jump to start_kernel */
++	b	.		/* prevent prefetch past rfi */
++
++/* Set up the initial MMU state so we can do the first level of
++ * kernel initialization.  This maps the first 16 MBytes of memory 1:1
++ * virtual to physical and more importantly sets the cache mode.
++ */
++initial_mmu:
++	tlbia			/* Invalidate all TLB entries */
++	isync
++
++	/* We should still be executing code at physical address 0x0000xxxx
++	 * at this point. However, start_here is at virtual address
++	 * 0xC000xxxx. So, set up a TLB mapping to cover this once
++	 * translation is enabled.
++	 */
++
++	lis	r3,KERNELBASE@h		/* Load the kernel virtual address */
++	ori	r3,r3,KERNELBASE@l
++	tophys(r4,r3)			/* Load the kernel physical address */
++
++	iccci	r0,r3			/* Invalidate the i-cache before use */
++
++	/* Load the kernel PID.
++	*/
++	li	r0,0
++	mtspr	SPRN_PID,r0
++	sync
++
++	/* Configure and load two entries into TLB slots 62 and 63.
++	 * In case we are pinning TLBs, these are reserved in by the
++	 * other TLB functions.  If not reserving, then it doesn't
++	 * matter where they are loaded.
++	 */
++	clrrwi	r4,r4,10		/* Mask off the real page number */
++	ori	r4,r4,(TLB_WR | TLB_EX)	/* Set the write and execute bits */
++
++	clrrwi	r3,r3,10		/* Mask off the effective page number */
++	ori	r3,r3,(TLB_VALID | TLB_PAGESZ(PAGESZ_16M))
++
++        li      r0,63                    /* TLB slot 63 */
++
++	tlbwe	r4,r0,TLB_DATA		/* Load the data portion of the entry */
++	tlbwe	r3,r0,TLB_TAG		/* Load the tag portion of the entry */
++
++#if defined(CONFIG_SERIAL_TEXT_DEBUG) && defined(SERIAL_DEBUG_IO_BASE)
++
++	/* Load a TLB entry for the UART, so that ppc4xx_progress() can use
++	 * the UARTs nice and early.  We use a 4k real==virtual mapping. */
++
++	lis	r3,SERIAL_DEBUG_IO_BASE@h
++	ori	r3,r3,SERIAL_DEBUG_IO_BASE@l
++	mr	r4,r3
++	clrrwi	r4,r4,12
++	ori	r4,r4,(TLB_WR|TLB_I|TLB_M|TLB_G)
++
++	clrrwi	r3,r3,12
++	ori	r3,r3,(TLB_VALID | TLB_PAGESZ(PAGESZ_4K))
++
++	li	r0,0			/* TLB slot 0 */
++	tlbwe	r4,r0,TLB_DATA
++	tlbwe	r3,r0,TLB_TAG
++#endif /* CONFIG_SERIAL_DEBUG_TEXT && SERIAL_DEBUG_IO_BASE */
++
++	isync
++
++	/* Establish the exception vector base
++	*/
++	lis	r4,KERNELBASE@h		/* EVPR only uses the high 16-bits */
++	tophys(r0,r4)			/* Use the physical address */
++	mtspr	SPRN_EVPR,r0
++
++	blr
++
++_GLOBAL(abort)
++        mfspr   r13,SPRN_DBCR0
++        oris    r13,r13,DBCR0_RST_SYSTEM@h
++        mtspr   SPRN_DBCR0,r13
++
++_GLOBAL(set_context)
++
++#ifdef CONFIG_BDI_SWITCH
++	/* Context switch the PTE pointer for the Abatron BDI2000.
++	 * The PGDIR is the second parameter.
++	 */
++	lis	r5, KERNELBASE@h
++	lwz	r5, 0xf0(r5)
++	stw	r4, 0x4(r5)
++#endif
++	sync
++	mtspr	SPRN_PID,r3
++	isync				/* Need an isync to flush shadow */
++					/* TLBs after changing PID */
++	blr
++
++/* We put a few things here that have to be page-aligned. This stuff
++ * goes at the beginning of the data segment, which is page-aligned.
++ */
++	.data
++	.align	12
++	.globl	sdata
++sdata:
++	.globl	empty_zero_page
++empty_zero_page:
++	.space	4096
++	.globl	swapper_pg_dir
++swapper_pg_dir:
++	.space	4096
++
++
++/* Stack for handling critical exceptions from kernel mode */
++	.section .bss
++        .align 12
++exception_stack_bottom:
++	.space	4096
++critical_stack_top:
++	.globl	exception_stack_top
++exception_stack_top:
++
++/* This space gets a copy of optional info passed to us by the bootstrap
++ * which is used to pass parameters into the kernel like root=/dev/sda1, etc.
++ */
++	.globl	cmd_line
++cmd_line:
++	.space	512
++
++/* Room for two PTE pointers, usually the kernel and current user pointers
++ * to their respective root page table.
++ */
++abatron_pteptrs:
++	.space	8
+Index: linux-2.6.18/arch/powerpc/kernel/head_4xx.S
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/head_4xx.S
++++ /dev/null
+@@ -1,1021 +0,0 @@
+-/*
+- *    Copyright (c) 1995-1996 Gary Thomas <gdt@linuxppc.org>
+- *      Initial PowerPC version.
+- *    Copyright (c) 1996 Cort Dougan <cort@cs.nmt.edu>
+- *      Rewritten for PReP
+- *    Copyright (c) 1996 Paul Mackerras <paulus@cs.anu.edu.au>
+- *      Low-level exception handers, MMU support, and rewrite.
+- *    Copyright (c) 1997 Dan Malek <dmalek@jlc.net>
+- *      PowerPC 8xx modifications.
+- *    Copyright (c) 1998-1999 TiVo, Inc.
+- *      PowerPC 403GCX modifications.
+- *    Copyright (c) 1999 Grant Erickson <grant@lcse.umn.edu>
+- *      PowerPC 403GCX/405GP modifications.
+- *    Copyright 2000 MontaVista Software Inc.
+- *	PPC405 modifications
+- *      PowerPC 403GCX/405GP modifications.
+- * 	Author: MontaVista Software, Inc.
+- *         	frank_rowand@mvista.com or source@mvista.com
+- * 	   	debbie_chu@mvista.com
+- *
+- *
+- *    Module name: head_4xx.S
+- *
+- *    Description:
+- *      Kernel execution entry point code.
+- *
+- *    This program is free software; you can redistribute it and/or
+- *    modify it under the terms of the GNU General Public License
+- *    as published by the Free Software Foundation; either version
+- *    2 of the License, or (at your option) any later version.
+- *
+- */
+-
+-#include <asm/processor.h>
+-#include <asm/page.h>
+-#include <asm/mmu.h>
+-#include <asm/pgtable.h>
+-#include <asm/ibm4xx.h>
+-#include <asm/cputable.h>
+-#include <asm/thread_info.h>
+-#include <asm/ppc_asm.h>
+-#include <asm/asm-offsets.h>
+-
+-/* As with the other PowerPC ports, it is expected that when code
+- * execution begins here, the following registers contain valid, yet
+- * optional, information:
+- *
+- *   r3 - Board info structure pointer (DRAM, frequency, MAC address, etc.)
+- *   r4 - Starting address of the init RAM disk
+- *   r5 - Ending address of the init RAM disk
+- *   r6 - Start of kernel command line string (e.g. "mem=96m")
+- *   r7 - End of kernel command line string
+- *
+- * This is all going to change RSN when we add bi_recs.......  -- Dan
+- */
+-	.text
+-_GLOBAL(_stext)
+-_GLOBAL(_start)
+-
+-	/* Save parameters we are passed.
+-	*/
+-	mr	r31,r3
+-	mr	r30,r4
+-	mr	r29,r5
+-	mr	r28,r6
+-	mr	r27,r7
+-
+-	/* We have to turn on the MMU right away so we get cache modes
+-	 * set correctly.
+-	 */
+-	bl	initial_mmu
+-
+-/* We now have the lower 16 Meg mapped into TLB entries, and the caches
+- * ready to work.
+- */
+-turn_on_mmu:
+-	lis	r0,MSR_KERNEL@h
+-	ori	r0,r0,MSR_KERNEL@l
+-	mtspr	SPRN_SRR1,r0
+-	lis	r0,start_here@h
+-	ori	r0,r0,start_here@l
+-	mtspr	SPRN_SRR0,r0
+-	SYNC
+-	rfi				/* enables MMU */
+-	b	.			/* prevent prefetch past rfi */
+-
+-/*
+- * This area is used for temporarily saving registers during the
+- * critical exception prolog.
+- */
+-	. = 0xc0
+-crit_save:
+-_GLOBAL(crit_r10)
+-	.space	4
+-_GLOBAL(crit_r11)
+-	.space	4
+-
+-/*
+- * Exception vector entry code. This code runs with address translation
+- * turned off (i.e. using physical addresses). We assume SPRG3 has the
+- * physical address of the current task thread_struct.
+- * Note that we have to have decremented r1 before we write to any fields
+- * of the exception frame, since a critical interrupt could occur at any
+- * time, and it will write to the area immediately below the current r1.
+- */
+-#define NORMAL_EXCEPTION_PROLOG						     \
+-	mtspr	SPRN_SPRG0,r10;		/* save two registers to work with */\
+-	mtspr	SPRN_SPRG1,r11;						     \
+-	mtspr	SPRN_SPRG2,r1;						     \
+-	mfcr	r10;			/* save CR in r10 for now	   */\
+-	mfspr	r11,SPRN_SRR1;		/* check whether user or kernel    */\
+-	andi.	r11,r11,MSR_PR;						     \
+-	beq	1f;							     \
+-	mfspr	r1,SPRN_SPRG3;		/* if from user, start at top of   */\
+-	lwz	r1,THREAD_INFO-THREAD(r1); /* this thread's kernel stack   */\
+-	addi	r1,r1,THREAD_SIZE;					     \
+-1:	subi	r1,r1,INT_FRAME_SIZE;	/* Allocate an exception frame     */\
+-	tophys(r11,r1);							     \
+-	stw	r10,_CCR(r11);          /* save various registers	   */\
+-	stw	r12,GPR12(r11);						     \
+-	stw	r9,GPR9(r11);						     \
+-	mfspr	r10,SPRN_SPRG0;						     \
+-	stw	r10,GPR10(r11);						     \
+-	mfspr	r12,SPRN_SPRG1;						     \
+-	stw	r12,GPR11(r11);						     \
+-	mflr	r10;							     \
+-	stw	r10,_LINK(r11);						     \
+-	mfspr	r10,SPRN_SPRG2;						     \
+-	mfspr	r12,SPRN_SRR0;						     \
+-	stw	r10,GPR1(r11);						     \
+-	mfspr	r9,SPRN_SRR1;						     \
+-	stw	r10,0(r11);						     \
+-	rlwinm	r9,r9,0,14,12;		/* clear MSR_WE (necessary?)	   */\
+-	stw	r0,GPR0(r11);						     \
+-	SAVE_4GPRS(3, r11);						     \
+-	SAVE_2GPRS(7, r11)
+-
+-/*
+- * Exception prolog for critical exceptions.  This is a little different
+- * from the normal exception prolog above since a critical exception
+- * can potentially occur at any point during normal exception processing.
+- * Thus we cannot use the same SPRG registers as the normal prolog above.
+- * Instead we use a couple of words of memory at low physical addresses.
+- * This is OK since we don't support SMP on these processors.
+- */
+-#define CRITICAL_EXCEPTION_PROLOG					     \
+-	stw	r10,crit_r10@l(0);	/* save two registers to work with */\
+-	stw	r11,crit_r11@l(0);					     \
+-	mfcr	r10;			/* save CR in r10 for now	   */\
+-	mfspr	r11,SPRN_SRR3;		/* check whether user or kernel    */\
+-	andi.	r11,r11,MSR_PR;						     \
+-	lis	r11,critical_stack_top@h;				     \
+-	ori	r11,r11,critical_stack_top@l;				     \
+-	beq	1f;							     \
+-	/* COMING FROM USER MODE */					     \
+-	mfspr	r11,SPRN_SPRG3;		/* if from user, start at top of   */\
+-	lwz	r11,THREAD_INFO-THREAD(r11); /* this thread's kernel stack */\
+-	addi	r11,r11,THREAD_SIZE;					     \
+-1:	subi	r11,r11,INT_FRAME_SIZE;	/* Allocate an exception frame     */\
+-	tophys(r11,r11);						     \
+-	stw	r10,_CCR(r11);          /* save various registers	   */\
+-	stw	r12,GPR12(r11);						     \
+-	stw	r9,GPR9(r11);						     \
+-	mflr	r10;							     \
+-	stw	r10,_LINK(r11);						     \
+-	mfspr	r12,SPRN_DEAR;		/* save DEAR and ESR in the frame  */\
+-	stw	r12,_DEAR(r11);		/* since they may have had stuff   */\
+-	mfspr	r9,SPRN_ESR;		/* in them at the point where the  */\
+-	stw	r9,_ESR(r11);		/* exception was taken		   */\
+-	mfspr	r12,SPRN_SRR2;						     \
+-	stw	r1,GPR1(r11);						     \
+-	mfspr	r9,SPRN_SRR3;						     \
+-	stw	r1,0(r11);						     \
+-	tovirt(r1,r11);							     \
+-	rlwinm	r9,r9,0,14,12;		/* clear MSR_WE (necessary?)	   */\
+-	stw	r0,GPR0(r11);						     \
+-	SAVE_4GPRS(3, r11);						     \
+-	SAVE_2GPRS(7, r11)
+-
+-	/*
+-	 * State at this point:
+-	 * r9 saved in stack frame, now saved SRR3 & ~MSR_WE
+-	 * r10 saved in crit_r10 and in stack frame, trashed
+-	 * r11 saved in crit_r11 and in stack frame,
+-	 *	now phys stack/exception frame pointer
+-	 * r12 saved in stack frame, now saved SRR2
+-	 * CR saved in stack frame, CR0.EQ = !SRR3.PR
+-	 * LR, DEAR, ESR in stack frame
+-	 * r1 saved in stack frame, now virt stack/excframe pointer
+-	 * r0, r3-r8 saved in stack frame
+-	 */
+-
+-/*
+- * Exception vectors.
+- */
+-#define	START_EXCEPTION(n, label)					     \
+-	. = n;								     \
+-label:
+-
+-#define EXCEPTION(n, label, hdlr, xfer)				\
+-	START_EXCEPTION(n, label);				\
+-	NORMAL_EXCEPTION_PROLOG;				\
+-	addi	r3,r1,STACK_FRAME_OVERHEAD;			\
+-	xfer(n, hdlr)
+-
+-#define CRITICAL_EXCEPTION(n, label, hdlr)			\
+-	START_EXCEPTION(n, label);				\
+-	CRITICAL_EXCEPTION_PROLOG;				\
+-	addi	r3,r1,STACK_FRAME_OVERHEAD;			\
+-	EXC_XFER_TEMPLATE(hdlr, n+2, (MSR_KERNEL & ~(MSR_ME|MSR_DE|MSR_CE)), \
+-			  NOCOPY, crit_transfer_to_handler,	\
+-			  ret_from_crit_exc)
+-
+-#define EXC_XFER_TEMPLATE(hdlr, trap, msr, copyee, tfer, ret)	\
+-	li	r10,trap;					\
+-	stw	r10,_TRAP(r11);					\
+-	lis	r10,msr@h;					\
+-	ori	r10,r10,msr@l;					\
+-	copyee(r10, r9);					\
+-	bl	tfer;		 				\
+-	.long	hdlr;						\
+-	.long	ret
+-
+-#define COPY_EE(d, s)		rlwimi d,s,0,16,16
+-#define NOCOPY(d, s)
+-
+-#define EXC_XFER_STD(n, hdlr)		\
+-	EXC_XFER_TEMPLATE(hdlr, n, MSR_KERNEL, NOCOPY, transfer_to_handler_full, \
+-			  ret_from_except_full)
+-
+-#define EXC_XFER_LITE(n, hdlr)		\
+-	EXC_XFER_TEMPLATE(hdlr, n+1, MSR_KERNEL, NOCOPY, transfer_to_handler, \
+-			  ret_from_except)
+-
+-#define EXC_XFER_EE(n, hdlr)		\
+-	EXC_XFER_TEMPLATE(hdlr, n, MSR_KERNEL, COPY_EE, transfer_to_handler_full, \
+-			  ret_from_except_full)
+-
+-#define EXC_XFER_EE_LITE(n, hdlr)	\
+-	EXC_XFER_TEMPLATE(hdlr, n+1, MSR_KERNEL, COPY_EE, transfer_to_handler, \
+-			  ret_from_except)
+-
+-
+-/*
+- * 0x0100 - Critical Interrupt Exception
+- */
+-	CRITICAL_EXCEPTION(0x0100, CriticalInterrupt, unknown_exception)
+-
+-/*
+- * 0x0200 - Machine Check Exception
+- */
+-	CRITICAL_EXCEPTION(0x0200, MachineCheck, machine_check_exception)
+-
+-/*
+- * 0x0300 - Data Storage Exception
+- * This happens for just a few reasons.  U0 set (but we don't do that),
+- * or zone protection fault (user violation, write to protected page).
+- * If this is just an update of modified status, we do that quickly
+- * and exit.  Otherwise, we call heavywight functions to do the work.
+- */
+-	START_EXCEPTION(0x0300,	DataStorage)
+-	mtspr	SPRN_SPRG0, r10		/* Save some working registers */
+-	mtspr	SPRN_SPRG1, r11
+-#ifdef CONFIG_403GCX
+-	stw     r12, 0(r0)
+-	stw     r9, 4(r0)
+-	mfcr    r11
+-	mfspr   r12, SPRN_PID
+-	stw     r11, 8(r0)
+-	stw     r12, 12(r0)
+-#else
+-	mtspr	SPRN_SPRG4, r12
+-	mtspr	SPRN_SPRG5, r9
+-	mfcr	r11
+-	mfspr	r12, SPRN_PID
+-	mtspr	SPRN_SPRG7, r11
+-	mtspr	SPRN_SPRG6, r12
+-#endif
+-
+-	/* First, check if it was a zone fault (which means a user
+-	* tried to access a kernel or read-protected page - always
+-	* a SEGV).  All other faults here must be stores, so no
+-	* need to check ESR_DST as well. */
+-	mfspr	r10, SPRN_ESR
+-	andis.	r10, r10, ESR_DIZ@h
+-	bne	2f
+-
+-	mfspr	r10, SPRN_DEAR		/* Get faulting address */
+-
+-	/* If we are faulting a kernel address, we have to use the
+-	 * kernel page tables.
+-	 */
+-	lis	r11, TASK_SIZE@h
+-	cmplw	r10, r11
+-	blt+	3f
+-	lis	r11, swapper_pg_dir@h
+-	ori	r11, r11, swapper_pg_dir@l
+-	li	r9, 0
+-	mtspr	SPRN_PID, r9		/* TLB will have 0 TID */
+-	b	4f
+-
+-	/* Get the PGD for the current thread.
+-	 */
+-3:
+-	mfspr	r11,SPRN_SPRG3
+-	lwz	r11,PGDIR(r11)
+-4:
+-	tophys(r11, r11)
+-	rlwimi	r11, r10, 12, 20, 29	/* Create L1 (pgdir/pmd) address */
+-	lwz	r11, 0(r11)		/* Get L1 entry */
+-	rlwinm.	r12, r11, 0, 0, 19	/* Extract L2 (pte) base address */
+-	beq	2f			/* Bail if no table */
+-
+-	rlwimi	r12, r10, 22, 20, 29	/* Compute PTE address */
+-	lwz	r11, 0(r12)		/* Get Linux PTE */
+-
+-	andi.	r9, r11, _PAGE_RW	/* Is it writeable? */
+-	beq	2f			/* Bail if not */
+-
+-	/* Update 'changed'.
+-	*/
+-	ori	r11, r11, _PAGE_DIRTY|_PAGE_ACCESSED|_PAGE_HWWRITE
+-	stw	r11, 0(r12)		/* Update Linux page table */
+-
+-	/* Most of the Linux PTE is ready to load into the TLB LO.
+-	 * We set ZSEL, where only the LS-bit determines user access.
+-	 * We set execute, because we don't have the granularity to
+-	 * properly set this at the page level (Linux problem).
+-	 * If shared is set, we cause a zero PID->TID load.
+-	 * Many of these bits are software only.  Bits we don't set
+-	 * here we (properly should) assume have the appropriate value.
+-	 */
+-	li	r12, 0x0ce2
+-	andc	r11, r11, r12		/* Make sure 20, 21 are zero */
+-
+-	/* find the TLB index that caused the fault.  It has to be here.
+-	*/
+-	tlbsx	r9, 0, r10
+-
+-	tlbwe	r11, r9, TLB_DATA		/* Load TLB LO */
+-
+-	/* Done...restore registers and get out of here.
+-	*/
+-#ifdef CONFIG_403GCX
+-	lwz     r12, 12(r0)
+-	lwz     r11, 8(r0)
+-	mtspr   SPRN_PID, r12
+-	mtcr    r11
+-	lwz     r9, 4(r0)
+-	lwz     r12, 0(r0)
+-#else
+-	mfspr	r12, SPRN_SPRG6
+-	mfspr	r11, SPRN_SPRG7
+-	mtspr	SPRN_PID, r12
+-	mtcr	r11
+-	mfspr	r9, SPRN_SPRG5
+-	mfspr	r12, SPRN_SPRG4
+-#endif
+-	mfspr	r11, SPRN_SPRG1
+-	mfspr	r10, SPRN_SPRG0
+-	PPC405_ERR77_SYNC
+-	rfi			/* Should sync shadow TLBs */
+-	b	.		/* prevent prefetch past rfi */
+-
+-2:
+-	/* The bailout.  Restore registers to pre-exception conditions
+-	 * and call the heavyweights to help us out.
+-	 */
+-#ifdef CONFIG_403GCX
+-	lwz     r12, 12(r0)
+-	lwz     r11, 8(r0)
+-	mtspr   SPRN_PID, r12
+-	mtcr    r11
+-	lwz     r9, 4(r0)
+-	lwz     r12, 0(r0)
+-#else
+-	mfspr	r12, SPRN_SPRG6
+-	mfspr	r11, SPRN_SPRG7
+-	mtspr	SPRN_PID, r12
+-	mtcr	r11
+-	mfspr	r9, SPRN_SPRG5
+-	mfspr	r12, SPRN_SPRG4
+-#endif
+-	mfspr	r11, SPRN_SPRG1
+-	mfspr	r10, SPRN_SPRG0
+-	b	DataAccess
+-
+-/*
+- * 0x0400 - Instruction Storage Exception
+- * This is caused by a fetch from non-execute or guarded pages.
+- */
+-	START_EXCEPTION(0x0400, InstructionAccess)
+-	NORMAL_EXCEPTION_PROLOG
+-	mr	r4,r12			/* Pass SRR0 as arg2 */
+-	li	r5,0			/* Pass zero as arg3 */
+-	EXC_XFER_EE_LITE(0x400, handle_page_fault)
+-
+-/* 0x0500 - External Interrupt Exception */
+-	EXCEPTION(0x0500, HardwareInterrupt, do_IRQ, EXC_XFER_LITE)
+-
+-/* 0x0600 - Alignment Exception */
+-	START_EXCEPTION(0x0600, Alignment)
+-	NORMAL_EXCEPTION_PROLOG
+-	mfspr	r4,SPRN_DEAR		/* Grab the DEAR and save it */
+-	stw	r4,_DEAR(r11)
+-	addi	r3,r1,STACK_FRAME_OVERHEAD
+-	EXC_XFER_EE(0x600, alignment_exception)
+-
+-/* 0x0700 - Program Exception */
+-	START_EXCEPTION(0x0700, ProgramCheck)
+-	NORMAL_EXCEPTION_PROLOG
+-	mfspr	r4,SPRN_ESR		/* Grab the ESR and save it */
+-	stw	r4,_ESR(r11)
+-	addi	r3,r1,STACK_FRAME_OVERHEAD
+-	EXC_XFER_STD(0x700, program_check_exception)
+-
+-	EXCEPTION(0x0800, Trap_08, unknown_exception, EXC_XFER_EE)
+-	EXCEPTION(0x0900, Trap_09, unknown_exception, EXC_XFER_EE)
+-	EXCEPTION(0x0A00, Trap_0A, unknown_exception, EXC_XFER_EE)
+-	EXCEPTION(0x0B00, Trap_0B, unknown_exception, EXC_XFER_EE)
+-
+-/* 0x0C00 - System Call Exception */
+-	START_EXCEPTION(0x0C00,	SystemCall)
+-	NORMAL_EXCEPTION_PROLOG
+-	EXC_XFER_EE_LITE(0xc00, DoSyscall)
+-
+-	EXCEPTION(0x0D00, Trap_0D, unknown_exception, EXC_XFER_EE)
+-	EXCEPTION(0x0E00, Trap_0E, unknown_exception, EXC_XFER_EE)
+-	EXCEPTION(0x0F00, Trap_0F, unknown_exception, EXC_XFER_EE)
+-
+-/* 0x1000 - Programmable Interval Timer (PIT) Exception */
+-	START_EXCEPTION(0x1000, Decrementer)
+-	NORMAL_EXCEPTION_PROLOG
+-	lis	r0,TSR_PIS@h
+-	mtspr	SPRN_TSR,r0		/* Clear the PIT exception */
+-	addi	r3,r1,STACK_FRAME_OVERHEAD
+-	EXC_XFER_LITE(0x1000, timer_interrupt)
+-
+-#if 0
+-/* NOTE:
+- * FIT and WDT handlers are not implemented yet.
+- */
+-
+-/* 0x1010 - Fixed Interval Timer (FIT) Exception
+-*/
+-	STND_EXCEPTION(0x1010,	FITException,		unknown_exception)
+-
+-/* 0x1020 - Watchdog Timer (WDT) Exception
+-*/
+-#ifdef CONFIG_BOOKE_WDT
+-	CRITICAL_EXCEPTION(0x1020, WDTException, WatchdogException)
+-#else
+-	CRITICAL_EXCEPTION(0x1020, WDTException, unknown_exception)
+-#endif
+-#endif
+-
+-/* 0x1100 - Data TLB Miss Exception
+- * As the name implies, translation is not in the MMU, so search the
+- * page tables and fix it.  The only purpose of this function is to
+- * load TLB entries from the page table if they exist.
+- */
+-	START_EXCEPTION(0x1100,	DTLBMiss)
+-	mtspr	SPRN_SPRG0, r10		/* Save some working registers */
+-	mtspr	SPRN_SPRG1, r11
+-#ifdef CONFIG_403GCX
+-	stw     r12, 0(r0)
+-	stw     r9, 4(r0)
+-	mfcr    r11
+-	mfspr   r12, SPRN_PID
+-	stw     r11, 8(r0)
+-	stw     r12, 12(r0)
+-#else
+-	mtspr	SPRN_SPRG4, r12
+-	mtspr	SPRN_SPRG5, r9
+-	mfcr	r11
+-	mfspr	r12, SPRN_PID
+-	mtspr	SPRN_SPRG7, r11
+-	mtspr	SPRN_SPRG6, r12
+-#endif
+-	mfspr	r10, SPRN_DEAR		/* Get faulting address */
+-
+-	/* If we are faulting a kernel address, we have to use the
+-	 * kernel page tables.
+-	 */
+-	lis	r11, TASK_SIZE@h
+-	cmplw	r10, r11
+-	blt+	3f
+-	lis	r11, swapper_pg_dir@h
+-	ori	r11, r11, swapper_pg_dir@l
+-	li	r9, 0
+-	mtspr	SPRN_PID, r9		/* TLB will have 0 TID */
+-	b	4f
+-
+-	/* Get the PGD for the current thread.
+-	 */
+-3:
+-	mfspr	r11,SPRN_SPRG3
+-	lwz	r11,PGDIR(r11)
+-4:
+-	tophys(r11, r11)
+-	rlwimi	r11, r10, 12, 20, 29	/* Create L1 (pgdir/pmd) address */
+-	lwz	r12, 0(r11)		/* Get L1 entry */
+-	andi.	r9, r12, _PMD_PRESENT	/* Check if it points to a PTE page */
+-	beq	2f			/* Bail if no table */
+-
+-	rlwimi	r12, r10, 22, 20, 29	/* Compute PTE address */
+-	lwz	r11, 0(r12)		/* Get Linux PTE */
+-	andi.	r9, r11, _PAGE_PRESENT
+-	beq	5f
+-
+-	ori	r11, r11, _PAGE_ACCESSED
+-	stw	r11, 0(r12)
+-
+-	/* Create TLB tag.  This is the faulting address plus a static
+-	 * set of bits.  These are size, valid, E, U0.
+-	*/
+-	li	r12, 0x00c0
+-	rlwimi	r10, r12, 0, 20, 31
+-
+-	b	finish_tlb_load
+-
+-2:	/* Check for possible large-page pmd entry */
+-	rlwinm.	r9, r12, 2, 22, 24
+-	beq	5f
+-
+-	/* Create TLB tag.  This is the faulting address, plus a static
+-	 * set of bits (valid, E, U0) plus the size from the PMD.
+-	 */
+-	ori	r9, r9, 0x40
+-	rlwimi	r10, r9, 0, 20, 31
+-	mr	r11, r12
+-
+-	b	finish_tlb_load
+-
+-5:
+-	/* The bailout.  Restore registers to pre-exception conditions
+-	 * and call the heavyweights to help us out.
+-	 */
+-#ifdef CONFIG_403GCX
+-	lwz     r12, 12(r0)
+-	lwz     r11, 8(r0)
+-	mtspr   SPRN_PID, r12
+-	mtcr    r11
+-	lwz     r9, 4(r0)
+-	lwz     r12, 0(r0)
+-#else
+-	mfspr	r12, SPRN_SPRG6
+-	mfspr	r11, SPRN_SPRG7
+-	mtspr	SPRN_PID, r12
+-	mtcr	r11
+-	mfspr	r9, SPRN_SPRG5
+-	mfspr	r12, SPRN_SPRG4
+-#endif
+-	mfspr	r11, SPRN_SPRG1
+-	mfspr	r10, SPRN_SPRG0
+-	b	DataAccess
+-
+-/* 0x1200 - Instruction TLB Miss Exception
+- * Nearly the same as above, except we get our information from different
+- * registers and bailout to a different point.
+- */
+-	START_EXCEPTION(0x1200,	ITLBMiss)
+-	mtspr	SPRN_SPRG0, r10		/* Save some working registers */
+-	mtspr	SPRN_SPRG1, r11
+-#ifdef CONFIG_403GCX
+-	stw     r12, 0(r0)
+-	stw     r9, 4(r0)
+-	mfcr    r11
+-	mfspr   r12, SPRN_PID
+-	stw     r11, 8(r0)
+-	stw     r12, 12(r0)
+-#else
+-	mtspr	SPRN_SPRG4, r12
+-	mtspr	SPRN_SPRG5, r9
+-	mfcr	r11
+-	mfspr	r12, SPRN_PID
+-	mtspr	SPRN_SPRG7, r11
+-	mtspr	SPRN_SPRG6, r12
+-#endif
+-	mfspr	r10, SPRN_SRR0		/* Get faulting address */
+-
+-	/* If we are faulting a kernel address, we have to use the
+-	 * kernel page tables.
+-	 */
+-	lis	r11, TASK_SIZE@h
+-	cmplw	r10, r11
+-	blt+	3f
+-	lis	r11, swapper_pg_dir@h
+-	ori	r11, r11, swapper_pg_dir@l
+-	li	r9, 0
+-	mtspr	SPRN_PID, r9		/* TLB will have 0 TID */
+-	b	4f
+-
+-	/* Get the PGD for the current thread.
+-	 */
+-3:
+-	mfspr	r11,SPRN_SPRG3
+-	lwz	r11,PGDIR(r11)
+-4:
+-	tophys(r11, r11)
+-	rlwimi	r11, r10, 12, 20, 29	/* Create L1 (pgdir/pmd) address */
+-	lwz	r12, 0(r11)		/* Get L1 entry */
+-	andi.	r9, r12, _PMD_PRESENT	/* Check if it points to a PTE page */
+-	beq	2f			/* Bail if no table */
+-
+-	rlwimi	r12, r10, 22, 20, 29	/* Compute PTE address */
+-	lwz	r11, 0(r12)		/* Get Linux PTE */
+-	andi.	r9, r11, _PAGE_PRESENT
+-	beq	5f
+-
+-	ori	r11, r11, _PAGE_ACCESSED
+-	stw	r11, 0(r12)
+-
+-	/* Create TLB tag.  This is the faulting address plus a static
+-	 * set of bits.  These are size, valid, E, U0.
+-	*/
+-	li	r12, 0x00c0
+-	rlwimi	r10, r12, 0, 20, 31
+-
+-	b	finish_tlb_load
+-
+-2:	/* Check for possible large-page pmd entry */
+-	rlwinm.	r9, r12, 2, 22, 24
+-	beq	5f
+-
+-	/* Create TLB tag.  This is the faulting address, plus a static
+-	 * set of bits (valid, E, U0) plus the size from the PMD.
+-	 */
+-	ori	r9, r9, 0x40
+-	rlwimi	r10, r9, 0, 20, 31
+-	mr	r11, r12
+-
+-	b	finish_tlb_load
+-
+-5:
+-	/* The bailout.  Restore registers to pre-exception conditions
+-	 * and call the heavyweights to help us out.
+-	 */
+-#ifdef CONFIG_403GCX
+-	lwz     r12, 12(r0)
+-	lwz     r11, 8(r0)
+-	mtspr   SPRN_PID, r12
+-	mtcr    r11
+-	lwz     r9, 4(r0)
+-	lwz     r12, 0(r0)
+-#else
+-	mfspr	r12, SPRN_SPRG6
+-	mfspr	r11, SPRN_SPRG7
+-	mtspr	SPRN_PID, r12
+-	mtcr	r11
+-	mfspr	r9, SPRN_SPRG5
+-	mfspr	r12, SPRN_SPRG4
+-#endif
+-	mfspr	r11, SPRN_SPRG1
+-	mfspr	r10, SPRN_SPRG0
+-	b	InstructionAccess
+-
+-	EXCEPTION(0x1300, Trap_13, unknown_exception, EXC_XFER_EE)
+-	EXCEPTION(0x1400, Trap_14, unknown_exception, EXC_XFER_EE)
+-	EXCEPTION(0x1500, Trap_15, unknown_exception, EXC_XFER_EE)
+-	EXCEPTION(0x1600, Trap_16, unknown_exception, EXC_XFER_EE)
+-#ifdef CONFIG_IBM405_ERR51
+-	/* 405GP errata 51 */
+-	START_EXCEPTION(0x1700, Trap_17)
+-	b DTLBMiss
+-#else
+-	EXCEPTION(0x1700, Trap_17, unknown_exception, EXC_XFER_EE)
+-#endif
+-	EXCEPTION(0x1800, Trap_18, unknown_exception, EXC_XFER_EE)
+-	EXCEPTION(0x1900, Trap_19, unknown_exception, EXC_XFER_EE)
+-	EXCEPTION(0x1A00, Trap_1A, unknown_exception, EXC_XFER_EE)
+-	EXCEPTION(0x1B00, Trap_1B, unknown_exception, EXC_XFER_EE)
+-	EXCEPTION(0x1C00, Trap_1C, unknown_exception, EXC_XFER_EE)
+-	EXCEPTION(0x1D00, Trap_1D, unknown_exception, EXC_XFER_EE)
+-	EXCEPTION(0x1E00, Trap_1E, unknown_exception, EXC_XFER_EE)
+-	EXCEPTION(0x1F00, Trap_1F, unknown_exception, EXC_XFER_EE)
+-
+-/* Check for a single step debug exception while in an exception
+- * handler before state has been saved.  This is to catch the case
+- * where an instruction that we are trying to single step causes
+- * an exception (eg ITLB/DTLB miss) and thus the first instruction of
+- * the exception handler generates a single step debug exception.
+- *
+- * If we get a debug trap on the first instruction of an exception handler,
+- * we reset the MSR_DE in the _exception handler's_ MSR (the debug trap is
+- * a critical exception, so we are using SPRN_CSRR1 to manipulate the MSR).
+- * The exception handler was handling a non-critical interrupt, so it will
+- * save (and later restore) the MSR via SPRN_SRR1, which will still have
+- * the MSR_DE bit set.
+- */
+-	/* 0x2000 - Debug Exception */
+-	START_EXCEPTION(0x2000, DebugTrap)
+-	CRITICAL_EXCEPTION_PROLOG
+-
+-	/*
+-	 * If this is a single step or branch-taken exception in an
+-	 * exception entry sequence, it was probably meant to apply to
+-	 * the code where the exception occurred (since exception entry
+-	 * doesn't turn off DE automatically).  We simulate the effect
+-	 * of turning off DE on entry to an exception handler by turning
+-	 * off DE in the SRR3 value and clearing the debug status.
+-	 */
+-	mfspr	r10,SPRN_DBSR		/* check single-step/branch taken */
+-	andis.	r10,r10,DBSR_IC@h
+-	beq+	2f
+-
+-	andi.	r10,r9,MSR_IR|MSR_PR	/* check supervisor + MMU off */
+-	beq	1f			/* branch and fix it up */
+-
+-	mfspr   r10,SPRN_SRR2		/* Faulting instruction address */
+-	cmplwi  r10,0x2100
+-	bgt+    2f			/* address above exception vectors */
+-
+-	/* here it looks like we got an inappropriate debug exception. */
+-1:	rlwinm	r9,r9,0,~MSR_DE		/* clear DE in the SRR3 value */
+-	lis	r10,DBSR_IC@h		/* clear the IC event */
+-	mtspr	SPRN_DBSR,r10
+-	/* restore state and get out */
+-	lwz	r10,_CCR(r11)
+-	lwz	r0,GPR0(r11)
+-	lwz	r1,GPR1(r11)
+-	mtcrf	0x80,r10
+-	mtspr	SPRN_SRR2,r12
+-	mtspr	SPRN_SRR3,r9
+-	lwz	r9,GPR9(r11)
+-	lwz	r12,GPR12(r11)
+-	lwz	r10,crit_r10@l(0)
+-	lwz	r11,crit_r11@l(0)
+-	PPC405_ERR77_SYNC
+-	rfci
+-	b	.
+-
+-	/* continue normal handling for a critical exception... */
+-2:	mfspr	r4,SPRN_DBSR
+-	addi	r3,r1,STACK_FRAME_OVERHEAD
+-	EXC_XFER_TEMPLATE(DebugException, 0x2002, \
+-		(MSR_KERNEL & ~(MSR_ME|MSR_DE|MSR_CE)), \
+-		NOCOPY, crit_transfer_to_handler, ret_from_crit_exc)
+-
+-/*
+- * The other Data TLB exceptions bail out to this point
+- * if they can't resolve the lightweight TLB fault.
+- */
+-DataAccess:
+-	NORMAL_EXCEPTION_PROLOG
+-	mfspr	r5,SPRN_ESR		/* Grab the ESR, save it, pass arg3 */
+-	stw	r5,_ESR(r11)
+-	mfspr	r4,SPRN_DEAR		/* Grab the DEAR, save it, pass arg2 */
+-	EXC_XFER_EE_LITE(0x300, handle_page_fault)
+-
+-/* Other PowerPC processors, namely those derived from the 6xx-series
+- * have vectors from 0x2100 through 0x2F00 defined, but marked as reserved.
+- * However, for the 4xx-series processors these are neither defined nor
+- * reserved.
+- */
+-
+-	/* Damn, I came up one instruction too many to fit into the
+-	 * exception space :-).  Both the instruction and data TLB
+-	 * miss get to this point to load the TLB.
+-	 * 	r10 - TLB_TAG value
+-	 * 	r11 - Linux PTE
+-	 *	r12, r9 - avilable to use
+-	 *	PID - loaded with proper value when we get here
+-	 *	Upon exit, we reload everything and RFI.
+-	 * Actually, it will fit now, but oh well.....a common place
+-	 * to load the TLB.
+-	 */
+-tlb_4xx_index:
+-	.long	0
+-finish_tlb_load:
+-	/* load the next available TLB index.
+-	*/
+-	lwz	r9, tlb_4xx_index@l(0)
+-	addi	r9, r9, 1
+-	andi.	r9, r9, (PPC4XX_TLB_SIZE-1)
+-	stw	r9, tlb_4xx_index@l(0)
+-
+-6:
+-	/*
+-	 * Clear out the software-only bits in the PTE to generate the
+-	 * TLB_DATA value.  These are the bottom 2 bits of the RPM, the
+-	 * top 3 bits of the zone field, and M.
+-	 */
+-	li	r12, 0x0ce2
+-	andc	r11, r11, r12
+-
+-	tlbwe	r11, r9, TLB_DATA		/* Load TLB LO */
+-	tlbwe	r10, r9, TLB_TAG		/* Load TLB HI */
+-
+-	/* Done...restore registers and get out of here.
+-	*/
+-#ifdef CONFIG_403GCX
+-	lwz     r12, 12(r0)
+-	lwz     r11, 8(r0)
+-	mtspr   SPRN_PID, r12
+-	mtcr    r11
+-	lwz     r9, 4(r0)
+-	lwz     r12, 0(r0)
+-#else
+-	mfspr	r12, SPRN_SPRG6
+-	mfspr	r11, SPRN_SPRG7
+-	mtspr	SPRN_PID, r12
+-	mtcr	r11
+-	mfspr	r9, SPRN_SPRG5
+-	mfspr	r12, SPRN_SPRG4
+-#endif
+-	mfspr	r11, SPRN_SPRG1
+-	mfspr	r10, SPRN_SPRG0
+-	PPC405_ERR77_SYNC
+-	rfi			/* Should sync shadow TLBs */
+-	b	.		/* prevent prefetch past rfi */
+-
+-/* extern void giveup_fpu(struct task_struct *prev)
+- *
+- * The PowerPC 4xx family of processors do not have an FPU, so this just
+- * returns.
+- */
+-_GLOBAL(giveup_fpu)
+-	blr
+-
+-/* This is where the main kernel code starts.
+- */
+-start_here:
+-
+-	/* ptr to current */
+-	lis	r2,init_task@h
+-	ori	r2,r2,init_task@l
+-
+-	/* ptr to phys current thread */
+-	tophys(r4,r2)
+-	addi	r4,r4,THREAD	/* init task's THREAD */
+-	mtspr	SPRN_SPRG3,r4
+-
+-	/* stack */
+-	lis	r1,init_thread_union@ha
+-	addi	r1,r1,init_thread_union@l
+-	li	r0,0
+-	stwu	r0,THREAD_SIZE-STACK_FRAME_OVERHEAD(r1)
+-
+-	bl	early_init	/* We have to do this with MMU on */
+-
+-/*
+- * Decide what sort of machine this is and initialize the MMU.
+- */
+-	mr	r3,r31
+-	mr	r4,r30
+-	mr	r5,r29
+-	mr	r6,r28
+-	mr	r7,r27
+-	bl	machine_init
+-	bl	MMU_init
+-
+-/* Go back to running unmapped so we can load up new values
+- * and change to using our exception vectors.
+- * On the 4xx, all we have to do is invalidate the TLB to clear
+- * the old 16M byte TLB mappings.
+- */
+-	lis	r4,2f@h
+-	ori	r4,r4,2f@l
+-	tophys(r4,r4)
+-	lis	r3,(MSR_KERNEL & ~(MSR_IR|MSR_DR))@h
+-	ori	r3,r3,(MSR_KERNEL & ~(MSR_IR|MSR_DR))@l
+-	mtspr	SPRN_SRR0,r4
+-	mtspr	SPRN_SRR1,r3
+-	rfi
+-	b	.		/* prevent prefetch past rfi */
+-
+-/* Load up the kernel context */
+-2:
+-	sync			/* Flush to memory before changing TLB */
+-	tlbia
+-	isync			/* Flush shadow TLBs */
+-
+-	/* set up the PTE pointers for the Abatron bdiGDB.
+-	*/
+-	lis	r6, swapper_pg_dir@h
+-	ori	r6, r6, swapper_pg_dir@l
+-	lis	r5, abatron_pteptrs@h
+-	ori	r5, r5, abatron_pteptrs@l
+-	stw	r5, 0xf0(r0)	/* Must match your Abatron config file */
+-	tophys(r5,r5)
+-	stw	r6, 0(r5)
+-
+-/* Now turn on the MMU for real! */
+-	lis	r4,MSR_KERNEL@h
+-	ori	r4,r4,MSR_KERNEL@l
+-	lis	r3,start_kernel@h
+-	ori	r3,r3,start_kernel@l
+-	mtspr	SPRN_SRR0,r3
+-	mtspr	SPRN_SRR1,r4
+-	rfi			/* enable MMU and jump to start_kernel */
+-	b	.		/* prevent prefetch past rfi */
+-
+-/* Set up the initial MMU state so we can do the first level of
+- * kernel initialization.  This maps the first 16 MBytes of memory 1:1
+- * virtual to physical and more importantly sets the cache mode.
+- */
+-initial_mmu:
+-	tlbia			/* Invalidate all TLB entries */
+-	isync
+-
+-	/* We should still be executing code at physical address 0x0000xxxx
+-	 * at this point. However, start_here is at virtual address
+-	 * 0xC000xxxx. So, set up a TLB mapping to cover this once
+-	 * translation is enabled.
+-	 */
+-
+-	lis	r3,KERNELBASE@h		/* Load the kernel virtual address */
+-	ori	r3,r3,KERNELBASE@l
+-	tophys(r4,r3)			/* Load the kernel physical address */
+-
+-	iccci	r0,r3			/* Invalidate the i-cache before use */
+-
+-	/* Load the kernel PID.
+-	*/
+-	li	r0,0
+-	mtspr	SPRN_PID,r0
+-	sync
+-
+-	/* Configure and load two entries into TLB slots 62 and 63.
+-	 * In case we are pinning TLBs, these are reserved in by the
+-	 * other TLB functions.  If not reserving, then it doesn't
+-	 * matter where they are loaded.
+-	 */
+-	clrrwi	r4,r4,10		/* Mask off the real page number */
+-	ori	r4,r4,(TLB_WR | TLB_EX)	/* Set the write and execute bits */
+-
+-	clrrwi	r3,r3,10		/* Mask off the effective page number */
+-	ori	r3,r3,(TLB_VALID | TLB_PAGESZ(PAGESZ_16M))
+-
+-        li      r0,63                    /* TLB slot 63 */
+-
+-	tlbwe	r4,r0,TLB_DATA		/* Load the data portion of the entry */
+-	tlbwe	r3,r0,TLB_TAG		/* Load the tag portion of the entry */
+-
+-#if defined(CONFIG_SERIAL_TEXT_DEBUG) && defined(SERIAL_DEBUG_IO_BASE)
+-
+-	/* Load a TLB entry for the UART, so that ppc4xx_progress() can use
+-	 * the UARTs nice and early.  We use a 4k real==virtual mapping. */
+-
+-	lis	r3,SERIAL_DEBUG_IO_BASE@h
+-	ori	r3,r3,SERIAL_DEBUG_IO_BASE@l
+-	mr	r4,r3
+-	clrrwi	r4,r4,12
+-	ori	r4,r4,(TLB_WR|TLB_I|TLB_M|TLB_G)
+-
+-	clrrwi	r3,r3,12
+-	ori	r3,r3,(TLB_VALID | TLB_PAGESZ(PAGESZ_4K))
+-
+-	li	r0,0			/* TLB slot 0 */
+-	tlbwe	r4,r0,TLB_DATA
+-	tlbwe	r3,r0,TLB_TAG
+-#endif /* CONFIG_SERIAL_DEBUG_TEXT && SERIAL_DEBUG_IO_BASE */
+-
+-	isync
+-
+-	/* Establish the exception vector base
+-	*/
+-	lis	r4,KERNELBASE@h		/* EVPR only uses the high 16-bits */
+-	tophys(r0,r4)			/* Use the physical address */
+-	mtspr	SPRN_EVPR,r0
+-
+-	blr
+-
+-_GLOBAL(abort)
+-        mfspr   r13,SPRN_DBCR0
+-        oris    r13,r13,DBCR0_RST_SYSTEM@h
+-        mtspr   SPRN_DBCR0,r13
+-
+-_GLOBAL(set_context)
+-
+-#ifdef CONFIG_BDI_SWITCH
+-	/* Context switch the PTE pointer for the Abatron BDI2000.
+-	 * The PGDIR is the second parameter.
+-	 */
+-	lis	r5, KERNELBASE@h
+-	lwz	r5, 0xf0(r5)
+-	stw	r4, 0x4(r5)
+-#endif
+-	sync
+-	mtspr	SPRN_PID,r3
+-	isync				/* Need an isync to flush shadow */
+-					/* TLBs after changing PID */
+-	blr
+-
+-/* We put a few things here that have to be page-aligned. This stuff
+- * goes at the beginning of the data segment, which is page-aligned.
+- */
+-	.data
+-	.align	12
+-	.globl	sdata
+-sdata:
+-	.globl	empty_zero_page
+-empty_zero_page:
+-	.space	4096
+-	.globl	swapper_pg_dir
+-swapper_pg_dir:
+-	.space	4096
+-
+-
+-/* Stack for handling critical exceptions from kernel mode */
+-	.section .bss
+-        .align 12
+-exception_stack_bottom:
+-	.space	4096
+-critical_stack_top:
+-	.globl	exception_stack_top
+-exception_stack_top:
+-
+-/* This space gets a copy of optional info passed to us by the bootstrap
+- * which is used to pass parameters into the kernel like root=/dev/sda1, etc.
+- */
+-	.globl	cmd_line
+-cmd_line:
+-	.space	512
+-
+-/* Room for two PTE pointers, usually the kernel and current user pointers
+- * to their respective root page table.
+- */
+-abatron_pteptrs:
+-	.space	8
+Index: linux-2.6.18/arch/powerpc/mm/40x_mmu.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/mm/40x_mmu.c
+@@ -0,0 +1,135 @@
++/*
++ * This file contains the routines for initializing the MMU
++ * on the 4xx series of chips.
++ *  -- paulus
++ *
++ *  Derived from arch/ppc/mm/init.c:
++ *    Copyright (C) 1995-1996 Gary Thomas (gdt@linuxppc.org)
++ *
++ *  Modifications by Paul Mackerras (PowerMac) (paulus@cs.anu.edu.au)
++ *  and Cort Dougan (PReP) (cort@cs.nmt.edu)
++ *    Copyright (C) 1996 Paul Mackerras
++ *
++ *  Derived from "arch/i386/mm/init.c"
++ *    Copyright (C) 1991, 1992, 1993, 1994  Linus Torvalds
++ *
++ *  This program is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License
++ *  as published by the Free Software Foundation; either version
++ *  2 of the License, or (at your option) any later version.
++ *
++ */
++
++#include <linux/signal.h>
++#include <linux/sched.h>
++#include <linux/kernel.h>
++#include <linux/errno.h>
++#include <linux/string.h>
++#include <linux/types.h>
++#include <linux/ptrace.h>
++#include <linux/mman.h>
++#include <linux/mm.h>
++#include <linux/swap.h>
++#include <linux/stddef.h>
++#include <linux/vmalloc.h>
++#include <linux/init.h>
++#include <linux/delay.h>
++#include <linux/highmem.h>
++
++#include <asm/pgalloc.h>
++#include <asm/prom.h>
++#include <asm/io.h>
++#include <asm/mmu_context.h>
++#include <asm/pgtable.h>
++#include <asm/mmu.h>
++#include <asm/uaccess.h>
++#include <asm/smp.h>
++#include <asm/bootx.h>
++#include <asm/machdep.h>
++#include <asm/setup.h>
++#include "mmu_decl.h"
++
++extern int __map_without_ltlbs;
++/*
++ * MMU_init_hw does the chip-specific initialization of the MMU hardware.
++ */
++void __init MMU_init_hw(void)
++{
++	/*
++	 * The Zone Protection Register (ZPR) defines how protection will
++	 * be applied to every page which is a member of a given zone. At
++	 * present, we utilize only two of the 4xx's zones.
++	 * The zone index bits (of ZSEL) in the PTE are used for software
++	 * indicators, except the LSB.  For user access, zone 1 is used,
++	 * for kernel access, zone 0 is used.  We set all but zone 1
++	 * to zero, allowing only kernel access as indicated in the PTE.
++	 * For zone 1, we set a 01 binary (a value of 10 will not work)
++	 * to allow user access as indicated in the PTE.  This also allows
++	 * kernel access as indicated in the PTE.
++	 */
++
++        mtspr(SPRN_ZPR, 0x10000000);
++
++	flush_instruction_cache();
++
++	/*
++	 * Set up the real-mode cache parameters for the exception vector
++	 * handlers (which are run in real-mode).
++	 */
++
++        mtspr(SPRN_DCWR, 0x00000000);	/* All caching is write-back */
++
++        /*
++	 * Cache instruction and data space where the exception
++	 * vectors and the kernel live in real-mode.
++	 */
++
++        mtspr(SPRN_DCCR, 0xF0000000);	/* 512 MB of data space at 0x0. */
++        mtspr(SPRN_ICCR, 0xF0000000);	/* 512 MB of instr. space at 0x0. */
++}
++
++#define LARGE_PAGE_SIZE_16M	(1<<24)
++#define LARGE_PAGE_SIZE_4M	(1<<22)
++
++unsigned long __init mmu_mapin_ram(void)
++{
++	unsigned long v, s;
++	phys_addr_t p;
++
++	v = KERNELBASE;
++	p = PPC_MEMSTART;
++	s = 0;
++
++	if (__map_without_ltlbs) {
++		return s;
++	}
++
++	while (s <= (total_lowmem - LARGE_PAGE_SIZE_16M)) {
++		pmd_t *pmdp;
++		unsigned long val = p | _PMD_SIZE_16M | _PAGE_HWEXEC | _PAGE_HWWRITE;
++
++		pmdp = pmd_offset(pgd_offset_k(v), v);
++		pmd_val(*pmdp++) = val;
++		pmd_val(*pmdp++) = val;
++		pmd_val(*pmdp++) = val;
++		pmd_val(*pmdp++) = val;
++
++		v += LARGE_PAGE_SIZE_16M;
++		p += LARGE_PAGE_SIZE_16M;
++		s += LARGE_PAGE_SIZE_16M;
++	}
++
++	while (s <= (total_lowmem - LARGE_PAGE_SIZE_4M)) {
++		pmd_t *pmdp;
++		unsigned long val = p | _PMD_SIZE_4M | _PAGE_HWEXEC | _PAGE_HWWRITE;
++
++		pmdp = pmd_offset(pgd_offset_k(v), v);
++		pmd_val(*pmdp) = val;
++
++		v += LARGE_PAGE_SIZE_4M;
++		p += LARGE_PAGE_SIZE_4M;
++		s += LARGE_PAGE_SIZE_4M;
++	}
++
++	return s;
++}
+Index: linux-2.6.18/arch/powerpc/mm/4xx_mmu.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/4xx_mmu.c
++++ /dev/null
+@@ -1,135 +0,0 @@
+-/*
+- * This file contains the routines for initializing the MMU
+- * on the 4xx series of chips.
+- *  -- paulus
+- *
+- *  Derived from arch/ppc/mm/init.c:
+- *    Copyright (C) 1995-1996 Gary Thomas (gdt@linuxppc.org)
+- *
+- *  Modifications by Paul Mackerras (PowerMac) (paulus@cs.anu.edu.au)
+- *  and Cort Dougan (PReP) (cort@cs.nmt.edu)
+- *    Copyright (C) 1996 Paul Mackerras
+- *
+- *  Derived from "arch/i386/mm/init.c"
+- *    Copyright (C) 1991, 1992, 1993, 1994  Linus Torvalds
+- *
+- *  This program is free software; you can redistribute it and/or
+- *  modify it under the terms of the GNU General Public License
+- *  as published by the Free Software Foundation; either version
+- *  2 of the License, or (at your option) any later version.
+- *
+- */
+-
+-#include <linux/signal.h>
+-#include <linux/sched.h>
+-#include <linux/kernel.h>
+-#include <linux/errno.h>
+-#include <linux/string.h>
+-#include <linux/types.h>
+-#include <linux/ptrace.h>
+-#include <linux/mman.h>
+-#include <linux/mm.h>
+-#include <linux/swap.h>
+-#include <linux/stddef.h>
+-#include <linux/vmalloc.h>
+-#include <linux/init.h>
+-#include <linux/delay.h>
+-#include <linux/highmem.h>
+-
+-#include <asm/pgalloc.h>
+-#include <asm/prom.h>
+-#include <asm/io.h>
+-#include <asm/mmu_context.h>
+-#include <asm/pgtable.h>
+-#include <asm/mmu.h>
+-#include <asm/uaccess.h>
+-#include <asm/smp.h>
+-#include <asm/bootx.h>
+-#include <asm/machdep.h>
+-#include <asm/setup.h>
+-#include "mmu_decl.h"
+-
+-extern int __map_without_ltlbs;
+-/*
+- * MMU_init_hw does the chip-specific initialization of the MMU hardware.
+- */
+-void __init MMU_init_hw(void)
+-{
+-	/*
+-	 * The Zone Protection Register (ZPR) defines how protection will
+-	 * be applied to every page which is a member of a given zone. At
+-	 * present, we utilize only two of the 4xx's zones.
+-	 * The zone index bits (of ZSEL) in the PTE are used for software
+-	 * indicators, except the LSB.  For user access, zone 1 is used,
+-	 * for kernel access, zone 0 is used.  We set all but zone 1
+-	 * to zero, allowing only kernel access as indicated in the PTE.
+-	 * For zone 1, we set a 01 binary (a value of 10 will not work)
+-	 * to allow user access as indicated in the PTE.  This also allows
+-	 * kernel access as indicated in the PTE.
+-	 */
+-
+-        mtspr(SPRN_ZPR, 0x10000000);
+-
+-	flush_instruction_cache();
+-
+-	/*
+-	 * Set up the real-mode cache parameters for the exception vector
+-	 * handlers (which are run in real-mode).
+-	 */
+-
+-        mtspr(SPRN_DCWR, 0x00000000);	/* All caching is write-back */
+-
+-        /*
+-	 * Cache instruction and data space where the exception
+-	 * vectors and the kernel live in real-mode.
+-	 */
+-
+-        mtspr(SPRN_DCCR, 0xF0000000);	/* 512 MB of data space at 0x0. */
+-        mtspr(SPRN_ICCR, 0xF0000000);	/* 512 MB of instr. space at 0x0. */
+-}
+-
+-#define LARGE_PAGE_SIZE_16M	(1<<24)
+-#define LARGE_PAGE_SIZE_4M	(1<<22)
+-
+-unsigned long __init mmu_mapin_ram(void)
+-{
+-	unsigned long v, s;
+-	phys_addr_t p;
+-
+-	v = KERNELBASE;
+-	p = PPC_MEMSTART;
+-	s = 0;
+-
+-	if (__map_without_ltlbs) {
+-		return s;
+-	}
+-
+-	while (s <= (total_lowmem - LARGE_PAGE_SIZE_16M)) {
+-		pmd_t *pmdp;
+-		unsigned long val = p | _PMD_SIZE_16M | _PAGE_HWEXEC | _PAGE_HWWRITE;
+-
+-		pmdp = pmd_offset(pgd_offset_k(v), v);
+-		pmd_val(*pmdp++) = val;
+-		pmd_val(*pmdp++) = val;
+-		pmd_val(*pmdp++) = val;
+-		pmd_val(*pmdp++) = val;
+-
+-		v += LARGE_PAGE_SIZE_16M;
+-		p += LARGE_PAGE_SIZE_16M;
+-		s += LARGE_PAGE_SIZE_16M;
+-	}
+-
+-	while (s <= (total_lowmem - LARGE_PAGE_SIZE_4M)) {
+-		pmd_t *pmdp;
+-		unsigned long val = p | _PMD_SIZE_4M | _PAGE_HWEXEC | _PAGE_HWWRITE;
+-
+-		pmdp = pmd_offset(pgd_offset_k(v), v);
+-		pmd_val(*pmdp) = val;
+-
+-		v += LARGE_PAGE_SIZE_4M;
+-		p += LARGE_PAGE_SIZE_4M;
+-		s += LARGE_PAGE_SIZE_4M;
+-	}
+-
+-	return s;
+-}
+Index: linux-2.6.18/arch/powerpc/mm/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/Makefile
++++ linux-2.6.18/arch/powerpc/mm/Makefile
+@@ -14,7 +14,7 @@ obj-$(CONFIG_PPC64)		+= init_64.o pgtabl
+ 				   slb_low.o slb.o stab.o mmap.o imalloc.o \
+ 				   $(hash-y)
+ obj-$(CONFIG_PPC_STD_MMU_32)	+= ppc_mmu_32.o hash_low_32.o tlb_32.o
+-obj-$(CONFIG_40x)		+= 4xx_mmu.o
++obj-$(CONFIG_40x)		+= 40x_mmu.o
+ obj-$(CONFIG_44x)		+= 44x_mmu.o
+ obj-$(CONFIG_FSL_BOOKE)		+= fsl_booke_mmu.o
+ obj-$(CONFIG_NEED_MULTIPLE_NODES) += numa.o
+Index: linux-2.6.18/arch/powerpc/platforms/40x/Kconfig
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/40x/Kconfig
+@@ -0,0 +1,208 @@
++config 4xx
++	bool
++	depends on 40x || 44x
++	default y
++
++config BOOKE
++	bool
++	depends on 44x
++	default y
++
++menu "AMCC 40x options"
++	depends on 40x
++
++#config BUBINGA
++#	bool "Bubinga"
++#	depends on 40x
++#	default n
++#	select 405EP
++#	help
++#	  This option enables support for the IBM 405EP evaluation board.
++
++#config CPCI405
++#	bool "CPCI405"
++#	depends on 40x
++#	default n
++#	select 405GP
++#	help
++#	  This option enables support for the CPCI405 board.
++
++#config EP405
++#	bool "EP405/EP405PC"
++#	depends on 40x
++#	default n
++#	select 405GP
++#	help
++#	  This option enables support for the EP405/EP405PC boards.
++
++#config EP405PC
++#	bool "EP405PC Support"
++#	depends on EP405
++#	default y
++#	help
++#	  This option enables support for the extra features of the EP405PC board.
++
++#config REDWOOD_5
++#	bool "Redwood-5"
++#	depends on 40x
++#	default n
++#	select STB03xxx
++#	help
++#	  This option enables support for the IBM STB04 evaluation board.
++
++#config REDWOOD_6
++#	bool "Redwood-6"
++#	depends on 40x
++#	default n
++#	select STB03xxx
++#	help
++#	  This option enables support for the IBM STBx25xx evaluation board.
++
++#config SYCAMORE
++#	bool "Sycamore"
++#	depends on 40x
++#	default n
++#	select 405GPR
++#	help
++#	  This option enables support for the IBM PPC405GPr evaluation board.
++
++#config WALNUT
++#	bool "Walnut"
++#	depends on 40x
++#	default y
++#	select 405GP
++#	help
++#	  This option enables support for the IBM PPC405GP evaluation board.
++
++#config XILINX_ML300
++#	bool "Xilinx-ML300"
++#	depends on 40x
++#	default y
++#	select VIRTEX_II_PRO
++#	help
++#	  This option enables support for the Xilinx ML300 evaluation board.
++
++endmenu
++
++# 40x specific CPU modules, selected based on the board above.
++config NP405H
++	bool
++	#depends on ASH
++
++# OAK doesn't exist but wanted to keep this around for any future 403GCX boards
++config 403GCX
++	bool
++	#depends on OAK
++	select IBM405_ERR51
++
++config 405GP
++	bool
++	select IBM405_ERR77
++	select IBM405_ERR51
++
++config 405EP
++	bool
++
++config 405GPR
++	bool
++
++config VIRTEX_II_PRO
++	bool
++	select IBM405_ERR77
++	select IBM405_ERR51
++
++config STB03xxx
++	bool
++	select IBM405_ERR77
++	select IBM405_ERR51
++
++# 40x errata/workaround config symbols, selected by the CPU models above
++
++# All 405-based cores up until the 405GPR and 405EP have this errata.
++config IBM405_ERR77
++	bool
++
++# All 40x-based cores, up until the 405GPR and 405EP have this errata.
++config IBM405_ERR51
++	bool
++
++menu "AMCC 44x options"
++	depends on 44x
++
++#config BAMBOO
++#	bool "Bamboo"
++#	depends on 44x
++#	default n
++#	select 440EP
++#	help
++#	  This option enables support for the IBM PPC440EP evaluation board.
++
++config EBONY
++	bool "Ebony"
++	depends on 44x
++	default y
++	select 440GP
++	help
++	  This option enables support for the IBM PPC440GP evaluation board.
++
++#config LUAN
++#	bool "Luan"
++#	depends on 44x
++#	default n
++#	select 440SP
++#	help
++#	  This option enables support for the IBM PPC440SP evaluation board.
++
++#config OCOTEA
++#	bool "Ocotea"
++#	depends on 44x
++#	default n
++#	select 440GX
++#	help
++#	  This option enables support for the IBM PPC440GX evaluation board.
++
++endmenu
++
++# 44x specific CPU modules, selected based on the board above.
++config 440EP
++	bool
++	select PPC_FPU
++	select IBM440EP_ERR42
++
++config 440GP
++	bool
++	select IBM_NEW_EMAC_ZMII
++
++config 440GX
++	bool
++
++config 440SP
++	bool
++
++config 440A
++	bool
++	depends on 440GX
++	default y
++
++# 44x errata/workaround config symbols, selected by the CPU models above
++config IBM440EP_ERR42
++	bool
++
++#config XILINX_OCP
++#	bool
++#	depends on XILINX_ML300
++#	default y
++
++#config BIOS_FIXUP
++#	bool
++#	depends on BUBINGA || EP405 || SYCAMORE || WALNUT
++#	default y
++
++#config PPC4xx_DMA
++#	bool "PPC4xx DMA controller support"
++#	depends on 4xx
++
++#config PPC4xx_EDMA
++#	bool
++#	depends on !STB03xxx && PPC4xx_DMA
++#	default y
+Index: linux-2.6.18/arch/powerpc/platforms/40x/Makefile
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/40x/Makefile
+@@ -0,0 +1 @@
++# empty makefile so make clean works
+\ No newline at end of file
+Index: linux-2.6.18/arch/powerpc/platforms/4xx/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/4xx/Kconfig
++++ /dev/null
+@@ -1,280 +0,0 @@
+-config 4xx
+-	bool
+-	depends on 40x || 44x
+-	default y
+-
+-config WANT_EARLY_SERIAL
+-	bool
+-	select SERIAL_8250
+-	default n
+-
+-menu "AMCC 4xx options"
+-	depends on 4xx
+-
+-choice
+-	prompt "Machine Type"
+-	depends on 40x
+-	default WALNUT
+-
+-config BUBINGA
+-	bool "Bubinga"
+-	select WANT_EARLY_SERIAL
+-	help
+-	  This option enables support for the IBM 405EP evaluation board.
+-
+-config CPCI405
+-	bool "CPCI405"
+-	help
+-	  This option enables support for the CPCI405 board.
+-
+-config EP405
+-	bool "EP405/EP405PC"
+-	help
+-	  This option enables support for the EP405/EP405PC boards.
+-
+-config REDWOOD_5
+-	bool "Redwood-5"
+-	help
+-	  This option enables support for the IBM STB04 evaluation board.
+-
+-config REDWOOD_6
+-	bool "Redwood-6"
+-	help
+-	  This option enables support for the IBM STBx25xx evaluation board.
+-
+-config SYCAMORE
+-	bool "Sycamore"
+-	help
+-	  This option enables support for the IBM PPC405GPr evaluation board.
+-
+-config WALNUT
+-	bool "Walnut"
+-	help
+-	  This option enables support for the IBM PPC405GP evaluation board.
+-
+-config XILINX_ML300
+-	bool "Xilinx-ML300"
+-	help
+-	  This option enables support for the Xilinx ML300 evaluation board.
+-
+-endchoice
+-
+-choice
+-	prompt "Machine Type"
+-	depends on 44x
+-	default EBONY
+-
+-config BAMBOO
+-	bool "Bamboo"
+-	select WANT_EARLY_SERIAL
+-	help
+-	  This option enables support for the IBM PPC440EP evaluation board.
+-
+-config EBONY
+-	bool "Ebony"
+-	select WANT_EARLY_SERIAL
+-	help
+-	  This option enables support for the IBM PPC440GP evaluation board.
+-
+-config LUAN
+-	bool "Luan"
+-	select WANT_EARLY_SERIAL
+-	help
+-	  This option enables support for the IBM PPC440SP evaluation board.
+-
+-config OCOTEA
+-	bool "Ocotea"
+-	select WANT_EARLY_SERIAL
+-	help
+-	  This option enables support for the IBM PPC440GX evaluation board.
+-
+-endchoice
+-
+-config EP405PC
+-	bool "EP405PC Support"
+-	depends on EP405
+-
+-
+-# It's often necessary to know the specific 4xx processor type.
+-# Fortunately, it is impled (so far) from the board type, so we
+-# don't need to ask more redundant questions.
+-config NP405H
+-	bool
+-	depends on ASH
+-	default y
+-
+-config 440EP
+-	bool
+-	depends on BAMBOO
+-	select PPC_FPU
+-	default y
+-
+-config 440GP
+-	bool
+-	depends on EBONY
+-	default y
+-
+-config 440GX
+-	bool
+-	depends on OCOTEA
+-	default y
+-
+-config 440SP
+-	bool
+-	depends on LUAN
+-	default y
+-
+-config 440
+-	bool
+-	depends on 440GP || 440SP || 440EP
+-	default y
+-
+-config 440A
+-	bool
+-	depends on 440GX
+-	default y
+-
+-config IBM440EP_ERR42
+-	bool
+-	depends on 440EP
+-	default y
+-
+-# All 405-based cores up until the 405GPR and 405EP have this errata.
+-config IBM405_ERR77
+-	bool
+-	depends on 40x && !403GCX && !405GPR && !405EP
+-	default y
+-
+-# All 40x-based cores, up until the 405GPR and 405EP have this errata.
+-config IBM405_ERR51
+-	bool
+-	depends on 40x && !405GPR && !405EP
+-	default y
+-
+-config BOOKE
+-	bool
+-	depends on 44x
+-	default y
+-
+-config IBM_OCP
+-	bool
+-	depends on ASH || BAMBOO || BUBINGA || CPCI405 || EBONY || EP405 || LUAN || OCOTEA || REDWOOD_5 || REDWOOD_6 || SYCAMORE || WALNUT
+-	default y
+-
+-config XILINX_OCP
+-	bool
+-	depends on XILINX_ML300
+-	default y
+-
+-config IBM_EMAC4
+-	bool
+-	depends on 440GX || 440SP
+-	default y
+-
+-config BIOS_FIXUP
+-	bool
+-	depends on BUBINGA || EP405 || SYCAMORE || WALNUT
+-	default y
+-
+-# OAK doesn't exist but wanted to keep this around for any future 403GCX boards
+-config 403GCX
+-	bool
+-	depends on OAK
+-	default y
+-
+-config 405EP
+-	bool
+-	depends on BUBINGA
+-	default y
+-
+-config 405GP
+-	bool
+-	depends on CPCI405 || EP405 || WALNUT
+-	default y
+-
+-config 405GPR
+-	bool
+-	depends on SYCAMORE
+-	default y
+-
+-config VIRTEX_II_PRO
+-	bool
+-	depends on XILINX_ML300
+-	default y
+-
+-config STB03xxx
+-	bool
+-	depends on REDWOOD_5 || REDWOOD_6
+-	default y
+-
+-config EMBEDDEDBOOT
+-	bool
+-	depends on EP405 || XILINX_ML300
+-	default y
+-
+-config IBM_OPENBIOS
+-	bool
+-	depends on ASH || BUBINGA || REDWOOD_5 || REDWOOD_6 || SYCAMORE || WALNUT
+-	default y
+-
+-config PPC4xx_DMA
+-	bool "PPC4xx DMA controller support"
+-	depends on 4xx
+-
+-config PPC4xx_EDMA
+-	bool
+-	depends on !STB03xxx && PPC4xx_DMA
+-	default y
+-
+-config PPC_GEN550
+-	bool
+-	depends on 4xx
+-	default y
+-
+-choice
+-	prompt "TTYS0 device and default console"
+-	depends on 40x
+-	default UART0_TTYS0
+-
+-config UART0_TTYS0
+-	bool "UART0"
+-
+-config UART0_TTYS1
+-	bool "UART1"
+-
+-endchoice
+-
+-config SERIAL_SICC
+-	bool "SICC Serial port support"
+-	depends on STB03xxx
+-
+-config UART1_DFLT_CONSOLE
+-	bool
+-	depends on SERIAL_SICC && UART0_TTYS1
+-	default y
+-
+-config SERIAL_SICC_CONSOLE
+-	bool
+-	depends on SERIAL_SICC && UART0_TTYS1
+-	default y
+-endmenu
+-
+-
+-menu "IBM 40x options"
+-	depends on 40x
+-
+-config SERIAL_SICC
+-	bool "SICC Serial port"
+-	depends on STB03xxx
+-
+-config UART1_DFLT_CONSOLE
+-	bool
+-	depends on SERIAL_SICC && UART0_TTYS1
+-	default y
+-
+-config SERIAL_SICC_CONSOLE
+-	bool
+-	depends on SERIAL_SICC && UART0_TTYS1
+-	default y
+-
+-endmenu
+Index: linux-2.6.18/arch/powerpc/platforms/4xx/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/4xx/Makefile
++++ /dev/null
+@@ -1 +0,0 @@
+-# empty makefile so make clean works
+\ No newline at end of file
+Index: linux-2.6.18/mvl_patches/pro50-0378.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0378.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(378);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

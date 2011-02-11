@@ -1,0 +1,450 @@
+#! /usr/bin/env bash
+# Patch: -Some_cleanup_in_the_pipe_code
+# Date: Wed Sep 26 11:12:37 2007
+# MR: 24856
+# From d6cbd281d189977b38eac7eb2a4678de19b6b483 Mon Sep 17 00:00:00 2001
+# From: Andi Kleen <ak@suse.de>
+# Date: Sat, 30 Sep 2006 23:29:26 -0700
+# Subject: [PATCH] [PATCH] Some cleanup in the pipe code
+# 
+# Split the big and hard to read do_pipe function into smaller pieces.
+# 
+# This creates new create_write_pipe/free_write_pipe/create_read_pipe
+# functions.  These functions are made global so that they can be used by
+# other parts of the kernel.
+# 
+# The resulting code is more generic and easier to read and has cleaner error
+# handling and less gotos.
+# 
+# [akpm@osdl.org: cleanup]
+# Signed-off-by: Andi Kleen <ak@suse.de>
+# Signed-off-by: Andrew Morton <akpm@osdl.org>
+# Signed-off-by: Linus Torvalds <torvalds@osdl.org>
+
+PATCHNUM=226
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From d6cbd281d189977b38eac7eb2a4678de19b6b483 Mon Sep 17 00:00:00 2001
+From: Andi Kleen <ak@suse.de>
+Date: Sat, 30 Sep 2006 23:29:26 -0700
+Subject: [PATCH] [PATCH] Some cleanup in the pipe code
+
+Split the big and hard to read do_pipe function into smaller pieces.
+
+This creates new create_write_pipe/free_write_pipe/create_read_pipe
+functions.  These functions are made global so that they can be used by
+other parts of the kernel.
+
+The resulting code is more generic and easier to read and has cleaner error
+handling and less gotos.
+
+[akpm@osdl.org: cleanup]
+Signed-off-by: Andi Kleen <ak@suse.de>
+Signed-off-by: Andrew Morton <akpm@osdl.org>
+Signed-off-by: Linus Torvalds <torvalds@osdl.org>
+Index: linux-2.6.18/fs/pipe.c
+===================================================================
+--- linux-2.6.18.orig/fs/pipe.c
++++ linux-2.6.18/fs/pipe.c
+@@ -902,87 +902,118 @@ fail_inode:
+ 	return NULL;
+ }
+ 
+-int do_pipe(int *fd)
++struct file *create_write_pipe(void)
+ {
+-	struct qstr this;
+-	char name[32];
++	int err;
++	struct inode *inode;
++	struct file *f;
+ 	struct dentry *dentry;
+-	struct inode * inode;
+-	struct file *f1, *f2;
+-	int error;
+-	int i, j;
+-
+-	error = -ENFILE;
+-	f1 = get_empty_filp();
+-	if (!f1)
+-		goto no_files;
+-
+-	f2 = get_empty_filp();
+-	if (!f2)
+-		goto close_f1;
++	char name[32];
++	struct qstr this;
+ 
++	f = get_empty_filp();
++	if (!f)
++		return ERR_PTR(-ENFILE);
++	err = -ENFILE;
+ 	inode = get_pipe_inode();
+ 	if (!inode)
+-		goto close_f12;
+-
+-	error = get_unused_fd();
+-	if (error < 0)
+-		goto close_f12_inode;
+-	i = error;
++		goto err_file;
+ 
+-	error = get_unused_fd();
+-	if (error < 0)
+-		goto close_f12_inode_i;
+-	j = error;
+-
+-	error = -ENOMEM;
+ 	sprintf(name, "[%lu]", inode->i_ino);
+ 	this.name = name;
+ 	this.len = strlen(name);
+ 	this.hash = inode->i_ino; /* will go */
++	err = -ENOMEM;
+ 	dentry = d_alloc(pipe_mnt->mnt_sb->s_root, &this);
+ 	if (!dentry)
+-		goto close_f12_inode_i_j;
++		goto err_inode;
+ 
+ 	dentry->d_op = &pipefs_dentry_operations;
+ 	d_add(dentry, inode);
+-	f1->f_vfsmnt = f2->f_vfsmnt = mntget(mntget(pipe_mnt));
+-	f1->f_dentry = f2->f_dentry = dget(dentry);
+-	f1->f_mapping = f2->f_mapping = inode->i_mapping;
+-
+-	/* read file */
+-	f1->f_pos = f2->f_pos = 0;
+-	f1->f_flags = O_RDONLY;
+-	f1->f_op = &read_pipe_fops;
+-	f1->f_mode = FMODE_READ;
+-	f1->f_version = 0;
+-
+-	/* write file */
+-	f2->f_flags = O_WRONLY;
+-	f2->f_op = &write_pipe_fops;
+-	f2->f_mode = FMODE_WRITE;
+-	f2->f_version = 0;
+-
+-	fd_install(i, f1);
+-	fd_install(j, f2);
+-	fd[0] = i;
+-	fd[1] = j;
++	f->f_vfsmnt = mntget(pipe_mnt);
++	f->f_dentry = dentry;
++	f->f_mapping = inode->i_mapping;
++
++	f->f_flags = O_WRONLY;
++	f->f_op = &write_pipe_fops;
++	f->f_mode = FMODE_WRITE;
++	f->f_version = 0;
+ 
+-	return 0;
++	return f;
+ 
+-close_f12_inode_i_j:
+-	put_unused_fd(j);
+-close_f12_inode_i:
+-	put_unused_fd(i);
+-close_f12_inode:
++ err_inode:
+ 	free_pipe_info(inode);
+ 	iput(inode);
+-close_f12:
+-	put_filp(f2);
+-close_f1:
+-	put_filp(f1);
+-no_files:
+-	return error;	
++ err_file:
++	put_filp(f);
++	return ERR_PTR(err);
++}
++
++void free_write_pipe(struct file *f)
++{
++	mntput(f->f_vfsmnt);
++	dput(f->f_dentry);
++	put_filp(f);
++}
++
++struct file *create_read_pipe(struct file *wrf)
++{
++	struct file *f = get_empty_filp();
++	if (!f)
++		return ERR_PTR(-ENFILE);
++
++	/* Grab pipe from the writer */
++	f->f_vfsmnt = mntget(wrf->f_vfsmnt);
++	f->f_dentry = dget(wrf->f_dentry);
++	f->f_mapping = wrf->f_dentry->d_inode->i_mapping;
++
++	f->f_pos = 0;
++	f->f_flags = O_RDONLY;
++	f->f_op = &read_pipe_fops;
++	f->f_mode = FMODE_READ;
++	f->f_version = 0;
++
++	return f;
++}
++
++int do_pipe(int *fd)
++{
++	struct file *fw, *fr;
++	int error;
++	int fdw, fdr;
++
++	fw = create_write_pipe();
++	if (IS_ERR(fw))
++		return PTR_ERR(fw);
++	fr = create_read_pipe(fw);
++	error = PTR_ERR(fr);
++	if (IS_ERR(fr))
++		goto err_write_pipe;
++
++	error = get_unused_fd();
++	if (error < 0)
++		goto err_read_pipe;
++	fdr = error;
++
++	error = get_unused_fd();
++	if (error < 0)
++		goto err_fdr;
++	fdw = error;
++
++	fd_install(fdr, fr);
++	fd_install(fdw, fw);
++	fd[0] = fdr;
++	fd[1] = fdw;
++
++	return 0;
++
++ err_fdr:
++	put_unused_fd(fdr);
++ err_read_pipe:
++	put_filp(fr);
++ err_write_pipe:
++	free_write_pipe(fw);
++	return error;
+ }
+ 
+ /*
+Index: linux-2.6.18/include/linux/fs.h
+===================================================================
+--- linux-2.6.18.orig/include/linux/fs.h
++++ linux-2.6.18/include/linux/fs.h
+@@ -1564,6 +1564,9 @@ static inline void allow_write_access(st
+ 		atomic_inc(&file->f_dentry->d_inode->i_writecount);
+ }
+ extern int do_pipe(int *);
++extern struct file *create_read_pipe(struct file *f);
++extern struct file *create_write_pipe(void);
++extern void free_write_pipe(struct file *);
+ 
+ extern int open_namei(int dfd, const char *, int, int, struct nameidata *);
+ extern int may_open(struct nameidata *, int, int);
+Index: linux-2.6.18/mvl_patches/pro50-0226.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0226.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(226);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

@@ -1,0 +1,439 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Fix_modpost_warnings_from_head_.S_on_ppc32
+# Date: Wed Apr  9 10:00:13 2008
+# Source: kernel.org
+# MR: 26902
+# Type: Defect Fix
+# Disposition: backported from kernel.org
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# From 748a768384e05c021ea6be221b80c62a83d7b520 Mon Sep 17 00:00:00 2001
+# From: Kumar Gala <galak@kernel.crashing.org>
+# Date: Thu, 13 Sep 2007 15:42:35 -0500
+# Subject: [PATCH] [POWERPC] Fix modpost warnings from head*.S on ppc32
+# 
+# We get warnings like the following from the various ppc32 head*.S files:
+# 
+# WARNING: vmlinux.o(.text+0x358): Section mismatch: reference to .init.text:early_init (between 'skpinv' and 'interrupt_base')
+# WARNING: vmlinux.o(.text+0x380): Section mismatch: reference to .init.text:machine_init (between 'skpinv' and 'interrupt_base')
+# WARNING: vmlinux.o(.text+0x384): Section mismatch: reference to .init.text:MMU_init (between 'skpinv' and 'interrupt_base')
+# WARNING: vmlinux.o(.text+0x3aa): Section mismatch: reference to .init.text:start_kernel (between 'skpinv' and 'interrupt_base')
+# WARNING: vmlinux.o(.text+0x3ae): Section mismatch: reference to .init.text:start_kernel (between 'skpinv' and 'interrupt_base')
+# 
+# Added a .text.head section simliar to what other architectures do since
+# modpost already excludes this from its warnings.
+# 
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+
+PATCHNUM=1004
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: kernel.org
+MR: 26902
+Type: Defect Fix
+Disposition: backported from kernel.org
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+From 748a768384e05c021ea6be221b80c62a83d7b520 Mon Sep 17 00:00:00 2001
+From: Kumar Gala <galak@kernel.crashing.org>
+Date: Thu, 13 Sep 2007 15:42:35 -0500
+Subject: [PATCH] [POWERPC] Fix modpost warnings from head*.S on ppc32
+
+We get warnings like the following from the various ppc32 head*.S files:
+
+WARNING: vmlinux.o(.text+0x358): Section mismatch: reference to .init.text:early_init (between 'skpinv' and 'interrupt_base')
+WARNING: vmlinux.o(.text+0x380): Section mismatch: reference to .init.text:machine_init (between 'skpinv' and 'interrupt_base')
+WARNING: vmlinux.o(.text+0x384): Section mismatch: reference to .init.text:MMU_init (between 'skpinv' and 'interrupt_base')
+WARNING: vmlinux.o(.text+0x3aa): Section mismatch: reference to .init.text:start_kernel (between 'skpinv' and 'interrupt_base')
+WARNING: vmlinux.o(.text+0x3ae): Section mismatch: reference to .init.text:start_kernel (between 'skpinv' and 'interrupt_base')
+
+Added a .text.head section simliar to what other architectures do since
+modpost already excludes this from its warnings.
+
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+Index: linux-2.6.18/arch/powerpc/kernel/head_32.S
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/head_32.S
++++ linux-2.6.18/arch/powerpc/kernel/head_32.S
+@@ -48,20 +48,17 @@
+ 	mtspr	SPRN_DBAT##n##L,RB;	\
+ 1:
+ 
+-	.text
++	.section	.text.head, "ax"
+ 	.stabs	"arch/powerpc/kernel/",N_SO,0,0,0f
+ 	.stabs	"head_32.S",N_SO,0,0,0f
+ 0:
+-	.globl	_stext
+-_stext:
++_ENTRY(_stext);
+ 
+ /*
+  * _start is defined this way because the XCOFF loader in the OpenFirmware
+  * on the powermac expects the entry point to be a procedure descriptor.
+  */
+-	.text
+-	.globl	_start
+-_start:
++_ENTRY(_start);
+ 	/*
+ 	 * These are here for legacy reasons, the kernel used to
+ 	 * need to look like a coff function entry for the pmac
+@@ -846,7 +843,7 @@ relocate_kernel:
+  * r3 = dest addr, r4 = source addr, r5 = copy limit, r6 = start offset
+  * on exit, r3, r4, r5 are unchanged, r6 is updated to be >= r5.
+  */
+-_GLOBAL(copy_and_flush)
++_ENTRY(copy_and_flush)
+ 	addi	r5,r5,-4
+ 	addi	r6,r6,-4
+ 4:	li	r0,L1_CACHE_BYTES/4
+@@ -959,9 +956,9 @@ __secondary_start:
+  * included in CONFIG_6xx
+  */
+ #if !defined(CONFIG_6xx)
+-_GLOBAL(__save_cpu_setup)
++_ENTRY(__save_cpu_setup)
+ 	blr
+-_GLOBAL(__restore_cpu_setup)
++_ENTRY(__restore_cpu_setup)
+ 	blr
+ #endif /* !defined(CONFIG_6xx) */
+ 
+@@ -1085,7 +1082,7 @@ start_here:
+ /*
+  * Set up the segment registers for a new context.
+  */
+-_GLOBAL(set_context)
++_ENTRY(set_context)
+ 	mulli	r3,r3,897	/* multiply context by skew factor */
+ 	rlwinm	r3,r3,4,8,27	/* VSID = (context & 0xfffff) << 4 */
+ 	addis	r3,r3,0x6000	/* Set Ks, Ku bits */
+Index: linux-2.6.18/arch/powerpc/kernel/head_40x.S
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/head_40x.S
++++ linux-2.6.18/arch/powerpc/kernel/head_40x.S
+@@ -52,9 +52,9 @@
+  *
+  * This is all going to change RSN when we add bi_recs.......  -- Dan
+  */
+-	.text
+-_GLOBAL(_stext)
+-_GLOBAL(_start)
++	.section	.text.head, "ax"
++_ENTRY(_stext);
++_ENTRY(_start);
+ 
+ 	/* Save parameters we are passed.
+ 	*/
+@@ -89,9 +89,9 @@ turn_on_mmu:
+  */
+ 	. = 0xc0
+ crit_save:
+-_GLOBAL(crit_r10)
++_ENTRY(crit_r10)
+ 	.space	4
+-_GLOBAL(crit_r11)
++_ENTRY(crit_r11)
+ 	.space	4
+ 
+ /*
+@@ -814,7 +814,7 @@ finish_tlb_load:
+  * The PowerPC 4xx family of processors do not have an FPU, so this just
+  * returns.
+  */
+-_GLOBAL(giveup_fpu)
++_ENTRY(giveup_fpu)
+ 	blr
+ 
+ /* This is where the main kernel code starts.
+Index: linux-2.6.18/arch/powerpc/kernel/head_44x.S
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/head_44x.S
++++ linux-2.6.18/arch/powerpc/kernel/head_44x.S
+@@ -50,9 +50,9 @@
+  *   r7 - End of kernel command line string
+  *
+  */
+-	.text
+-_GLOBAL(_stext)
+-_GLOBAL(_start)
++	.section	.text.head, "ax"
++_ENTRY(_stext);
++_ENTRY(_start);
+ 	/*
+ 	 * Reserve a word at a fixed location to store the address
+ 	 * of abatron_pteptrs
+Index: linux-2.6.18/arch/powerpc/kernel/head_8xx.S
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/head_8xx.S
++++ linux-2.6.18/arch/powerpc/kernel/head_8xx.S
+@@ -38,12 +38,9 @@
+ #else
+ #define DO_8xx_CPU6(val, reg)
+ #endif
+-	.text
+-	.globl	_stext
+-_stext:
+-	.text
+-	.globl	_start
+-_start:
++	.section	.text.head, "ax"
++_ENTRY(_stext);
++_ENTRY(_start);
+ 
+ /* MPC8xx
+  * This port was done on an MBX board with an 860.  Right now I only
+Index: linux-2.6.18/arch/powerpc/kernel/head_fsl_booke.S
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/head_fsl_booke.S
++++ linux-2.6.18/arch/powerpc/kernel/head_fsl_booke.S
+@@ -52,9 +52,9 @@
+  *   r7 - End of kernel command line string
+  *
+  */
+-	.text
+-_GLOBAL(_stext)
+-_GLOBAL(_start)
++	.section	.text.head, "ax"
++_ENTRY(_stext);
++_ENTRY(_start);
+ 	/*
+ 	 * Reserve a word at a fixed location to store the address
+ 	 * of abatron_pteptrs
+Index: linux-2.6.18/arch/powerpc/kernel/vmlinux.lds.S
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/vmlinux.lds.S
++++ linux-2.6.18/arch/powerpc/kernel/vmlinux.lds.S
+@@ -33,6 +33,8 @@ SECTIONS
+ 
+ 	/* Text and gots */
+ 	.text : {
++		ALIGN_FUNCTION();
++		*(.text.head)
+ 		*(.text .text.*)
+ 		SCHED_TEXT
+ 		LOCK_TEXT
+Index: linux-2.6.18/include/asm-powerpc/ppc_asm.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/ppc_asm.h
++++ linux-2.6.18/include/asm-powerpc/ppc_asm.h
+@@ -183,6 +183,10 @@ GLUE(.,name):
+ 
+ #else /* 32-bit */
+ 
++#define _ENTRY(n)	\
++	.globl n;	\
++n:
++
+ #define _GLOBAL(n)	\
+ 	.text;		\
+ 	.stabs __stringify(n:F-1),N_FUN,0,0,n;\
+Index: linux-2.6.18/mvl_patches/pro50-1004.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1004.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1004);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

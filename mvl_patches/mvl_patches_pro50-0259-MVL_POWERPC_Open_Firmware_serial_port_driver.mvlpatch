@@ -1,0 +1,466 @@
+#! /usr/bin/env bash
+# Patch: -MVL_POWERPC_Open_Firmware_serial_port_driver
+# Date: Wed Sep 26 11:13:46 2007
+# MR: 24856
+# Adjustments:
+#     drivers/serial/Makefile stuff modified to apply with no fuzz.
+# From 8d38a5b2fab1397d35ba1c92828a91b77ce9f865 Mon Sep 17 00:00:00 2001
+# From: Arnd Bergmann <arnd@arndb.de>
+# Date: Tue, 13 Feb 2007 21:35:38 +0100
+# Subject: [PATCH] [POWERPC] Open Firmware serial port driver
+# 
+# This can be used for serial ports that are connected to an
+# OF platform bus but are not autodetected by the lecacy
+# serial support.
+# It will automatically take over devices that come from the
+# legacy serial detection, which usually is only one device.
+# 
+# In some cases, rtas may be set up to use the serial port
+# in the firmware, which allows easier debugging before probing
+# the serial ports. In this case, the "used-by-rtas" property
+# must be set by the firmware. This patch also adds code to the
+# legacy serial driver to check for this.
+# 
+# Signed-off-by: Arnd Bergmann <arnd.bergmann@de.ibm.com>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=259
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+Adjustments:
+    drivers/serial/Makefile stuff modified to apply with no fuzz.
+From 8d38a5b2fab1397d35ba1c92828a91b77ce9f865 Mon Sep 17 00:00:00 2001
+From: Arnd Bergmann <arnd@arndb.de>
+Date: Tue, 13 Feb 2007 21:35:38 +0100
+Subject: [PATCH] [POWERPC] Open Firmware serial port driver
+
+This can be used for serial ports that are connected to an
+OF platform bus but are not autodetected by the lecacy
+serial support.
+It will automatically take over devices that come from the
+legacy serial detection, which usually is only one device.
+
+In some cases, rtas may be set up to use the serial port
+in the firmware, which allows easier debugging before probing
+the serial ports. In this case, the "used-by-rtas" property
+must be set by the firmware. This patch also adds code to the
+legacy serial driver to check for this.
+
+Signed-off-by: Arnd Bergmann <arnd.bergmann@de.ibm.com>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/kernel/legacy_serial.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/legacy_serial.c
++++ linux-2.6.18/arch/powerpc/kernel/legacy_serial.c
+@@ -127,6 +127,10 @@ static int __init add_legacy_soc_port(st
+ 	if (get_property(np, "clock-frequency", NULL) == NULL)
+ 		return -1;
+ 
++	/* if rtas uses this device, don't try to use it as well */
++	if (get_property(np, "used-by-rtas", NULL) != NULL)
++		return -1;
++
+ 	/* Get the address */
+ 	addrp = of_get_address(soc_dev, 0, NULL, NULL);
+ 	if (addrp == NULL)
+@@ -337,6 +341,17 @@ void __init find_legacy_serial_ports(voi
+ 		of_node_put(tsi);
+ 	}
+ 
++	/* First fill our array with opb bus ports */
++	for (np = NULL; (np = of_find_compatible_node(np, "serial", "ns16750")) != NULL;) {
++		struct device_node *opb = of_get_parent(np);
++		if (opb && !strcmp(opb->type, "opb")) {
++			index = add_legacy_soc_port(np, np);
++			if (index >= 0 && np == stdout)
++				legacy_serial_console = index;
++		}
++		of_node_put(opb);
++	}
++
+ #ifdef CONFIG_PCI
+ 	/* Next, try to locate PCI ports */
+ 	for (np = NULL; (np = of_find_all_nodes(np));) {
+Index: linux-2.6.18/drivers/serial/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/serial/Kconfig
++++ linux-2.6.18/drivers/serial/Kconfig
+@@ -983,4 +983,14 @@ config SERIAL_NETX_CONSOLE
+ 	  If you have enabled the serial port on the Motorola IMX
+ 	  CPU you can make it the console by answering Y to this option.
+ 
++config SERIAL_OF_PLATFORM
++	tristate "Serial port on Open Firmware platform bus"
++	depends on PPC_OF
++	depends on SERIAL_8250
++	help
++	  If you have a PowerPC based system that has serial ports
++	  on a platform specific bus, you should enable this option.
++	  Currently, only 8250 compatible ports are supported, but
++	  others can easily be added.
++
+ endmenu
+Index: linux-2.6.18/drivers/serial/Makefile
+===================================================================
+--- linux-2.6.18.orig/drivers/serial/Makefile
++++ linux-2.6.18/drivers/serial/Makefile
+@@ -61,3 +61,4 @@ obj-$(CONFIG_SERIAL_AT91) += at91_serial
+ obj-$(CONFIG_SERIAL_NETX) += netx-serial.o
+ obj-$(CONFIG_KGDB_8250) += 8250_kgdb.o
+ obj-$(CONFIG_KGDB_TXX9) += kgdb_serial_txx9.o
++obj-$(CONFIG_SERIAL_OF_PLATFORM) += of_serial.o
+Index: linux-2.6.18/drivers/serial/of_serial.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/serial/of_serial.c
+@@ -0,0 +1,143 @@
++/*
++ *  Serial Port driver for Open Firmware platform devices
++ *
++ *    Copyright (C) 2006 Arnd Bergmann <arnd@arndb.de>, IBM Corp.
++ *
++ *  This program is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License
++ *  as published by the Free Software Foundation; either version
++ *  2 of the License, or (at your option) any later version.
++ *
++ */
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/serial_core.h>
++#include <linux/serial_8250.h>
++
++#include <asm/of_platform.h>
++#include <asm/prom.h>
++
++/*
++ * Fill a struct uart_port for a given device node
++ */
++static int __devinit of_platform_serial_setup(struct of_device *ofdev,
++					int type, struct uart_port *port)
++{
++	struct resource resource;
++	struct device_node *np = ofdev->node;
++	const unsigned int *clk, *spd;
++	int ret;
++
++	memset(port, 0, sizeof *port);
++	spd = get_property(np, "current-speed", NULL);
++	clk = get_property(np, "clock-frequency", NULL);
++	if (!clk) {
++		dev_warn(&ofdev->dev, "no clock-frequency property set\n");
++		return -ENODEV;
++	}
++
++	ret = of_address_to_resource(np, 0, &resource);
++	if (ret) {
++		dev_warn(&ofdev->dev, "invalid address\n");
++		return ret;
++	}
++
++	spin_lock_init(&port->lock);
++	port->mapbase = resource.start;
++	port->irq = irq_of_parse_and_map(np, 0);
++	port->iotype = UPIO_MEM;
++	port->type = type;
++	port->uartclk = *clk;
++	port->flags = UPF_SHARE_IRQ | UPF_BOOT_AUTOCONF | UPF_IOREMAP;
++	port->dev = &ofdev->dev;
++	port->custom_divisor = *clk / (16 * (*spd));
++
++	return 0;
++}
++
++/*
++ * Try to register a serial port
++ */
++static int __devinit of_platform_serial_probe(struct of_device *ofdev,
++						const struct of_device_id *id)
++{
++	struct uart_port port;
++	int port_type;
++	int ret;
++
++	if (of_find_property(ofdev->node, "used-by-rtas", NULL))
++		return -EBUSY;
++
++	port_type = (unsigned long)id->data;
++	ret = of_platform_serial_setup(ofdev, port_type, &port);
++	if (ret)
++		goto out;
++
++	switch (port_type) {
++	case PORT_UNKNOWN:
++		dev_info(&ofdev->dev, "Unknown serial port found, "
++			"attempting to use 8250 driver\n");
++		/* fallthrough */
++	case PORT_8250 ... PORT_MAX_8250:
++		ret = serial8250_register_port(&port);
++		break;
++	default:
++		/* need to add code for these */
++		ret = -ENODEV;
++		break;
++	}
++	if (ret < 0)
++		goto out;
++
++	ofdev->dev.driver_data = (void *)(unsigned long)ret;
++	return 0;
++out:
++	irq_dispose_mapping(port.irq);
++	return ret;
++}
++
++/*
++ * Release a line
++ */
++static int of_platform_serial_remove(struct of_device *ofdev)
++{
++	int line = (unsigned long)ofdev->dev.driver_data;
++	serial8250_unregister_port(line);
++	return 0;
++}
++
++/*
++ * A few common types, add more as needed.
++ */
++static struct of_device_id __devinitdata of_platform_serial_table[] = {
++	{ .type = "serial", .compatible = "ns8250",   .data = (void *)PORT_8250, },
++	{ .type = "serial", .compatible = "ns16450",  .data = (void *)PORT_16450, },
++	{ .type = "serial", .compatible = "ns16550",  .data = (void *)PORT_16550, },
++	{ .type = "serial", .compatible = "ns16750",  .data = (void *)PORT_16750, },
++	{ .type = "serial",			      .data = (void *)PORT_UNKNOWN, },
++	{ /* end of list */ },
++};
++
++static struct of_platform_driver __devinitdata of_platform_serial_driver = {
++	.owner = THIS_MODULE,
++	.name = "of_serial",
++	.probe = of_platform_serial_probe,
++	.remove = of_platform_serial_remove,
++	.match_table = of_platform_serial_table,
++};
++
++static int __init of_platform_serial_init(void)
++{
++	return of_register_platform_driver(&of_platform_serial_driver);
++}
++module_init(of_platform_serial_init);
++
++static void __exit of_platform_serial_exit(void)
++{
++	return of_unregister_platform_driver(&of_platform_serial_driver);
++};
++module_exit(of_platform_serial_exit);
++
++MODULE_AUTHOR("Arnd Bergmann <arnd@arndb.de>");
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("Serial Port driver for Open Firmware platform devices");
+Index: linux-2.6.18/mvl_patches/pro50-0259.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0259.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(259);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

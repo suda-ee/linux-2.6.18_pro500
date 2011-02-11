@@ -1,0 +1,681 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Make_tlb_flush_batch_use_lazy_MMU_mode
+# Date: Wed Sep 26 11:15:46 2007
+# MR: 24856
+# From a741e67969577163a4cfc78d7fd2753219087ef1 Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Tue, 10 Apr 2007 17:09:37 +1000
+# Subject: [PATCH] [POWERPC] Make tlb flush batch use lazy MMU mode
+# 
+# The current tlb flush code on powerpc 64 bits has a subtle race since we
+# lost the page table lock due to the possible faulting in of new PTEs
+# after a previous one has been removed but before the corresponding hash
+# entry has been evicted, which can leads to all sort of fatal problems.
+# 
+# This patch reworks the batch code completely. It doesn't use the mmu_gather
+# stuff anymore. Instead, we use the lazy mmu hooks that were added by the
+# paravirt code. They have the nice property that the enter/leave lazy mmu
+# mode pair is always fully contained by the PTE lock for a given range
+# of PTEs. Thus we can guarantee that all batches are flushed on a given
+# CPU before it drops that lock.
+# 
+# We also generalize batching for any PTE update that require a flush.
+# 
+# Batching is now enabled on a CPU by arch_enter_lazy_mmu_mode() and
+# disabled by arch_leave_lazy_mmu_mode(). The code epects that this is
+# always contained within a PTE lock section so no preemption can happen
+# and no PTE insertion in that range from another CPU. When batching
+# is enabled on a CPU, every PTE updates that need a hash flush will
+# use the batch for that flush.
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=303
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From a741e67969577163a4cfc78d7fd2753219087ef1 Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Tue, 10 Apr 2007 17:09:37 +1000
+Subject: [PATCH] [POWERPC] Make tlb flush batch use lazy MMU mode
+
+The current tlb flush code on powerpc 64 bits has a subtle race since we
+lost the page table lock due to the possible faulting in of new PTEs
+after a previous one has been removed but before the corresponding hash
+entry has been evicted, which can leads to all sort of fatal problems.
+
+This patch reworks the batch code completely. It doesn't use the mmu_gather
+stuff anymore. Instead, we use the lazy mmu hooks that were added by the
+paravirt code. They have the nice property that the enter/leave lazy mmu
+mode pair is always fully contained by the PTE lock for a given range
+of PTEs. Thus we can guarantee that all batches are flushed on a given
+CPU before it drops that lock.
+
+We also generalize batching for any PTE update that require a flush.
+
+Batching is now enabled on a CPU by arch_enter_lazy_mmu_mode() and
+disabled by arch_leave_lazy_mmu_mode(). The code epects that this is
+always contained within a PTE lock section so no preemption can happen
+and no PTE insertion in that range from another CPU. When batching
+is enabled on a CPU, every PTE updates that need a hash flush will
+use the batch for that flush.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/kernel/process.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/process.c
++++ linux-2.6.18/arch/powerpc/kernel/process.c
+@@ -305,9 +305,7 @@ struct task_struct *__switch_to(struct t
+ 		set_dabr(new->thread.dabr);
+ 		__get_cpu_var(current_dabr) = new->thread.dabr;
+ 	}
+-
+-	flush_tlb_pending();
+-#endif
++#endif /* CONFIG_PPC64 */
+ 
+ 	new_thread = &new->thread;
+ 	old_thread = &current->thread;
+Index: linux-2.6.18/arch/powerpc/kernel/smp.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/smp.c
++++ linux-2.6.18/arch/powerpc/kernel/smp.c
+@@ -459,10 +459,6 @@ void generic_mach_cpu_die(void)
+ 	smp_wmb();
+ 	while (__get_cpu_var(cpu_state) != CPU_UP_PREPARE)
+ 		cpu_relax();
+-
+-#ifdef CONFIG_PPC64
+-	flush_tlb_pending();
+-#endif
+ 	cpu_set(cpu, cpu_online_map);
+ 	local_irq_enable();
+ }
+Index: linux-2.6.18/arch/powerpc/mm/hugetlbpage.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/hugetlbpage.c
++++ linux-2.6.18/arch/powerpc/mm/hugetlbpage.c
+@@ -310,12 +310,11 @@ void set_huge_pte_at(struct mm_struct *m
+ {
+ 	if (pte_present(*ptep)) {
+ 		/* We open-code pte_clear because we need to pass the right
+-		 * argument to hpte_update (huge / !huge)
++		 * argument to hpte_need_flush (huge / !huge). Might not be
++		 * necessary anymore if we make hpte_need_flush() get the
++		 * page size from the slices
+ 		 */
+-		unsigned long old = pte_update(ptep, ~0UL);
+-		if (old & _PAGE_HASHPTE)
+-			hpte_update(mm, addr & HPAGE_MASK, ptep, old, 1);
+-		flush_tlb_pending();
++		pte_update(mm, addr & HPAGE_MASK, ptep, ~0UL, 1);
+ 	}
+ 	*ptep = __pte(pte_val(pte) & ~_PAGE_HPTEFLAGS);
+ }
+@@ -323,12 +322,7 @@ void set_huge_pte_at(struct mm_struct *m
+ pte_t huge_ptep_get_and_clear(struct mm_struct *mm, unsigned long addr,
+ 			      pte_t *ptep)
+ {
+-	unsigned long old = pte_update(ptep, ~0UL);
+-
+-	if (old & _PAGE_HASHPTE)
+-		hpte_update(mm, addr & HPAGE_MASK, ptep, old, 1);
+-	*ptep = __pte(0);
+-
++	unsigned long old = pte_update(mm, addr, ptep, ~0UL, 1);
+ 	return __pte(old);
+ }
+ 
+Index: linux-2.6.18/arch/powerpc/mm/tlb_64.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/tlb_64.c
++++ linux-2.6.18/arch/powerpc/mm/tlb_64.c
+@@ -120,17 +120,20 @@ void pgtable_free_tlb(struct mmu_gather 
+ }
+ 
+ /*
+- * Update the MMU hash table to correspond with a change to
+- * a Linux PTE.  If wrprot is true, it is permissible to
+- * change the existing HPTE to read-only rather than removing it
+- * (if we remove it we should clear the _PTE_HPTEFLAGS bits).
++ * A linux PTE was changed and the corresponding hash table entry
++ * neesd to be flushed. This function will either perform the flush
++ * immediately or will batch it up if the current CPU has an active
++ * batch on it.
++ *
++ * Must be called from within some kind of spinlock/non-preempt region...
+  */
+-void hpte_update(struct mm_struct *mm, unsigned long addr,
+-		 pte_t *ptep, unsigned long pte, int huge)
++void hpte_need_flush(struct mm_struct *mm, unsigned long addr,
++		     pte_t *ptep, unsigned long pte, int huge)
+ {
+ 	struct ppc64_tlb_batch *batch = &__get_cpu_var(ppc64_tlb_batch);
+-	unsigned long vsid;
++	unsigned long vsid, vaddr;
+ 	unsigned int psize;
++	real_pte_t rpte;
+ 	int i;
+ 
+ 	i = batch->index;
+@@ -151,6 +154,26 @@ void hpte_update(struct mm_struct *mm, u
+ 	} else
+ 		psize = pte_pagesize_index(pte);
+ 
++	/* Build full vaddr */
++	if (!is_kernel_addr(addr)) {
++		vsid = get_vsid(mm->context.id, addr);
++		WARN_ON(vsid == 0);
++	} else
++		vsid = get_kernel_vsid(addr);
++	vaddr = (vsid << 28 ) | (addr & 0x0fffffff);
++	rpte = __real_pte(__pte(pte), ptep);
++
++	/*
++	 * Check if we have an active batch on this CPU. If not, just
++	 * flush now and return. For now, we don global invalidates
++	 * in that case, might be worth testing the mm cpu mask though
++	 * and decide to use local invalidates instead...
++	 */
++	if (!batch->active) {
++		flush_hash_page(vaddr, rpte, psize, 0);
++		return;
++	}
++
+ 	/*
+ 	 * This can happen when we are in the middle of a TLB batch and
+ 	 * we encounter memory pressure (eg copy_page_range when it tries
+@@ -162,47 +185,42 @@ void hpte_update(struct mm_struct *mm, u
+ 	 * batch
+ 	 */
+ 	if (i != 0 && (mm != batch->mm || batch->psize != psize)) {
+-		flush_tlb_pending();
++		__flush_tlb_pending(batch);
+ 		i = 0;
+ 	}
+ 	if (i == 0) {
+ 		batch->mm = mm;
+ 		batch->psize = psize;
+ 	}
+-	if (!is_kernel_addr(addr)) {
+-		vsid = get_vsid(mm->context.id, addr);
+-		WARN_ON(vsid == 0);
+-	} else
+-		vsid = get_kernel_vsid(addr);
+-	batch->vaddr[i] = (vsid << 28 ) | (addr & 0x0fffffff);
+-	batch->pte[i] = __real_pte(__pte(pte), ptep);
++	batch->pte[i] = rpte;
++	batch->vaddr[i] = vaddr;
+ 	batch->index = ++i;
+ 	if (i >= PPC64_TLB_BATCH_NR)
+-		flush_tlb_pending();
++		__flush_tlb_pending(batch);
+ }
+ 
++/*
++ * This function is called when terminating an mmu batch or when a batch
++ * is full. It will perform the flush of all the entries currently stored
++ * in a batch.
++ *
++ * Must be called from within some kind of spinlock/non-preempt region...
++ */
+ void __flush_tlb_pending(struct ppc64_tlb_batch *batch)
+ {
+-	int i;
+-	int cpu;
+ 	cpumask_t tmp;
+-	int local = 0;
++	int i, local = 0;
+ 
+-	BUG_ON(in_interrupt());
+-
+-	cpu = get_cpu();
+ 	i = batch->index;
+-	tmp = cpumask_of_cpu(cpu);
++	tmp = cpumask_of_cpu(smp_processor_id());
+ 	if (cpus_equal(batch->mm->cpu_vm_mask, tmp))
+ 		local = 1;
+-
+ 	if (i == 1)
+ 		flush_hash_page(batch->vaddr[0], batch->pte[0],
+ 				batch->psize, local);
+ 	else
+ 		flush_hash_range(i, local);
+ 	batch->index = 0;
+-	put_cpu();
+ }
+ 
+ void pte_free_finish(void)
+Index: linux-2.6.18/include/asm-powerpc/pgtable.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pgtable.h
++++ linux-2.6.18/include/asm-powerpc/pgtable.h
+@@ -272,7 +272,10 @@ static inline pte_t pte_mkhuge(pte_t pte
+ 	return pte; }
+ 
+ /* Atomic PTE updates */
+-static inline unsigned long pte_update(pte_t *p, unsigned long clr)
++static inline unsigned long pte_update(struct mm_struct *mm,
++				       unsigned long addr,
++				       pte_t *ptep, unsigned long clr,
++				       int huge)
+ {
+ 	unsigned long old, tmp;
+ 
+@@ -283,20 +286,15 @@ static inline unsigned long pte_update(p
+ 	andc	%1,%0,%4 \n\
+ 	stdcx.	%1,0,%3 \n\
+ 	bne-	1b"
+-	: "=&r" (old), "=&r" (tmp), "=m" (*p)
+-	: "r" (p), "r" (clr), "m" (*p), "i" (_PAGE_BUSY)
++	: "=&r" (old), "=&r" (tmp), "=m" (*ptep)
++	: "r" (ptep), "r" (clr), "m" (*ptep), "i" (_PAGE_BUSY)
+ 	: "cc" );
++
++	if (old & _PAGE_HASHPTE)
++		hpte_need_flush(mm, addr, ptep, old, huge);
+ 	return old;
+ }
+ 
+-/* PTE updating functions, this function puts the PTE in the
+- * batch, doesn't actually triggers the hash flush immediately,
+- * you need to call flush_tlb_pending() to do that.
+- * Pass -1 for "normal" size (4K or 64K)
+- */
+-extern void hpte_update(struct mm_struct *mm, unsigned long addr,
+-			pte_t *ptep, unsigned long pte, int huge);
+-
+ static inline int __ptep_test_and_clear_young(struct mm_struct *mm,
+ 					      unsigned long addr, pte_t *ptep)
+ {
+@@ -304,11 +302,7 @@ static inline int __ptep_test_and_clear_
+ 
+        	if ((pte_val(*ptep) & (_PAGE_ACCESSED | _PAGE_HASHPTE)) == 0)
+ 		return 0;
+-	old = pte_update(ptep, _PAGE_ACCESSED);
+-	if (old & _PAGE_HASHPTE) {
+-		hpte_update(mm, addr, ptep, old, 0);
+-		flush_tlb_pending();
+-	}
++	old = pte_update(mm, addr, ptep, _PAGE_ACCESSED, 0);
+ 	return (old & _PAGE_ACCESSED) != 0;
+ }
+ #define __HAVE_ARCH_PTEP_TEST_AND_CLEAR_YOUNG
+@@ -331,9 +325,7 @@ static inline int __ptep_test_and_clear_
+ 
+        	if ((pte_val(*ptep) & _PAGE_DIRTY) == 0)
+ 		return 0;
+-	old = pte_update(ptep, _PAGE_DIRTY);
+-	if (old & _PAGE_HASHPTE)
+-		hpte_update(mm, addr, ptep, old, 0);
++	old = pte_update(mm, addr, ptep, _PAGE_DIRTY, 0);
+ 	return (old & _PAGE_DIRTY) != 0;
+ }
+ #define __HAVE_ARCH_PTEP_TEST_AND_CLEAR_DIRTY
+@@ -352,9 +344,7 @@ static inline void ptep_set_wrprotect(st
+ 
+        	if ((pte_val(*ptep) & _PAGE_RW) == 0)
+        		return;
+-	old = pte_update(ptep, _PAGE_RW);
+-	if (old & _PAGE_HASHPTE)
+-		hpte_update(mm, addr, ptep, old, 0);
++	old = pte_update(mm, addr, ptep, _PAGE_RW, 0);
+ }
+ 
+ /*
+@@ -378,7 +368,6 @@ static inline void ptep_set_wrprotect(st
+ ({									\
+ 	int __dirty = __ptep_test_and_clear_dirty((__vma)->vm_mm, __address, \
+ 						  __ptep); 		\
+-	flush_tlb_page(__vma, __address);				\
+ 	__dirty;							\
+ })
+ 
+@@ -386,20 +375,14 @@ static inline void ptep_set_wrprotect(st
+ static inline pte_t ptep_get_and_clear(struct mm_struct *mm,
+ 				       unsigned long addr, pte_t *ptep)
+ {
+-	unsigned long old = pte_update(ptep, ~0UL);
+-
+-	if (old & _PAGE_HASHPTE)
+-		hpte_update(mm, addr, ptep, old, 0);
++	unsigned long old = pte_update(mm, addr, ptep, ~0UL, 0);
+ 	return __pte(old);
+ }
+ 
+ static inline void pte_clear(struct mm_struct *mm, unsigned long addr,
+ 			     pte_t * ptep)
+ {
+-	unsigned long old = pte_update(ptep, ~0UL);
+-
+-	if (old & _PAGE_HASHPTE)
+-		hpte_update(mm, addr, ptep, old, 0);
++	pte_update(mm, addr, ptep, ~0UL, 0);
+ }
+ 
+ /*
+@@ -408,10 +391,8 @@ static inline void pte_clear(struct mm_s
+ static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
+ 			      pte_t *ptep, pte_t pte)
+ {
+-	if (pte_present(*ptep)) {
++	if (pte_present(*ptep))
+ 		pte_clear(mm, addr, ptep);
+-		flush_tlb_pending();
+-	}
+ 	pte = __pte(pte_val(pte) & ~_PAGE_HPTEFLAGS);
+ 	*ptep = pte;
+ }
+@@ -522,6 +503,7 @@ void pgtable_cache_init(void);
+ 	return pt;
+ }
+ 
++
+ #include <asm-generic/pgtable.h>
+ 
+ #endif /* __ASSEMBLY__ */
+Index: linux-2.6.18/include/asm-powerpc/tlb.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/tlb.h
++++ linux-2.6.18/include/asm-powerpc/tlb.h
+@@ -38,7 +38,6 @@ extern void pte_free_finish(void);
+ 
+ static inline void tlb_flush(struct mmu_gather *tlb)
+ {
+-	flush_tlb_pending();
+ 	pte_free_finish();
+ }
+ 
+Index: linux-2.6.18/include/asm-powerpc/tlbflush.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/tlbflush.h
++++ linux-2.6.18/include/asm-powerpc/tlbflush.h
+@@ -28,25 +28,41 @@ struct mm_struct;
+ #define PPC64_TLB_BATCH_NR 192
+ 
+ struct ppc64_tlb_batch {
+-	unsigned long index;
+-	struct mm_struct *mm;
+-	real_pte_t pte[PPC64_TLB_BATCH_NR];
+-	unsigned long vaddr[PPC64_TLB_BATCH_NR];
+-	unsigned int psize;
++	int			active;
++	unsigned long		index;
++	struct mm_struct	*mm;
++	real_pte_t		pte[PPC64_TLB_BATCH_NR];
++	unsigned long		vaddr[PPC64_TLB_BATCH_NR];
++	unsigned int		psize;
+ };
+ DECLARE_PER_CPU(struct ppc64_tlb_batch, ppc64_tlb_batch);
+ 
+ extern void __flush_tlb_pending(struct ppc64_tlb_batch *batch);
+ 
+-static inline void flush_tlb_pending(void)
++extern void hpte_need_flush(struct mm_struct *mm, unsigned long addr,
++			    pte_t *ptep, unsigned long pte, int huge);
++
++#define __HAVE_ARCH_ENTER_LAZY_MMU_MODE
++
++static inline void arch_enter_lazy_mmu_mode(void)
+ {
+-	struct ppc64_tlb_batch *batch = &get_cpu_var(ppc64_tlb_batch);
++	struct ppc64_tlb_batch *batch = &__get_cpu_var(ppc64_tlb_batch);
++
++	batch->active = 1;
++}
++
++static inline void arch_leave_lazy_mmu_mode(void)
++{
++	struct ppc64_tlb_batch *batch = &__get_cpu_var(ppc64_tlb_batch);
+ 
+ 	if (batch->index)
+ 		__flush_tlb_pending(batch);
+-	put_cpu_var(ppc64_tlb_batch);
++	batch->active = 0;
+ }
+ 
++#define arch_flush_lazy_mmu_mode()      do {} while (0)
++
++
+ extern void flush_hash_page(unsigned long va, real_pte_t pte, int psize,
+ 			    int local);
+ extern void flush_hash_range(unsigned long number, int local);
+@@ -88,15 +104,12 @@ extern void update_mmu_cache(struct vm_a
+ 
+ static inline void flush_tlb_mm(struct mm_struct *mm)
+ {
+-	flush_tlb_pending();
+ }
+ 
+ static inline void flush_tlb_page(struct vm_area_struct *vma,
+ 				unsigned long vmaddr)
+ {
+-#ifdef CONFIG_PPC64
+-	flush_tlb_pending();
+-#else
++#ifndef CONFIG_PPC64
+ 	_tlbie(vmaddr);
+ #endif
+ }
+@@ -112,13 +125,11 @@ static inline void flush_tlb_page_nohash
+ static inline void flush_tlb_range(struct vm_area_struct *vma,
+ 		unsigned long start, unsigned long end)
+ {
+-	flush_tlb_pending();
+ }
+ 
+ static inline void flush_tlb_kernel_range(unsigned long start,
+ 		unsigned long end)
+ {
+-	flush_tlb_pending();
+ }
+ 
+ #else	/* 6xx, 7xx, 7xxx cpus */
+Index: linux-2.6.18/mvl_patches/pro50-0303.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0303.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(303);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

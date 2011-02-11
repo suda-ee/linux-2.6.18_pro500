@@ -1,0 +1,395 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Add_documentation_for_the_zImage_s_gunzip
+# Date: Wed Sep 26 11:14:26 2007
+# MR: 24856
+# From 7850ad5c39a40ae14ab37e030357e2ae8252af2b Mon Sep 17 00:00:00 2001
+# From: David Gibson <david@gibson.dropbear.id.au>
+# Date: Wed, 14 Mar 2007 16:32:17 +1100
+# Subject: [PATCH] [POWERPC] Add documentation for the zImage's gunzip convenience functions
+# 
+# This patch adds documenting comments to the gunzip convenience
+# functions added in commit ad9d2716cfc1cda5a7e0d7bc0db45e3af8a4adbb.
+# It also removes a stray newline, and an unused global variable.
+# 
+# Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=279
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From 7850ad5c39a40ae14ab37e030357e2ae8252af2b Mon Sep 17 00:00:00 2001
+From: David Gibson <david@gibson.dropbear.id.au>
+Date: Wed, 14 Mar 2007 16:32:17 +1100
+Subject: [PATCH] [POWERPC] Add documentation for the zImage's gunzip convenience functions
+
+This patch adds documenting comments to the gunzip convenience
+functions added in commit ad9d2716cfc1cda5a7e0d7bc0db45e3af8a4adbb.
+It also removes a stray newline, and an unused global variable.
+
+Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/boot/gunzip_util.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/gunzip_util.c
++++ linux-2.6.18/arch/powerpc/boot/gunzip_util.c
+@@ -14,14 +14,31 @@
+ #include "ops.h"
+ #include "gunzip_util.h"
+ 
+-struct gunzip_state state;
+-
+ #define HEAD_CRC	2
+ #define EXTRA_FIELD	4
+ #define ORIG_NAME	8
+ #define COMMENT		0x10
+ #define RESERVED	0xe0
+ 
++/**
++ * gunzip_start - prepare to decompress gzip data
++ * @state:     decompressor state structure to be initialized
++ * @src:       buffer containing gzip compressed or uncompressed data
++ * @srclen:    size in bytes of the buffer at src
++ *
++ * If the buffer at @src contains a gzip header, this function
++ * initializes zlib to decompress the data, storing the decompression
++ * state in @state.  The other functions in this file can then be used
++ * to decompress data from the gzipped stream.
++ *
++ * If the buffer at @src does not contain a gzip header, it is assumed
++ * to contain uncompressed data.  The buffer information is recorded
++ * in @state and the other functions in this file will simply copy
++ * data from the uncompressed data stream at @src.
++ *
++ * Any errors, such as bad compressed data, cause an error to be
++ * printed an the platform's exit() function to be called.
++ */
+ void gunzip_start(struct gunzip_state *state, void *src, int srclen)
+ {
+ 	char *hdr = src;
+@@ -73,6 +90,22 @@ void gunzip_start(struct gunzip_state *s
+ 	state->s.avail_in = srclen - hdrlen;
+ }
+ 
++/**
++ * gunzip_partial - extract bytes from a gzip data stream
++ * @state:     gzip state structure previously initialized by gunzip_start()
++ * @dst:       buffer to store extracted data
++ * @dstlen:    maximum number of bytes to extract
++ *
++ * This function extracts at most @dstlen bytes from the data stream
++ * previously associated with @state by gunzip_start(), decompressing
++ * if necessary.  Exactly @dstlen bytes are extracted unless the data
++ * stream doesn't contain enough bytes, in which case the entire
++ * remainder of the stream is decompressed.
++ *
++ * Returns the actual number of bytes extracted.  If any errors occur,
++ * such as a corrupted compressed stream, an error is printed an the
++ * platform's exit() function is called.
++ */
+ int gunzip_partial(struct gunzip_state *state, void *dst, int dstlen)
+ {
+ 	int len;
+@@ -99,6 +132,20 @@ int gunzip_partial(struct gunzip_state *
+ 	return len;
+ }
+ 
++/**
++ * gunzip_exactly - extract a fixed number of bytes from a gzip data stream
++ * @state:     gzip state structure previously initialized by gunzip_start()
++ * @dst:       buffer to store extracted data
++ * @dstlen:    number of bytes to extract
++ *
++ * This function extracts exactly @dstlen bytes from the data stream
++ * previously associated with @state by gunzip_start(), decompressing
++ * if necessary.
++ *
++ * If there are less @dstlen bytes available in the data stream, or if
++ * any other errors occur, such as a corrupted compressed stream, an
++ * error is printed an the platform's exit() function is called.
++ */
+ void gunzip_exactly(struct gunzip_state *state, void *dst, int dstlen)
+ {
+ 	int len;
+@@ -110,6 +157,21 @@ void gunzip_exactly(struct gunzip_state 
+ 	}
+ }
+ 
++/**
++ * gunzip_discard - discard bytes from a gzip data stream
++ * @state:     gzip state structure previously initialized by gunzip_start()
++ * @len:       number of bytes to discard
++ *
++ * This function extracts, then discards exactly @len bytes from the
++ * data stream previously associated with @state by gunzip_start().
++ * Subsequent gunzip_partial(), gunzip_exactly() or gunzip_finish()
++ * calls will extract the data following the discarded bytes in the
++ * data stream.
++ *
++ * If there are less @len bytes available in the data stream, or if
++ * any other errors occur, such as a corrupted compressed stream, an
++ * error is printed an the platform's exit() function is called.
++ */
+ void gunzip_discard(struct gunzip_state *state, int len)
+ {
+ 	static char discard_buf[128];
+@@ -123,6 +185,21 @@ void gunzip_discard(struct gunzip_state 
+ 		gunzip_exactly(state, discard_buf, len);
+ }
+ 
++/**
++ * gunzip_finish - extract all remaining bytes from a gzip data stream
++ * @state:     gzip state structure previously initialized by gunzip_start()
++ * @dst:       buffer to store extracted data
++ * @dstlen:    maximum number of bytes to extract
++ *
++ * This function extracts all remaining data, or at most @dstlen
++ * bytes, from the stream previously associated with @state by
++ * gunzip_start().  zlib is then shut down, so it is an error to use
++ * any of the functions in this file on @state until it is
++ * re-initialized with another call to gunzip_start().
++ *
++ * If any errors occur, such as a corrupted compressed stream, an
++ * error is printed an the platform's exit() function is called.
++ */
+ int gunzip_finish(struct gunzip_state *state, void *dst, int dstlen)
+ {
+ 	int len;
+Index: linux-2.6.18/arch/powerpc/boot/gunzip_util.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/gunzip_util.h
++++ linux-2.6.18/arch/powerpc/boot/gunzip_util.h
+@@ -12,6 +12,22 @@
+ 
+ #include "zlib.h"
+ 
++/*
++ * These functions are designed to make life easy for decompressing
++ * kernel images, initrd images or any other gzip compressed image,
++ * particularly if its useful to decompress part of the image (e.g. to
++ * examine headers) before decompressing the remainder.
++ *
++ * To use:
++ *     - declare a gunzip_state structure
++ *     - use gunzip_start() to initialize the state, associating it
++ *       with a stream of compressed data
++ *     - use gunzip_partial(), gunzip_exactly() and gunzip_discard()
++ *       in any combination to extract pieces of data from the stream
++ *     - Finally use gunzip_finish() to extract the tail of the
++ *       compressed stream and wind up zlib
++ */
++
+ /* scratch space for gunzip; 46912 is from zlib_inflate_workspacesize() */
+ #define GUNZIP_SCRATCH_SIZE	46912
+ 
+@@ -27,4 +43,3 @@ void gunzip_discard(struct gunzip_state 
+ int gunzip_finish(struct gunzip_state *state, void *dst, int len);
+ 
+ #endif /* _PPC_BOOT_GUNZIP_UTIL_H_ */
+-
+Index: linux-2.6.18/mvl_patches/pro50-0279.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0279.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(279);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

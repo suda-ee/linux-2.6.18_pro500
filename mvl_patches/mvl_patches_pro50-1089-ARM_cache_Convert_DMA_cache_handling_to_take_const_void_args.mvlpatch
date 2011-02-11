@@ -1,0 +1,346 @@
+#! /usr/bin/env bash
+# Patch: -ARM_cache_Convert_DMA_cache_handling_to_take_const_void_args
+# Date: Wed Apr 30 11:09:41 2008
+# MR: 27239
+# commit 7ae5a761d2ffc4cf7d3248e09f4d3da234434f30
+# Author: Russell King <rmk@dyn-67.arm.linux.org.uk>
+# Date:   Tue Feb 6 17:39:31 2007 +0000
+# 
+#     [ARM] Convert DMA cache handling to take const void * args
+#     
+#     The DMA cache handling functions take virtual addresses, but in the
+#     form of unsigned long arguments.  This leads to a little confusion
+#     about what exactly they take.  So, convert them to take const void *
+#     instead.
+#     
+#     Signed-off-by: Russell King <rmk+kernel@arm.linux.org.uk>
+# 
+
+PATCHNUM=1089
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 27239
+commit 7ae5a761d2ffc4cf7d3248e09f4d3da234434f30
+Author: Russell King <rmk@dyn-67.arm.linux.org.uk>
+Date:   Tue Feb 6 17:39:31 2007 +0000
+
+    [ARM] Convert DMA cache handling to take const void * args
+    
+    The DMA cache handling functions take virtual addresses, but in the
+    form of unsigned long arguments.  This leads to a little confusion
+    about what exactly they take.  So, convert them to take const void *
+    instead.
+    
+    Signed-off-by: Russell King <rmk+kernel@arm.linux.org.uk>
+
+diff --git a/arch/arm/common/dmabounce.c b/arch/arm/common/dmabounce.c
+index b4748e3..2362c49 100644
+Index: linux-2.6.18/arch/arm/common/dmabounce.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/common/dmabounce.c
++++ linux-2.6.18/arch/arm/common/dmabounce.c
+@@ -321,12 +321,12 @@ unmap_single(struct device *dev, dma_add
+ 		DO_STATS ( device_info->bounce_count++ );
+ 
+ 		if (dir == DMA_FROM_DEVICE || dir == DMA_BIDIRECTIONAL) {
+-			unsigned long ptr;
++			void *ptr = buf->ptr;
+ 
+ 			dev_dbg(dev,
+ 				"%s: copy back safe %p to unsafe %p size %d\n",
+-				__func__, buf->safe, buf->ptr, size);
+-			memcpy(buf->ptr, buf->safe, size);
++				__func__, buf->safe, ptr, size);
++			memcpy(ptr, buf->safe, size);
+ 
+ 			/*
+ 			 * DMA buffers must have the same cache properties
+@@ -336,7 +336,6 @@ unmap_single(struct device *dev, dma_add
+ 			 * bidirectional case because we know the cache
+ 			 * lines will be coherent with the data written.
+ 			 */
+-			ptr = (unsigned long)buf->ptr;
+ 			dmac_clean_range(ptr, ptr + size);
+ 			outer_clean_range(__pa(ptr), __pa(ptr) + size);
+ 		}
+Index: linux-2.6.18/arch/arm/mm/consistent.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mm/consistent.c
++++ linux-2.6.18/arch/arm/mm/consistent.c
+@@ -205,10 +205,10 @@ __dma_alloc(struct device *dev, size_t s
+ 	 * kernel direct-mapped region for device DMA.
+ 	 */
+ 	{
+-		unsigned long kaddr = (unsigned long)page_address(page);
+-		memset(page_address(page), 0, size);
+-		dmac_flush_range(kaddr, kaddr + size);
+-		outer_flush_range(__pa(kaddr), __pa(kaddr) + size);
++		void *ptr = page_address(page);
++		memset(ptr, 0, size);
++		dmac_flush_range(ptr, ptr + size);
++		outer_flush_range(__pa(ptr), __pa(ptr) + size);
+ 	}
+ 
+ 	/*
+@@ -483,10 +483,9 @@ core_initcall(consistent_init);
+  * platforms with CONFIG_DMABOUNCE.
+  * Use the driver DMA support - see dma-mapping.h (dma_sync_*)
+  */
+-void consistent_sync(void *vaddr, size_t size, int direction)
++void consistent_sync(const void *start, size_t size, int direction)
+ {
+-	unsigned long start = (unsigned long)vaddr;
+-	unsigned long end   = start + size;
++	const void *end = start + size;
+ 
+ 	BUG_ON(!virt_addr_valid(start) || !virt_addr_valid(end));
+ 
+Index: linux-2.6.18/include/asm-arm/cacheflush.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/cacheflush.h
++++ linux-2.6.18/include/asm-arm/cacheflush.h
+@@ -185,9 +185,9 @@ struct cpu_cache_fns {
+ 	void (*coherent_user_range)(unsigned long, unsigned long);
+ 	void (*flush_kern_dcache_page)(void *);
+ 
+-	void (*dma_inv_range)(unsigned long, unsigned long);
+-	void (*dma_clean_range)(unsigned long, unsigned long);
+-	void (*dma_flush_range)(unsigned long, unsigned long);
++	void (*dma_inv_range)(const void *, const void *);
++	void (*dma_clean_range)(const void *, const void *);
++	void (*dma_flush_range)(const void *, const void *);
+ };
+ 
+ struct outer_cache_fns {
+@@ -246,9 +246,9 @@ extern void __cpuc_flush_dcache_page(voi
+ #define dmac_clean_range		__glue(_CACHE,_dma_clean_range)
+ #define dmac_flush_range		__glue(_CACHE,_dma_flush_range)
+ 
+-extern void dmac_inv_range(unsigned long, unsigned long);
+-extern void dmac_clean_range(unsigned long, unsigned long);
+-extern void dmac_flush_range(unsigned long, unsigned long);
++extern void dmac_inv_range(const void *, const void *);
++extern void dmac_clean_range(const void *, const void *);
++extern void dmac_flush_range(const void *, const void *);
+ 
+ #endif
+ 
+Index: linux-2.6.18/include/asm-arm/dma-mapping.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/dma-mapping.h
++++ linux-2.6.18/include/asm-arm/dma-mapping.h
+@@ -18,7 +18,7 @@
+  * platforms with CONFIG_DMABOUNCE.
+  * Use the driver DMA support - see dma-mapping.h (dma_sync_*)
+  */
+-extern void consistent_sync(void *kaddr, size_t size, int rw);
++extern void consistent_sync(const void *kaddr, size_t size, int rw);
+ 
+ /*
+  * Return whether the given device DMA address mask can be supported
+Index: linux-2.6.18/mvl_patches/pro50-1089.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1089.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1089);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

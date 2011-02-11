@@ -1,0 +1,363 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_add_of_get_mac_address_and_update_fsl_soc.c_to_use_it
+# Date: Thu Sep  6 08:27:27 2007
+# MR: 23896
+# 
+# From 29cfe6f4fb7d187f65564764a0ecf2caf9d8ed58 Mon Sep 17 00:00:00 2001
+# From: Timur Tabi <timur@freescale.com>
+# Date: Fri, 16 Feb 2007 12:01:29 -0600
+# Subject: [PATCH] [POWERPC] add of_get_mac_address and update fsl_soc.c to use it
+# 
+# Add function of_get_mac_address(), which obtains the best MAC address to use
+# from the device tree by checking various properties in order.  The order is:
+# 'mac-address', then 'local-mac-address', then 'address'.  It skips properties
+# that contain invalid MAC addresses, which were probably not initialized
+# by U-Boot.
+# 
+# Update gfar_of_init() and fs_enet_of_init() in fsl_soc.c to call
+# of_get_mac_address().
+# 
+# Signed-off-by: Timur Tabi <timur@freescale.com>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+# 
+
+PATCHNUM=165
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 23896
+
+From 29cfe6f4fb7d187f65564764a0ecf2caf9d8ed58 Mon Sep 17 00:00:00 2001
+From: Timur Tabi <timur@freescale.com>
+Date: Fri, 16 Feb 2007 12:01:29 -0600
+Subject: [PATCH] [POWERPC] add of_get_mac_address and update fsl_soc.c to use it
+
+Add function of_get_mac_address(), which obtains the best MAC address to use
+from the device tree by checking various properties in order.  The order is:
+'mac-address', then 'local-mac-address', then 'address'.  It skips properties
+that contain invalid MAC addresses, which were probably not initialized
+by U-Boot.
+
+Update gfar_of_init() and fs_enet_of_init() in fsl_soc.c to call
+of_get_mac_address().
+
+Signed-off-by: Timur Tabi <timur@freescale.com>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+Index: linux-2.6.18/arch/powerpc/kernel/prom_parse.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/prom_parse.c
++++ linux-2.6.18/arch/powerpc/kernel/prom_parse.c
+@@ -5,6 +5,7 @@
+ #include <linux/pci_regs.h>
+ #include <linux/module.h>
+ #include <linux/ioport.h>
++#include <linux/etherdevice.h>
+ #include <asm/prom.h>
+ #include <asm/pci-bridge.h>
+ 
+@@ -1003,3 +1004,42 @@ int of_irq_map_one(struct device_node *d
+ 	return res;
+ }
+ EXPORT_SYMBOL_GPL(of_irq_map_one);
++
++/**
++ * Search the device tree for the best MAC address to use.  'mac-address' is
++ * checked first, because that is supposed to contain to "most recent" MAC
++ * address. If that isn't set, then 'local-mac-address' is checked next,
++ * because that is the default address.  If that isn't set, then the obsolete
++ * 'address' is checked, just in case we're using an old device tree.
++ *
++ * Note that the 'address' property is supposed to contain a virtual address of
++ * the register set, but some DTS files have redefined that property to be the
++ * MAC address.
++ *
++ * All-zero MAC addresses are rejected, because those could be properties that
++ * exist in the device tree, but were not set by U-Boot.  For example, the
++ * DTS could define 'mac-address' and 'local-mac-address', with zero MAC
++ * addresses.  Some older U-Boots only initialized 'local-mac-address'.  In
++ * this case, the real MAC is in 'local-mac-address', and 'mac-address' exists
++ * but is all zeros.
++*/
++const void *of_get_mac_address(struct device_node *np)
++{
++	struct property *pp;
++
++	pp = of_find_property(np, "mac-address", NULL);
++	if (pp && (pp->length == 6) && is_valid_ether_addr(pp->value))
++		return pp->value;
++
++	pp = of_find_property(np, "local-mac-address", NULL);
++	if (pp && (pp->length == 6) && is_valid_ether_addr(pp->value))
++		return pp->value;
++
++	pp = of_find_property(np, "address", NULL);
++	if (pp && (pp->length == 6) && is_valid_ether_addr(pp->value))
++		return pp->value;
++
++	return NULL;
++}
++EXPORT_SYMBOL(of_get_mac_address);
++
+Index: linux-2.6.18/arch/powerpc/sysdev/fsl_soc.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/fsl_soc.c
++++ linux-2.6.18/arch/powerpc/sysdev/fsl_soc.c
+@@ -233,14 +233,7 @@ static int __init gfar_of_init(void)
+ 			goto err;
+ 		}
+ 
+-		mac_addr = get_property(np, "local-mac-address", NULL);
+-		if (mac_addr == NULL)
+-			mac_addr = get_property(np, "mac-address", NULL);
+-		if (mac_addr == NULL) {
+-			/* Obsolete */
+-			mac_addr = get_property(np, "address", NULL);
+-		}
+-
++		mac_addr = of_get_mac_address(np);
+ 		if (mac_addr)
+ 			memcpy(gfar_data.mac_addr, mac_addr, 6);
+ 
+@@ -646,8 +639,9 @@ static int __init fs_enet_of_init(void)
+ 			goto unreg;
+ 		}
+ 
+-		mac_addr = get_property(np, "mac-address", NULL);
+-		memcpy(fs_enet_data.macaddr, mac_addr, 6);
++		mac_addr = of_get_mac_address(np);
++		if (mac_addr)
++			memcpy(fs_enet_data.macaddr, mac_addr, 6);
+ 
+ 		ph = get_property(np, "phy-handle", NULL);
+ 		phy = of_find_node_by_phandle(*ph);
+@@ -931,8 +925,9 @@ static int __init fs_enet_of_init(void)
+ 			goto err;
+ 		r[0].name = enet_regs;
+ 
+-		mac_addr = (void *)get_property(np, "mac-address", NULL);
+-		memcpy(fs_enet_data.macaddr, mac_addr, 6);
++		mac_addr = of_get_mac_address(np);
++		if (mac_addr)
++			memcpy(fs_enet_data.macaddr, mac_addr, 6);
+ 
+ 		ph = (phandle *) get_property(np, "phy-handle", NULL);
+ 		if (ph != NULL)
+Index: linux-2.6.18/include/asm-powerpc/prom.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/prom.h
++++ linux-2.6.18/include/asm-powerpc/prom.h
+@@ -256,6 +256,8 @@ extern void kdump_move_device_tree(void)
+ /* CPU OF node matching */
+ struct device_node *of_get_cpu_node(int cpu, unsigned int *thread);
+ 
++/* Get the MAC address */
++extern const void *of_get_mac_address(struct device_node *np);
+ 
+ /*
+  * OF interrupt mapping
+Index: linux-2.6.18/mvl_patches/pro50-0165.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0165.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(165);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

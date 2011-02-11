@@ -1,0 +1,762 @@
+#! /usr/bin/env bash
+# Patch: -ALSA_ASoC_AT91RM92000_audio_DMA
+# Date: Mon Jul 21 10:26:08 2008
+# MR: 26835
+# Disposition: Backport from 2.6.21-rc1
+# Adjustments:
+# 
+# From ff9abf5b0a655b59d59ea61aec5be6285bf3ac30 Mon Sep 17 00:00:00 2001
+# From: Frank Mandarino <fmandarino@endrelia.com>
+# Date: Fri, 6 Oct 2006 18:39:29 +0200
+# Subject: [PATCH] [ALSA] ASoC AT91RM92000 audio DMA
+# 
+# This patch adds ASoC audio DMA support to the Atmel AT91RM9200 CPU.
+# Features:-
+#  o Playback/Capture supported.
+#  o 16 Bit data size.
+# 
+# Signed-off-by: Frank Mandarino <fmandarino@endrelia.com>
+# Signed-off-by: Liam Girdwood <liam.girdwood@wolfsonmicro.com>
+# Signed-off-by: Takashi Iwai <tiwai@suse.de>
+# Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+
+PATCHNUM=1278
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26835
+Disposition: Backport from 2.6.21-rc1
+Adjustments:
+
+From ff9abf5b0a655b59d59ea61aec5be6285bf3ac30 Mon Sep 17 00:00:00 2001
+From: Frank Mandarino <fmandarino@endrelia.com>
+Date: Fri, 6 Oct 2006 18:39:29 +0200
+Subject: [PATCH] [ALSA] ASoC AT91RM92000 audio DMA
+
+This patch adds ASoC audio DMA support to the Atmel AT91RM9200 CPU.
+Features:-
+ o Playback/Capture supported.
+ o 16 Bit data size.
+
+Signed-off-by: Frank Mandarino <fmandarino@endrelia.com>
+Signed-off-by: Liam Girdwood <liam.girdwood@wolfsonmicro.com>
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+Index: linux-2.6.18/sound/soc/at91/at91rm9200-pcm.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/at91/at91rm9200-pcm.c
+@@ -0,0 +1,428 @@
++/*
++ * at91rm9200-pcm.c -- ALSA PCM interface for the Atmel AT91RM9200 chip.
++ *
++ * Author:	Frank Mandarino <fmandarino@endrelia.com>
++ *		Endrelia Technologies Inc.
++ * Created:	Mar 3, 2006
++ *
++ * Based on pxa2xx-pcm.c by:
++ *
++ * Author:	Nicolas Pitre
++ * Created:	Nov 30, 2004
++ * Copyright:	(C) 2004 MontaVista Software, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/platform_device.h>
++#include <linux/slab.h>
++#include <linux/dma-mapping.h>
++
++#include <sound/driver.h>
++#include <sound/core.h>
++#include <sound/pcm.h>
++#include <sound/pcm_params.h>
++#include <sound/soc.h>
++
++#include <asm/arch/at91rm9200.h>
++#include <asm/arch/at91rm9200_ssc.h>
++#include <asm/arch/at91rm9200_pdc.h>
++#include <asm/arch/hardware.h>
++
++#include "at91rm9200-pcm.h"
++
++#if 0
++#define	DBG(x...)	printk(KERN_INFO "at91rm9200-pcm: " x)
++#else
++#define	DBG(x...)
++#endif
++
++static const snd_pcm_hardware_t at91rm9200_pcm_hardware = {
++	.info			= SNDRV_PCM_INFO_MMAP |
++				  SNDRV_PCM_INFO_MMAP_VALID |
++				  SNDRV_PCM_INFO_INTERLEAVED |
++				  SNDRV_PCM_INFO_PAUSE,
++	.formats		= SNDRV_PCM_FMTBIT_S16_LE,
++	.period_bytes_min	= 32,
++	.period_bytes_max	= 8192,
++	.periods_min		= 2,
++	.periods_max		= 1024,
++	.buffer_bytes_max	= 32 * 1024,
++};
++
++struct at91rm9200_runtime_data {
++	at91rm9200_pcm_dma_params_t *params;
++	dma_addr_t dma_buffer;			/* physical address of dma buffer */
++	dma_addr_t dma_buffer_end;		/* first address beyond DMA buffer */
++	size_t period_size;
++	dma_addr_t period_ptr;			/* physical address of next period */
++	u32 pdc_xpr_save;			/* PDC register save */
++	u32 pdc_xcr_save;
++	u32 pdc_xnpr_save;
++	u32 pdc_xncr_save;
++};
++
++static void at91rm9200_pcm_dma_irq(u32 ssc_sr,
++	struct snd_pcm_substream *substream)
++{
++	struct at91rm9200_runtime_data *prtd = substream->runtime->private_data;
++	at91rm9200_pcm_dma_params_t *params = prtd->params;
++	static int count = 0;
++
++	count++;
++
++	if (ssc_sr & params->mask->ssc_endbuf) {
++
++		printk(KERN_WARNING
++			"at91rm9200-pcm: buffer %s on %s (SSC_SR=%#x, count=%d)\n",
++			substream->stream == SNDRV_PCM_STREAM_PLAYBACK
++				? "underrun" : "overrun",
++			params->name, ssc_sr, count);
++
++		/* re-start the PDC */
++		at91_ssc_write(params->pdc->ptcr, params->mask->pdc_disable);
++
++		prtd->period_ptr += prtd->period_size;
++		if (prtd->period_ptr >= prtd->dma_buffer_end) {
++			prtd->period_ptr = prtd->dma_buffer;
++		}
++
++		at91_ssc_write(params->pdc->xpr, prtd->period_ptr);
++		at91_ssc_write(params->pdc->xcr,
++				prtd->period_size / params->pdc_xfer_size);
++
++		at91_ssc_write(params->pdc->ptcr, params->mask->pdc_enable);
++	}
++
++	if (ssc_sr & params->mask->ssc_endx) {
++
++		/* Load the PDC next pointer and counter registers */
++		prtd->period_ptr += prtd->period_size;
++		if (prtd->period_ptr >= prtd->dma_buffer_end) {
++			prtd->period_ptr = prtd->dma_buffer;
++		}
++		at91_ssc_write(params->pdc->xnpr, prtd->period_ptr);
++		at91_ssc_write(params->pdc->xncr,
++				prtd->period_size / params->pdc_xfer_size);
++	}
++
++	snd_pcm_period_elapsed(substream);
++}
++
++static int at91rm9200_pcm_hw_params(struct snd_pcm_substream *substream,
++	struct snd_pcm_hw_params *params)
++{
++	snd_pcm_runtime_t *runtime = substream->runtime;
++	struct at91rm9200_runtime_data *prtd = runtime->private_data;
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++
++	/* this may get called several times by oss emulation
++	 * with different params */
++
++	snd_pcm_set_runtime_buffer(substream, &substream->dma_buffer);
++	runtime->dma_bytes = params_buffer_bytes(params);
++
++	prtd->params = rtd->cpu_dai->dma_data;
++	prtd->params->dma_intr_handler = at91rm9200_pcm_dma_irq;
++
++	prtd->dma_buffer = runtime->dma_addr;
++	prtd->dma_buffer_end = runtime->dma_addr + runtime->dma_bytes;
++	prtd->period_size = params_period_bytes(params);
++
++	DBG("hw_params: DMA for %s initialized (dma_bytes=%d, period_size=%d)\n",
++		prtd->params->name, runtime->dma_bytes, prtd->period_size);
++	return 0;
++}
++
++static int at91rm9200_pcm_hw_free(struct snd_pcm_substream *substream)
++{
++	struct at91rm9200_runtime_data *prtd = substream->runtime->private_data;
++	at91rm9200_pcm_dma_params_t *params = prtd->params;
++
++	if (params != NULL) {
++		at91_ssc_write(params->pdc->ptcr, params->mask->pdc_disable);
++		prtd->params->dma_intr_handler = NULL;
++	}
++
++	return 0;
++}
++
++static int at91rm9200_pcm_prepare(struct snd_pcm_substream *substream)
++{
++	struct at91rm9200_runtime_data *prtd = substream->runtime->private_data;
++	at91rm9200_pcm_dma_params_t *params = prtd->params;
++
++	at91_ssc_write(params->ssc->idr,
++			params->mask->ssc_endx | params->mask->ssc_endbuf);
++
++	at91_ssc_write(params->pdc->ptcr, params->mask->pdc_disable);
++	return 0;
++}
++
++static int at91rm9200_pcm_trigger(struct snd_pcm_substream *substream,
++	int cmd)
++{
++	struct at91rm9200_runtime_data *prtd = substream->runtime->private_data;
++	at91rm9200_pcm_dma_params_t *params = prtd->params;
++	int ret = 0;
++
++	switch (cmd) {
++	case SNDRV_PCM_TRIGGER_START:
++		prtd->period_ptr = prtd->dma_buffer;
++
++		at91_ssc_write(params->pdc->xpr, prtd->period_ptr);
++		at91_ssc_write(params->pdc->xcr,
++				prtd->period_size / params->pdc_xfer_size);
++
++		prtd->period_ptr += prtd->period_size;
++		at91_ssc_write(params->pdc->xnpr, prtd->period_ptr);
++		at91_ssc_write(params->pdc->xncr,
++				prtd->period_size / params->pdc_xfer_size);
++
++		DBG("trigger: period_ptr=%lx, xpr=%lx, xcr=%ld, xnpr=%lx, xncr=%ld\n",
++			(unsigned long) prtd->period_ptr,
++			at91_ssc_read(params->pdc->xpr),
++			at91_ssc_read(params->pdc->xcr),
++			at91_ssc_read(params->pdc->xnpr),
++			at91_ssc_read(params->pdc->xncr));
++
++		at91_ssc_write(params->ssc->ier,
++			params->mask->ssc_endx | params->mask->ssc_endbuf);
++
++		at91_ssc_write(params->pdc->ptcr, params->mask->pdc_enable);
++
++		DBG("sr=%lx imr=%lx\n", at91_ssc_read(params->ssc->ier - 4),
++					at91_ssc_read(params->ssc->ier + 8));
++		break;
++
++	case SNDRV_PCM_TRIGGER_STOP:
++	case SNDRV_PCM_TRIGGER_SUSPEND:
++	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
++		at91_ssc_write(params->pdc->ptcr, params->mask->pdc_disable);
++		break;
++
++	case SNDRV_PCM_TRIGGER_RESUME:
++	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
++		at91_ssc_write(params->pdc->ptcr, params->mask->pdc_enable);
++		break;
++
++	default:
++		ret = -EINVAL;
++	}
++
++	return ret;
++}
++
++static snd_pcm_uframes_t at91rm9200_pcm_pointer(
++	struct snd_pcm_substream *substream)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	struct at91rm9200_runtime_data *prtd = runtime->private_data;
++	at91rm9200_pcm_dma_params_t *params = prtd->params;
++	dma_addr_t ptr;
++	snd_pcm_uframes_t x;
++
++	ptr = (dma_addr_t) at91_ssc_read(params->pdc->xpr);
++	x = bytes_to_frames(runtime, ptr - prtd->dma_buffer);
++
++	if (x == runtime->buffer_size)
++		x = 0;
++	return x;
++}
++
++static int at91rm9200_pcm_open(struct snd_pcm_substream *substream)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	struct at91rm9200_runtime_data *prtd;
++	int ret = 0;
++
++	snd_soc_set_runtime_hwparams(substream, &at91rm9200_pcm_hardware);
++
++	/* ensure that buffer size is a multiple of period size */
++	ret = snd_pcm_hw_constraint_integer(runtime, SNDRV_PCM_HW_PARAM_PERIODS);
++	if (ret < 0)
++		goto out;
++
++	prtd = kzalloc(sizeof(struct at91rm9200_runtime_data), GFP_KERNEL);
++	if (prtd == NULL) {
++		ret = -ENOMEM;
++		goto out;
++	}
++	runtime->private_data = prtd;
++
++ out:
++	return ret;
++}
++
++static int at91rm9200_pcm_close(struct snd_pcm_substream *substream)
++{
++	struct at91rm9200_runtime_data *prtd = substream->runtime->private_data;
++
++	kfree(prtd);
++	return 0;
++}
++
++static int at91rm9200_pcm_mmap(struct snd_pcm_substream *substream,
++	struct vm_area_struct *vma)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++
++	return dma_mmap_writecombine(substream->pcm->card->dev, vma,
++				     runtime->dma_area,
++				     runtime->dma_addr,
++				     runtime->dma_bytes);
++}
++
++struct snd_pcm_ops at91rm9200_pcm_ops = {
++	.open		= at91rm9200_pcm_open,
++	.close		= at91rm9200_pcm_close,
++	.ioctl		= snd_pcm_lib_ioctl,
++	.hw_params	= at91rm9200_pcm_hw_params,
++	.hw_free	= at91rm9200_pcm_hw_free,
++	.prepare	= at91rm9200_pcm_prepare,
++	.trigger	= at91rm9200_pcm_trigger,
++	.pointer	= at91rm9200_pcm_pointer,
++	.mmap		= at91rm9200_pcm_mmap,
++};
++
++static int at91rm9200_pcm_preallocate_dma_buffer(struct snd_pcm *pcm,
++	int stream)
++{
++	struct snd_pcm_substream *substream = pcm->streams[stream].substream;
++	struct snd_dma_buffer *buf = &substream->dma_buffer;
++	size_t size = at91rm9200_pcm_hardware.buffer_bytes_max;
++
++	buf->dev.type = SNDRV_DMA_TYPE_DEV;
++	buf->dev.dev = pcm->card->dev;
++	buf->private_data = NULL;
++	buf->area = dma_alloc_writecombine(pcm->card->dev, size,
++					   &buf->addr, GFP_KERNEL);
++
++	DBG("preallocate_dma_buffer: area=%p, addr=%p, size=%d\n",
++		(void *) buf->area,
++		(void *) buf->addr,
++		size);
++
++	if (!buf->area)
++		return -ENOMEM;
++
++	buf->bytes = size;
++	return 0;
++}
++
++static u64 at91rm9200_pcm_dmamask = 0xffffffff;
++
++static int at91rm9200_pcm_new(struct snd_card *card,
++	struct snd_soc_codec_dai *dai, struct snd_pcm *pcm)
++{
++	int ret = 0;
++
++	if (!card->dev->dma_mask)
++		card->dev->dma_mask = &at91rm9200_pcm_dmamask;
++	if (!card->dev->coherent_dma_mask)
++		card->dev->coherent_dma_mask = 0xffffffff;
++
++	if (dai->playback.channels_min) {
++		ret = at91rm9200_pcm_preallocate_dma_buffer(pcm,
++			SNDRV_PCM_STREAM_PLAYBACK);
++		if (ret)
++			goto out;
++	}
++
++	if (dai->capture.channels_min) {
++		ret = at91rm9200_pcm_preallocate_dma_buffer(pcm,
++			SNDRV_PCM_STREAM_CAPTURE);
++		if (ret)
++			goto out;
++	}
++ out:
++	return ret;
++}
++
++static void at91rm9200_pcm_free_dma_buffers(struct snd_pcm *pcm)
++{
++	struct snd_pcm_substream *substream;
++	struct snd_dma_buffer *buf;
++	int stream;
++
++	for (stream = 0; stream < 2; stream++) {
++		substream = pcm->streams[stream].substream;
++		if (!substream)
++			continue;
++
++		buf = &substream->dma_buffer;
++		if (!buf->area)
++			continue;
++
++		dma_free_writecombine(pcm->card->dev, buf->bytes,
++				      buf->area, buf->addr);
++		buf->area = NULL;
++	}
++}
++
++static int at91rm9200_pcm_suspend(struct platform_device *pdev,
++	struct snd_soc_cpu_dai *dai)
++{
++	struct snd_pcm_runtime *runtime = dai->runtime;
++	struct at91rm9200_runtime_data *prtd;
++	at91rm9200_pcm_dma_params_t *params;
++
++	if (!runtime)
++		return 0;
++
++	prtd = runtime->private_data;
++	params = prtd->params;
++
++	/* disable the PDC and save the PDC registers */
++
++	at91_ssc_write(params->pdc->ptcr, params->mask->pdc_disable);
++
++	prtd->pdc_xpr_save  = at91_ssc_read(params->pdc->xpr);
++	prtd->pdc_xcr_save  = at91_ssc_read(params->pdc->xcr);
++	prtd->pdc_xnpr_save = at91_ssc_read(params->pdc->xnpr);
++	prtd->pdc_xncr_save = at91_ssc_read(params->pdc->xncr);
++
++	return 0;
++}
++
++static int at91rm9200_pcm_resume(struct platform_device *pdev,
++	struct snd_soc_cpu_dai *dai)
++{
++	struct snd_pcm_runtime *runtime = dai->runtime;
++	struct at91rm9200_runtime_data *prtd;
++	at91rm9200_pcm_dma_params_t *params;
++
++	if (!runtime)
++		return 0;
++
++	prtd = runtime->private_data;
++	params = prtd->params;
++
++	/* restore the PDC registers and enable the PDC */
++	at91_ssc_write(params->pdc->xpr,  prtd->pdc_xpr_save);
++	at91_ssc_write(params->pdc->xcr,  prtd->pdc_xcr_save);
++	at91_ssc_write(params->pdc->xnpr, prtd->pdc_xnpr_save);
++	at91_ssc_write(params->pdc->xncr, prtd->pdc_xncr_save);
++
++	at91_ssc_write(params->pdc->ptcr, params->mask->pdc_enable);
++	return 0;
++}
++
++struct snd_soc_platform at91rm9200_soc_platform = {
++	.name		= "at91rm9200-audio",
++	.pcm_ops 	= &at91rm9200_pcm_ops,
++	.pcm_new	= at91rm9200_pcm_new,
++	.pcm_free	= at91rm9200_pcm_free_dma_buffers,
++	.suspend	= at91rm9200_pcm_suspend,
++	.resume		= at91rm9200_pcm_resume,
++};
++
++EXPORT_SYMBOL_GPL(at91rm9200_soc_platform);
++
++MODULE_AUTHOR("Frank Mandarino <fmandarino@endrelia.com>");
++MODULE_DESCRIPTION("Atmel AT91RM9200 PCM module");
++MODULE_LICENSE("GPL");
+Index: linux-2.6.18/sound/soc/at91/at91rm9200-pcm.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/at91/at91rm9200-pcm.h
+@@ -0,0 +1,75 @@
++/*
++ * at91rm9200-pcm.h - ALSA PCM interface for the Atmel AT91RM9200 chip
++ *
++ * Author:	Frank Mandarino <fmandarino@endrelia.com>
++ *		Endrelia Technologies Inc.
++ * Created:	Mar 3, 2006
++ *
++ * Based on pxa2xx-pcm.h by:
++ *
++ * Author:	Nicolas Pitre
++ * Created:	Nov 30, 2004
++ * Copyright:	MontaVista Software, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++/*
++ * Registers and status bits that are required by the PCM driver.
++ */
++struct at91rm9200_ssc_regs {
++	void __iomem 	*cr;		/* SSC control */
++	void __iomem	*ier;		/* SSC interrupt enable */
++	void __iomem	*idr;		/* SSC interrupt disable */
++};
++
++struct at91rm9200_pdc_regs {
++	void __iomem	*xpr;		/* PDC recv/trans pointer */
++	void __iomem	*xcr;		/* PDC recv/trans counter */
++	void __iomem	*xnpr;		/* PDC next recv/trans pointer */
++	void __iomem	*xncr;		/* PDC next recv/trans counter */
++	void __iomem	*ptcr;		/* PDC transfer control */
++};
++
++struct at91rm9200_ssc_mask {
++	u32	ssc_enable;		/* SSC recv/trans enable */
++	u32	ssc_disable;		/* SSC recv/trans disable */
++	u32	ssc_endx;		/* SSC ENDTX or ENDRX */
++	u32	ssc_endbuf;		/* SSC TXBUFE or RXBUFF */
++	u32	pdc_enable;		/* PDC recv/trans enable */
++	u32	pdc_disable;		/* PDC recv/trans disable */
++};
++
++
++/*
++ * This structure, shared between the PCM driver and the interface,
++ * contains all information required by the PCM driver to perform the
++ * PDC DMA operation.  All fields except dma_intr_handler() are initialized
++ * by the interface.  The dms_intr_handler() pointer is set by the PCM
++ * driver and called by the interface SSC interrupt handler if it is
++ * non-NULL.
++ */
++typedef struct {
++	char *name;			/* stream identifier */
++	int pdc_xfer_size;		/* PDC counter increment in bytes */
++	struct at91rm9200_ssc_regs *ssc; /* SSC register addresses */
++	struct at91rm9200_pdc_regs *pdc; /* PDC receive/transmit registers */
++	struct at91rm9200_ssc_mask *mask;/* SSC & PDC status bits */
++	snd_pcm_substream_t *substream;
++	void (*dma_intr_handler)(u32, snd_pcm_substream_t *);
++} at91rm9200_pcm_dma_params_t;
++
++extern struct snd_soc_cpu_dai at91rm9200_i2s_dai[3];
++extern struct snd_soc_platform at91rm9200_soc_platform;
++
++
++/*
++ * SSC I/O helpers.
++ * E.g., at91_ssc_write(AT91_SSC(1) + AT91_SSC_CR, AT91_SSC_RXEN);
++ */
++#define AT91_SSC(x) (((x)==0) ? AT91_VA_BASE_SSC0 :\
++	 ((x)==1) ? AT91_VA_BASE_SSC1 : ((x)==2) ? AT91_VA_BASE_SSC2 : NULL)
++#define at91_ssc_read(a)	((unsigned long) __raw_readl(a))
++#define at91_ssc_write(a,v)	__raw_writel((v),(a))
+Index: linux-2.6.18/mvl_patches/pro50-1278.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1278.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1278);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

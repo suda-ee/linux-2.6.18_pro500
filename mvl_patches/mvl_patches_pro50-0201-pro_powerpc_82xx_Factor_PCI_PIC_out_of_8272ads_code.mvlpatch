@@ -1,0 +1,731 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_82xx_Factor_PCI_PIC_out_of_8272ads_code
+# Date: Wed Sep 26 11:11:46 2007
+# Source: Scott Wood <scottwood@freescale.com>
+# MR: 24308
+# Type: Defect Fix
+# Disposition: submitted to linuxppc-dev
+# Signed-off-by: Wade Farnsworth <wfarnsworth@mvista.com>
+# Description:
+#     This patch has been modified slightly due to some minor differences in the
+#     affected files.
+# 
+# [PATCH 35/61] 82xx: Factor PCI PIC out of 8272ads code.
+# 
+# The same PIC exists on other boards, such as the PQ2FADS.
+# 
+# Signed-off-by: Scott Wood <scottwood@freescale.com>
+# 
+
+PATCHNUM=201
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Scott Wood <scottwood@freescale.com>
+MR: 24308
+Type: Defect Fix
+Disposition: submitted to linuxppc-dev
+Signed-off-by: Wade Farnsworth <wfarnsworth@mvista.com>
+Description:
+    This patch has been modified slightly due to some minor differences in the
+    affected files.
+
+[PATCH 35/61] 82xx: Factor PCI PIC out of 8272ads code.
+
+The same PIC exists on other boards, such as the PQ2FADS.
+
+Signed-off-by: Scott Wood <scottwood@freescale.com>
+
+Index: linux-2.6.18/arch/powerpc/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/Kconfig
++++ linux-2.6.18/arch/powerpc/Kconfig
+@@ -1006,7 +1006,7 @@ config PCI_8260
+ 
+ config 8260_PCI9
+ 	bool "Enable workaround for MPC826x erratum PCI 9"
+-	depends on PCI_8260 && !ADS8272
++	depends on PCI_8260 && !8272
+ 	default y
+ 
+ choice
+Index: linux-2.6.18/arch/powerpc/platforms/82xx/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/82xx/Kconfig
++++ linux-2.6.18/arch/powerpc/platforms/82xx/Kconfig
+@@ -13,9 +13,13 @@ config MPC8272ADS
+        select 8260
+        select CPM2
+        select FSL_SOC
++       select PQ2_ADS_PCI_PIC if PCI
+        help
+          This option enables support for the MPC8272 ADS board
+ 
+ endchoice
+ 
+ endmenu
++
++config PQ2_ADS_PCI_PIC
++	bool
+Index: linux-2.6.18/arch/powerpc/platforms/82xx/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/82xx/Makefile
++++ linux-2.6.18/arch/powerpc/platforms/82xx/Makefile
+@@ -4,3 +4,4 @@
+ obj-$(CONFIG_PPC_82xx) += mpc82xx.o
+ obj-$(CONFIG_MPC8272ADS) += mpc8272ads.o
+ obj-$(CONFIG_CPM2) += pq2.o
++obj-$(CONFIG_PQ2_ADS_PCI_PIC) += pq2ads-pci-pic.o
+Index: linux-2.6.18/arch/powerpc/platforms/82xx/mpc8272ads.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/82xx/mpc8272ads.c
++++ linux-2.6.18/arch/powerpc/platforms/82xx/mpc8272ads.c
+@@ -33,18 +33,7 @@
+ #include <../sysdev/cpm2_pic.h>
+ 
+ #include "pq2ads.h"
+-
+-#ifdef CONFIG_PCI
+-static uint pci_clk_frq;
+-static struct {
+-	unsigned long *pci_int_stat_reg;
+-	unsigned long *pci_int_mask_reg;
+-} pci_regs;
+-
+-static unsigned long pci_int_base;
+-static struct irq_host *pci_pic_host;
+-static struct device_node *pci_pic_node;
+-#endif
++#include "pq2.h"
+ 
+ static void __init mpc8272ads_pic_init(void)
+ {
+@@ -70,10 +59,9 @@ static void __init mpc8272ads_pic_init(v
+ 	cpm_reg = (cpm2_map_t *) ioremap(get_immrbase(), sizeof(cpm2_map_t));
+ 	cpm_reg->im_intctl.ic_siprr = 0x05309770;
+ 	iounmap(cpm_reg);
+-#ifdef CONFIG_PCI
++
+ 	/* Initialize stuff for the 82xx CPLD IC and install demux  */
+-	m82xx_pci_init_irq();
+-#endif
++	pq2ads_pci_init_irq();
+ }
+ 
+ static void init_fcc1_ioports(struct fs_platform_info *fpi)
+@@ -317,178 +305,6 @@ void __init mpc8272ads_board_setup(void)
+ }
+ 
+ #ifdef CONFIG_PCI
+-static void m82xx_pci_mask_irq(unsigned int irq)
+-{
+-	int bit = irq - pci_int_base;
+-
+-	*pci_regs.pci_int_mask_reg |= (1 << (31 - bit));
+-	return;
+-}
+-
+-static void m82xx_pci_unmask_irq(unsigned int irq)
+-{
+-	int bit = irq - pci_int_base;
+-
+-	*pci_regs.pci_int_mask_reg &= ~(1 << (31 - bit));
+-	return;
+-}
+-
+-static void m82xx_pci_mask_and_ack(unsigned int irq)
+-{
+-	int bit = irq - pci_int_base;
+-
+-	*pci_regs.pci_int_mask_reg |= (1 << (31 - bit));
+-	return;
+-}
+-
+-static void m82xx_pci_end_irq(unsigned int irq)
+-{
+-	int bit = irq - pci_int_base;
+-
+-	*pci_regs.pci_int_mask_reg &= ~(1 << (31 - bit));
+-	return;
+-}
+-
+-struct hw_interrupt_type m82xx_pci_ic = {
+-	.typename = "MPC82xx ADS PCI",
+-	.name = "MPC82xx ADS PCI",
+-	.enable = m82xx_pci_unmask_irq,
+-	.disable = m82xx_pci_mask_irq,
+-	.ack = m82xx_pci_mask_and_ack,
+-	.end = m82xx_pci_end_irq,
+-	.mask = m82xx_pci_mask_irq,
+-	.mask_ack = m82xx_pci_mask_and_ack,
+-	.unmask = m82xx_pci_unmask_irq,
+-	.eoi = m82xx_pci_end_irq,
+-};
+-
+-static void
+-m82xx_pci_irq_demux(unsigned int irq, struct irq_desc *desc,
+-		    struct pt_regs *regs)
+-{
+-	unsigned long stat, mask, pend;
+-	int bit;
+-
+-	for (;;) {
+-		stat = *pci_regs.pci_int_stat_reg;
+-		mask = *pci_regs.pci_int_mask_reg;
+-		pend = stat & ~mask & 0xf0000000;
+-		if (!pend)
+-			break;
+-		for (bit = 0; pend != 0; ++bit, pend <<= 1) {
+-			if (pend & 0x80000000)
+-				__do_IRQ(pci_int_base + bit, regs);
+-		}
+-	}
+-}
+-
+-static int pci_pic_host_match(struct irq_host *h, struct device_node *node)
+-{
+-	return node == pci_pic_node;
+-}
+-
+-static int pci_pic_host_map(struct irq_host *h, unsigned int virq,
+-			    irq_hw_number_t hw)
+-{
+-	get_irq_desc(virq)->status |= IRQ_LEVEL;
+-	set_irq_chip(virq, &m82xx_pci_ic);
+-	return 0;
+-}
+-
+-static void pci_host_unmap(struct irq_host *h, unsigned int virq)
+-{
+-	/* remove chip and handler */
+-	set_irq_chip(virq, NULL);
+-}
+-
+-static struct irq_host_ops pci_pic_host_ops = {
+-	.match = pci_pic_host_match,
+-	.map = pci_pic_host_map,
+-	.unmap = pci_host_unmap,
+-};
+-
+-void m82xx_pci_init_irq(void)
+-{
+-	int irq;
+-	cpm2_map_t *immap;
+-	struct device_node *np;
+-	struct resource r;
+-	const u32 *regs;
+-	unsigned int size;
+-	const u32 *irq_map;
+-	int i;
+-	unsigned int irq_max, irq_min;
+-
+-	if ((np = of_find_node_by_type(NULL, "soc")) == NULL) {
+-		printk(KERN_INFO "No SOC node in device tree\n");
+-		return;
+-	}
+-	memset(&r, 0, sizeof(r));
+-	if (of_address_to_resource(np, 0, &r)) {
+-		printk(KERN_INFO "No SOC reg property in device tree\n");
+-		return;
+-	}
+-	immap = ioremap(r.start, sizeof(*immap));
+-	of_node_put(np);
+-
+-	/* install the demultiplexer for the PCI cascade interrupt */
+-	np = of_find_node_by_type(NULL, "pci");
+-	if (!np) {
+-		printk(KERN_INFO "No pci node on device tree\n");
+-		iounmap(immap);
+-		return;
+-	}
+-	irq_map = get_property(np, "interrupt-map", &size);
+-	if ((!irq_map) || (size <= 7)) {
+-		printk(KERN_INFO "No interrupt-map property of pci node\n");
+-		iounmap(immap);
+-		return;
+-	}
+-	size /= sizeof(irq_map[0]);
+-	for (i = 0, irq_max = 0, irq_min = 512; i < size; i += 7, irq_map += 7) {
+-		if (irq_map[5] < irq_min)
+-			irq_min = irq_map[5];
+-		if (irq_map[5] > irq_max)
+-			irq_max = irq_map[5];
+-	}
+-	pci_int_base = irq_min;
+-	irq = irq_of_parse_and_map(np, 0);
+-	set_irq_chained_handler(irq, m82xx_pci_irq_demux);
+-	of_node_put(np);
+-	np = of_find_node_by_type(NULL, "pci-pic");
+-	if (!np) {
+-		printk(KERN_INFO "No pci pic node on device tree\n");
+-		iounmap(immap);
+-		return;
+-	}
+-	pci_pic_node = of_node_get(np);
+-	/* PCI interrupt controller registers: status and mask */
+-	regs = get_property(np, "reg", &size);
+-	if ((!regs) || (size <= 2)) {
+-		printk(KERN_INFO "No reg property in pci pic node\n");
+-		iounmap(immap);
+-		return;
+-	}
+-	pci_regs.pci_int_stat_reg =
+-	    ioremap(regs[0], sizeof(*pci_regs.pci_int_stat_reg));
+-	pci_regs.pci_int_mask_reg =
+-	    ioremap(regs[1], sizeof(*pci_regs.pci_int_mask_reg));
+-	of_node_put(np);
+-	/* configure chip select for PCI interrupt controller */
+-	immap->im_memctl.memc_br3 = regs[0] | 0x00001801;
+-	immap->im_memctl.memc_or3 = 0xffff8010;
+-	/* make PCI IRQ level sensitive */
+-	immap->im_intctl.ic_siexr &= ~(1 << (14 - (irq - SIU_INT_IRQ1)));
+-
+-	/* mask all PCI interrupts */
+-	*pci_regs.pci_int_mask_reg |= 0xfff00000;
+-	iounmap(immap);
+-	pci_pic_host =
+-	    irq_alloc_host(IRQ_HOST_MAP_LINEAR, irq_max - irq_min + 1,
+-			   &pci_pic_host_ops, irq_max + 1);
+-	return;
+-}
+-
+ static int m82xx_pci_exclude_device(struct pci_controller *hose,
+ 				    u_char bus, u_char devfn)
+ {
+@@ -515,7 +331,6 @@ void __init add_bridge(struct device_nod
+ 		printk(KERN_INFO "No clock-frequency property in PCI node");
+ 		return;
+ 	}
+-	pci_clk_frq = *(uint *) ptr;
+ 	of_node_put(np);
+ 	bus_range = get_property(np, "bus-range", &len);
+ 	if (bus_range == NULL || len < 2 * sizeof(int)) {
+Index: linux-2.6.18/arch/powerpc/platforms/82xx/pq2.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/82xx/pq2.h
++++ linux-2.6.18/arch/powerpc/platforms/82xx/pq2.h
+@@ -4,4 +4,13 @@
+ void pq2_restart(char *cmd);
+ void pq2_halt(void);
+ 
++#ifdef CONFIG_PCI
++int pq2ads_pci_init_irq(void);
++#else
++static inline int pq2ads_pci_init_irq(void)
++{
++	return 0;
++}
++#endif
++
+ #endif
+Index: linux-2.6.18/arch/powerpc/platforms/82xx/pq2ads-pci-pic.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/82xx/pq2ads-pci-pic.c
+@@ -0,0 +1,201 @@
++/*
++ * PQ2 ADS-style PCI interrupt controller
++ *
++ * Copyright 2007 Freescale Semiconductor, Inc.
++ * Author: Scott Wood <scottwood@freescale.com>
++ *
++ * Loosely based on mpc82xx ADS support by Vitaly Bordug <vbordug@ru.mvista.com>
++ * Copyright (c) 2006 MontaVista Software, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License version 2 as published
++ * by the Free Software Foundation.
++ */
++
++#include <linux/init.h>
++#include <linux/spinlock.h>
++#include <linux/irq.h>
++#include <linux/types.h>
++#include <linux/bootmem.h>
++
++#include <asm/io.h>
++#include <asm/prom.h>
++#include <asm/cpm2.h>
++
++static DEFINE_SPINLOCK(pci_pic_lock);
++
++struct pq2ads_pci_pic {
++	struct device_node *node;
++	struct irq_host *host;
++
++	struct {
++		u32 stat;
++		u32 mask;
++	} __iomem *regs;
++};
++
++#define NUM_IRQS 32
++
++static void pq2ads_pci_mask_irq(unsigned int virq)
++{
++	struct pq2ads_pci_pic *priv = get_irq_chip_data(virq);
++	int irq = NUM_IRQS - virq_to_hw(virq) - 1;
++
++	if (irq != -1) {
++		unsigned long flags;
++		spin_lock_irqsave(&pci_pic_lock, flags);
++
++		setbits32(&priv->regs->mask, 1 << irq);
++		mb();
++
++		spin_unlock_irqrestore(&pci_pic_lock, flags);
++	}
++}
++
++static void pq2ads_pci_unmask_irq(unsigned int virq)
++{
++	struct pq2ads_pci_pic *priv = get_irq_chip_data(virq);
++	int irq = NUM_IRQS - virq_to_hw(virq) - 1;
++
++	if (irq != -1) {
++		unsigned long flags;
++
++		spin_lock_irqsave(&pci_pic_lock, flags);
++		clrbits32(&priv->regs->mask, 1 << irq);
++		spin_unlock_irqrestore(&pci_pic_lock, flags);
++	}
++}
++
++struct irq_chip pq2ads_pci_ic = {
++	.typename = "PQ2 ADS PCI",
++	.name = "PQ2 ADS PCI",
++	.end = pq2ads_pci_unmask_irq,
++	.mask = pq2ads_pci_mask_irq,
++	.mask_ack = pq2ads_pci_mask_irq,
++	.ack = pq2ads_pci_mask_irq,
++	.unmask = pq2ads_pci_unmask_irq,
++	.enable = pq2ads_pci_unmask_irq,
++	.disable = pq2ads_pci_mask_irq
++};
++
++static void pq2ads_pci_irq_demux(unsigned int irq, struct irq_desc *desc,
++				 struct pt_regs *regs)
++{
++	struct pq2ads_pci_pic *priv = desc->handler_data;
++	u32 stat, mask, pend;
++	int bit;
++
++	for (;;) {
++		stat = in_be32(&priv->regs->stat);
++		mask = in_be32(&priv->regs->mask);
++
++		pend = stat & ~mask;
++
++		if (!pend)
++			break;
++
++		for (bit = 0; pend != 0; ++bit, pend <<= 1) {
++			if (pend & 0x80000000) {
++				int irq = irq_linear_revmap(priv->host, bit);
++				generic_handle_irq(irq, regs);
++			}
++		}
++	}
++}
++
++static int pci_pic_host_match(struct irq_host *h, struct device_node *node)
++{
++	struct pq2ads_pci_pic *priv = h->host_data;
++	return node == priv->node;
++}
++
++static int pci_pic_host_map(struct irq_host *h, unsigned int virq,
++			    irq_hw_number_t hw)
++{
++	get_irq_desc(virq)->status |= IRQ_LEVEL;
++	set_irq_chip_data(virq, h->host_data);
++	set_irq_chip(virq, &pq2ads_pci_ic);
++	return 0;
++}
++
++static void pci_host_unmap(struct irq_host *h, unsigned int virq)
++{
++	/* remove chip and handler */
++	set_irq_chip_data(virq, NULL);
++	set_irq_chip(virq, NULL);
++}
++
++static struct irq_host_ops pci_pic_host_ops = {
++	.match = pci_pic_host_match,
++	.map = pci_pic_host_map,
++	.unmap = pci_host_unmap,
++};
++
++int __init pq2ads_pci_init_irq(void)
++{
++	struct pq2ads_pci_pic *priv;
++	struct irq_host *host;
++	struct device_node *np;
++	int ret = -ENODEV;
++	int irq;
++
++	np = of_find_compatible_node(NULL, NULL, "fsl,pq2ads-pci-pic");
++	if (!np) {
++		printk(KERN_ERR "No pci pic node in device tree.\n");
++		of_node_put(np);
++		goto out;
++	}
++
++	irq = irq_of_parse_and_map(np, 0);
++	if (irq == NO_IRQ) {
++		printk(KERN_ERR "No interrupt in pci pic node.\n");
++		of_node_put(np);
++		goto out;
++	}
++
++	priv = alloc_bootmem(sizeof(struct pq2ads_pci_pic));
++	if (!priv) {
++		of_node_put(np);
++		ret = -ENOMEM;
++		goto out_unmap_irq;
++	}
++
++	priv->node = np;
++	of_node_put(np);
++
++	/* PCI interrupt controller registers: status and mask */
++	priv->regs = of_iomap(priv->node, 0);
++	if (!priv->regs) {
++		printk(KERN_ERR "Cannot map PCI PIC registers.\n");
++		goto out_free_bootmem;
++	}
++
++	/* mask all PCI interrupts */
++	out_be32(&priv->regs->mask, ~0);
++	mb();
++
++	host = irq_alloc_host(IRQ_HOST_MAP_LINEAR, NUM_IRQS,
++	                      &pci_pic_host_ops, NUM_IRQS);
++	if (!host) {
++		ret = -ENOMEM;
++		goto out_unmap_regs;
++	}
++
++	host->host_data = priv;
++
++	priv->host = host;
++	host->host_data = priv;
++	set_irq_data(irq, priv);
++	set_irq_chained_handler(irq, pq2ads_pci_irq_demux);
++	return 0;
++
++out_unmap_regs:
++	iounmap(priv->regs);
++out_free_bootmem:
++	free_bootmem((unsigned long)priv,
++	             sizeof(sizeof(struct pq2ads_pci_pic)));
++out_unmap_irq:
++	irq_dispose_mapping(irq);
++out:
++	return ret;
++}
+Index: linux-2.6.18/mvl_patches/pro50-0201.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0201.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(201);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

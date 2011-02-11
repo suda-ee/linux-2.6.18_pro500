@@ -1,0 +1,472 @@
+#! /usr/bin/env bash
+# Patch: -MVL_POWERPC_bootwrapper_Add_dt_xlate_reg_and_use_i
+# Date: Wed Sep 26 11:14:58 2007
+# MR: 24856
+# Adjustments:
+#     ns16550_console_init stuff accepted by the community
+#     differs slightly from what we have in (MR: 20036)
+#     common_powerpc_add_non_OF_serial_console_support.patch.
+#     Slight changes have been made to avoid the conflicts.
+# From 6e1af384f1c1742ae6d86bbf779d4fa020c509bc Mon Sep 17 00:00:00 2001
+# From: Scott Wood <scottwood@freescale.com>
+# Date: Mon, 26 Mar 2007 15:52:24 -0500
+# Subject: [PATCH] [POWERPC] bootwrapper: Add dt_xlate_reg(), and use it to find serial registers.
+# 
+# dt_xlate_reg() uses the ranges properties of a node's parentage to find
+# the absolute physical address of the node's registers.
+# 
+# The ns16550 driver uses this when no virtual-reg property is found.
+# 
+# Signed-off-by: Scott Wood <scottwood@freescale.com>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=295
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+Adjustments:
+    ns16550_console_init stuff accepted by the community
+    differs slightly from what we have in (MR: 20036)
+    common_powerpc_add_non_OF_serial_console_support.patch.
+    Slight changes have been made to avoid the conflicts.
+From 6e1af384f1c1742ae6d86bbf779d4fa020c509bc Mon Sep 17 00:00:00 2001
+From: Scott Wood <scottwood@freescale.com>
+Date: Mon, 26 Mar 2007 15:52:24 -0500
+Subject: [PATCH] [POWERPC] bootwrapper: Add dt_xlate_reg(), and use it to find serial registers.
+
+dt_xlate_reg() uses the ranges properties of a node's parentage to find
+the absolute physical address of the node's registers.
+
+The ns16550 driver uses this when no virtual-reg property is found.
+
+Signed-off-by: Scott Wood <scottwood@freescale.com>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/boot/devtree.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/devtree.c
++++ linux-2.6.18/arch/powerpc/boot/devtree.c
+@@ -109,3 +109,181 @@ void __dt_fixup_mac_addresses(u32 starti
+ 	}
+ 	va_end(ap);
+ }
++
++#define MAX_ADDR_CELLS 4
++#define MAX_RANGES 8
++
++static void get_reg_format(void *node, u32 *naddr, u32 *nsize)
++{
++	if (getprop(node, "#address-cells", naddr, 4) != 4)
++		*naddr = 2;
++	if (getprop(node, "#size-cells", nsize, 4) != 4)
++		*nsize = 1;
++}
++
++static void copy_val(u32 *dest, u32 *src, int naddr)
++{
++	memset(dest, 0, (MAX_ADDR_CELLS - naddr) * 4);
++	memcpy(dest, src, naddr * 4);
++}
++
++static int sub_reg(u32 *reg, u32 *sub)
++{
++	int i, borrow = 0;
++
++	for (i = 0; i < MAX_ADDR_CELLS; i++) {
++		int prev_borrow = borrow;
++		borrow = reg[i] < sub[i] + prev_borrow;
++		reg[i] -= sub[i] + prev_borrow;
++	}
++
++	return !borrow;
++}
++
++static int add_reg(u32 *reg, u32 *add)
++{
++	int i, carry = 0;
++
++	for (i = 0; i < MAX_ADDR_CELLS; i++) {
++		u64 tmp = (u64)reg[i] + add[i] + carry;
++		carry = tmp >> 32;
++		reg[i] = (u32)tmp;
++	}
++
++	return !carry;
++}
++
++/* It is assumed that if the first byte of reg fits in a
++ * range, then the whole reg block fits.
++ */
++static int compare_reg(u32 *reg, u32 *range, u32 *rangesize)
++{
++	int i;
++	u32 end;
++
++	for (i = 0; i < MAX_ADDR_CELLS; i++) {
++		if (reg[i] < range[i])
++			return 0;
++		if (reg[i] > range[i])
++			break;
++	}
++
++	for (i = 0; i < MAX_ADDR_CELLS; i++) {
++		end = range[i] + rangesize[i];
++
++		if (reg[i] < end)
++			break;
++		if (reg[i] > end)
++			return 0;
++	}
++
++	return reg[i] != end;
++}
++
++/* reg must be MAX_ADDR_CELLS */
++static int find_range(u32 *reg, u32 *ranges, int nregaddr,
++                      int naddr, int nsize, int buflen)
++{
++	int nrange = nregaddr + naddr + nsize;
++	int i;
++
++	for (i = 0; i + nrange <= buflen; i += nrange) {
++		u32 range_addr[MAX_ADDR_CELLS];
++		u32 range_size[MAX_ADDR_CELLS];
++
++		copy_val(range_addr, ranges + i, naddr);
++		copy_val(range_size, ranges + i + nregaddr + naddr, nsize);
++
++		if (compare_reg(reg, range_addr, range_size))
++			return i;
++	}
++
++	return -1;
++}
++
++/* Currently only generic buses without special encodings are supported.
++ * In particular, PCI is not supported.  Also, only the beginning of the
++ * reg block is tracked; size is ignored except in ranges.
++ */
++int dt_xlate_reg(void *node, int res, unsigned long *addr,
++                 unsigned long *size)
++{
++	u32 last_addr[MAX_ADDR_CELLS];
++	u32 this_addr[MAX_ADDR_CELLS];
++	u32 buf[MAX_ADDR_CELLS * MAX_RANGES * 3];
++	void *parent;
++	u64 ret_addr, ret_size;
++	u32 naddr, nsize, prev_naddr;
++	int buflen, offset;
++
++	parent = get_parent(node);
++	if (!parent)
++		return 0;
++
++	get_reg_format(parent, &naddr, &nsize);
++
++	if (nsize > 2)
++		return 0;
++
++	buflen = getprop(node, "reg", buf, sizeof(buf)) / 4;
++	offset = (naddr + nsize) * res;
++
++	if (buflen < offset + naddr + nsize)
++		return 0;
++
++	copy_val(last_addr, buf + offset, naddr);
++
++	ret_size = buf[offset + naddr];
++	if (nsize == 2) {
++		ret_size <<= 32;
++		ret_size |= buf[offset + naddr + 1];
++	}
++
++	while ((node = get_parent(node))) {
++		prev_naddr = naddr;
++
++		get_reg_format(node, &naddr, &nsize);
++
++		buflen = getprop(node, "ranges", buf, sizeof(buf));
++		if (buflen < 0)
++			continue;
++		if (buflen > sizeof(buf))
++			return 0;
++
++		offset = find_range(last_addr, buf, prev_naddr,
++		                    naddr, nsize, buflen / 4);
++
++		if (offset < 0)
++			return 0;
++
++		copy_val(this_addr, buf + offset, prev_naddr);
++
++		if (!sub_reg(last_addr, this_addr))
++			return 0;
++
++		copy_val(this_addr, buf + offset + prev_naddr, naddr);
++
++		if (!add_reg(last_addr, this_addr))
++			return 0;
++	}
++
++	if (naddr > 2)
++		return 0;
++
++	ret_addr = last_addr[0];
++	if (naddr == 2) {
++		ret_addr <<= 32;
++		ret_addr |= last_addr[1];
++	}
++
++	if (sizeof(void *) == 4 &&
++	    (ret_addr >= 0x100000000ULL || ret_size > 0x100000000ULL ||
++	     ret_addr + ret_size > 0x100000000ULL))
++		return 0;
++
++	*addr = ret_addr;
++	if (size)
++		*size = ret_size;
++
++	return 1;
++}
+Index: linux-2.6.18/arch/powerpc/boot/ns16550.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/ns16550.c
++++ linux-2.6.18/arch/powerpc/boot/ns16550.c
+@@ -56,11 +56,16 @@ int ns16550_console_init(void *devp, str
+ {
+ 	u32 reg[2];
+ 	int n;
++	unsigned long reg_phys;
+ 
+ 	n = getprop(devp, "virtual-reg", &reg, sizeof(reg)) / 4;
+-	if (n < 1)
+-		return -1;
+-	reg_base = (unsigned char *)((n == 1) ? reg[0] : reg[0] | reg[1]);
++	if (n < 1) {
++		if (!dt_xlate_reg(devp, 0, &reg_phys, NULL))
++			return -1;
++
++		reg_base = (void *)reg_phys;
++	} else
++		reg_base = (unsigned char *)((n == 1) ? reg[0] : reg[0] | reg[1]);
+ 
+ 	if (getprop(devp, "reg_shift", &reg_shift, sizeof(reg_shift))
+ 			!= sizeof(reg_shift))
+Index: linux-2.6.18/arch/powerpc/boot/ops.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/ops.h
++++ linux-2.6.18/arch/powerpc/boot/ops.h
+@@ -82,6 +82,8 @@ int ns16550_console_init(void *devp, str
+ void *simple_alloc_init(char *base, u32 heap_size, u32 granularity,
+ 		u32 max_allocs);
+ extern void flush_cache(void *, unsigned long);
++int dt_xlate_reg(void *node, int res, unsigned long *addr,
++                 unsigned long *size);
+ 
+ static inline void *finddevice(const char *name)
+ {
+Index: linux-2.6.18/mvl_patches/pro50-0295.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0295.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(295);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

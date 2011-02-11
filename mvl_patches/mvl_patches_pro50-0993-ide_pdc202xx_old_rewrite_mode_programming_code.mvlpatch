@@ -1,0 +1,642 @@
+#! /usr/bin/env bash
+# Patch: -ide_pdc202xx_old_rewrite_mode_programming_code
+# Date: Mon Mar 31 13:12:47 2008
+# Source: Bartlomiej Zolnierkiewicz <bzolnier@gmail.com>
+# MR: 17419
+# Type: Defect Fix
+# Disposition: merged from 2.6.22-rc2
+# Signed-off-by: Bartlomiej Zolnierkiewicz <bzolnier@gmail.com>
+# Signed-off-by: Sergei Shtylyov <sshtylyov@ru.mvista.com>
+# Description:
+# 
+# pdc202xx_old: rewrite mode programming code (v2)
+# 
+# This patch is based on the documentation (I would like to thank Promise
+# for it) and also partially on the older vendor driver.
+# 
+# Rewrite mode programming code:
+# 
+# * disable 66MHz clock in pdc202xx_tune_chipset() so it is correctly disabled
+#   even if both devices on the channel are not DMA capable and after reset
+# 
+# * enable/disable IORDY and PREFETCH bits in pdc202xx_tune_chipset()
+#   as they need to be setup correctly also for PIO only devices, plus IORDY
+#   wasn't disabled for non-IORDY devices and PREFETCH wasn't disabled for
+#   ATAPI devices
+# 
+# * remove dead code for setting SYNC_ERDDY_EN bits from config_chipset_for_dma()
+#   (driver sets ->autotune to 1 so PIO modes are always programmed => lower
+#    nibble of register A never equals 4 => "chipset_is_set" is always true)
+# 
+# * enable PIO mode programming for all ATAPI devices
+#   (it was limited to ->media == ide_cdrom devices)
+# 
+# * remove extra reads of registers A/B/C, don't read register D et all
+# 
+# * do clearing / programming of registers A/B/C in one go
+#   (gets rid of extra PCI config space read/write cycle)
+# 
+# * set initial values of drive_conf/AP/BP/CP variables to zero
+#   (paranoia for the case when PCI reads fail)
+# 
+# * remove XFER_UDMA6 to XFER_UDMA5 remapping case - it can't happen
+#   (ide_rate_filter() takes care of it)
+# 
+# * fix XFER_MW_DMA0 timings (they were overclocked, use the official ones)
+# 
+# * fix bitmasks for clearing bits of register B:
+# 
+#   - when programming DMA mode bit 0x10 of register B was cleared which
+#     resulted in overclocked PIO timing setting (iff PIO0 was used)
+# 
+#   - when programming PIO mode bits 0x18 weren't cleared so suboptimal
+#     timings were used for PIO1-4 if PIO0 was previously set (bit 0x10)
+#     and for PIO0/3/4 if PIO1/2 was previously set (bit 0x08)
+# 
+# * add FIXME comment about missing locking for 66MHz clock register
+# 
+# Also while at it:
+# 
+# * remove unused defines
+# 
+# * do a few cosmetic / CodingStyle fixes
+# 
+# * bump driver version
+# 
+# v2:
+# * in pdc202xx_tune_chipset() the old content of drive configuration
+#   registers is used only by the debugging code so cover "drive_conf"
+#   PCI registers read by #if PDC202XX_DEBUG_DRIVE_INFO
+#   (Noticed by Sergei Shtylyov)
+# 
+# The patch somewhat deviates from its upstream version because of a lot of IDE
+# cleanups that went into the kernel before this fix which I didn't backport...
+# 
+# commit 4fce3164b84d5b014acbf5a3f57eb3650e154f5b
+# tree 67aa08d4e0d9ee31b8f79360d53e18b608572393
+# parent f653c34dd3d8bde2c918316fd5ba2e2c4f95afcf
+# author Bartlomiej Zolnierkiewicz <bzolnier@gmail.com> Wed, 16 May 2007 00:51:41 +0200
+# committer Bartlomiej Zolnierkiewicz <bzolnier@gmail.com> Wed, 16 May 2007 00:51:41 +0200
+# 
+#  drivers/ide/pci/pdc202xx_old.c |  191 +++++++++--------------------------------
+#  1 file changed, 44 insertions(+), 147 deletions(-)
+# 
+
+PATCHNUM=993
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Bartlomiej Zolnierkiewicz <bzolnier@gmail.com>
+MR: 17419
+Type: Defect Fix
+Disposition: merged from 2.6.22-rc2
+Signed-off-by: Bartlomiej Zolnierkiewicz <bzolnier@gmail.com>
+Signed-off-by: Sergei Shtylyov <sshtylyov@ru.mvista.com>
+Description:
+
+pdc202xx_old: rewrite mode programming code (v2)
+
+This patch is based on the documentation (I would like to thank Promise
+for it) and also partially on the older vendor driver.
+
+Rewrite mode programming code:
+
+* disable 66MHz clock in pdc202xx_tune_chipset() so it is correctly disabled
+  even if both devices on the channel are not DMA capable and after reset
+
+* enable/disable IORDY and PREFETCH bits in pdc202xx_tune_chipset()
+  as they need to be setup correctly also for PIO only devices, plus IORDY
+  wasn't disabled for non-IORDY devices and PREFETCH wasn't disabled for
+  ATAPI devices
+
+* remove dead code for setting SYNC_ERDDY_EN bits from config_chipset_for_dma()
+  (driver sets ->autotune to 1 so PIO modes are always programmed => lower
+   nibble of register A never equals 4 => "chipset_is_set" is always true)
+
+* enable PIO mode programming for all ATAPI devices
+  (it was limited to ->media == ide_cdrom devices)
+
+* remove extra reads of registers A/B/C, don't read register D et all
+
+* do clearing / programming of registers A/B/C in one go
+  (gets rid of extra PCI config space read/write cycle)
+
+* set initial values of drive_conf/AP/BP/CP variables to zero
+  (paranoia for the case when PCI reads fail)
+
+* remove XFER_UDMA6 to XFER_UDMA5 remapping case - it can't happen
+  (ide_rate_filter() takes care of it)
+
+* fix XFER_MW_DMA0 timings (they were overclocked, use the official ones)
+
+* fix bitmasks for clearing bits of register B:
+
+  - when programming DMA mode bit 0x10 of register B was cleared which
+    resulted in overclocked PIO timing setting (iff PIO0 was used)
+
+  - when programming PIO mode bits 0x18 weren't cleared so suboptimal
+    timings were used for PIO1-4 if PIO0 was previously set (bit 0x10)
+    and for PIO0/3/4 if PIO1/2 was previously set (bit 0x08)
+
+* add FIXME comment about missing locking for 66MHz clock register
+
+Also while at it:
+
+* remove unused defines
+
+* do a few cosmetic / CodingStyle fixes
+
+* bump driver version
+
+v2:
+* in pdc202xx_tune_chipset() the old content of drive configuration
+  registers is used only by the debugging code so cover "drive_conf"
+  PCI registers read by #if PDC202XX_DEBUG_DRIVE_INFO
+  (Noticed by Sergei Shtylyov)
+
+The patch somewhat deviates from its upstream version because of a lot of IDE
+cleanups that went into the kernel before this fix which I didn't backport...
+
+commit 4fce3164b84d5b014acbf5a3f57eb3650e154f5b
+tree 67aa08d4e0d9ee31b8f79360d53e18b608572393
+parent f653c34dd3d8bde2c918316fd5ba2e2c4f95afcf
+author Bartlomiej Zolnierkiewicz <bzolnier@gmail.com> Wed, 16 May 2007 00:51:41 +0200
+committer Bartlomiej Zolnierkiewicz <bzolnier@gmail.com> Wed, 16 May 2007 00:51:41 +0200
+
+ drivers/ide/pci/pdc202xx_old.c |  191 +++++++++--------------------------------
+ mvl_patches/pro50-0993.c       |   16 +++
+ 2 files changed, 60 insertions(+), 147 deletions(-)
+
+diff --git a/drivers/ide/pci/pdc202xx_old.c b/drivers/ide/pci/pdc202xx_old.c
+index 7146fe3..a6dd9c8 100644
+Index: linux-2.6.18/drivers/ide/pci/pdc202xx_old.c
+===================================================================
+--- linux-2.6.18.orig/drivers/ide/pci/pdc202xx_old.c
++++ linux-2.6.18/drivers/ide/pci/pdc202xx_old.c
+@@ -1,8 +1,9 @@
+ /*
+- *  linux/drivers/ide/pci/pdc202xx_old.c	Version 0.36	Sept 11, 2002
++ *  linux/drivers/ide/pci/pdc202xx_old.c	Version 0.50	Mar 3, 2007
+  *
+  *  Copyright (C) 1998-2002		Andre Hedrick <andre@linux-ide.org>
+  *  Copyright (C) 2006-2007		MontaVista Software, Inc.
++ *  Copyright (C) 2007			Bartlomiej Zolnierkiewicz
+  *
+  *  Promise Ultra33 cards with BIOS v1.20 through 1.28 will need this
+  *  compiled into the kernel if you have more than one card installed.
+@@ -61,45 +62,7 @@ static const char *pdc_quirk_drives[] = 
+ 	NULL
+ };
+ 
+-/* A Register */
+-#define	SYNC_ERRDY_EN	0xC0
+-
+-#define	SYNC_IN		0x80	/* control bit, different for master vs. slave drives */
+-#define	ERRDY_EN	0x40	/* control bit, different for master vs. slave drives */
+-#define	IORDY_EN	0x20	/* PIO: IOREADY */
+-#define	PREFETCH_EN	0x10	/* PIO: PREFETCH */
+-
+-#define	PA3		0x08	/* PIO"A" timing */
+-#define	PA2		0x04	/* PIO"A" timing */
+-#define	PA1		0x02	/* PIO"A" timing */
+-#define	PA0		0x01	/* PIO"A" timing */
+-
+-/* B Register */
+-
+-#define	MB2		0x80	/* DMA"B" timing */
+-#define	MB1		0x40	/* DMA"B" timing */
+-#define	MB0		0x20	/* DMA"B" timing */
+-
+-#define	PB4		0x10	/* PIO_FORCE 1:0 */
+-
+-#define	PB3		0x08	/* PIO"B" timing */	/* PIO flow Control mode */
+-#define	PB2		0x04	/* PIO"B" timing */	/* PIO 4 */
+-#define	PB1		0x02	/* PIO"B" timing */	/* PIO 3 half */
+-#define	PB0		0x01	/* PIO"B" timing */	/* PIO 3 other half */
+-
+-/* C Register */
+-#define	IORDYp_NO_SPEED	0x4F
+-#define	SPEED_DIS	0x0F
+-
+-#define	DMARQp		0x80
+-#define	IORDYp		0x40
+-#define	DMAR_EN		0x20
+-#define	DMAW_EN		0x10
+-
+-#define	MC3		0x08	/* DMA"C" timing */
+-#define	MC2		0x04	/* DMA"C" timing */
+-#define	MC1		0x02	/* DMA"C" timing */
+-#define	MC0		0x01	/* DMA"C" timing */
++static void pdc_old_disable_66MHz_clock(ide_hwif_t *);
+ 
+ static u8 pdc202xx_ratemask (ide_drive_t *drive)
+ {
+@@ -131,52 +94,25 @@ static int pdc202xx_tune_chipset (ide_dr
+ 	u8 drive_pci		= 0x60 + (drive->dn << 2);
+ 	u8 speed	= ide_rate_filter(pdc202xx_ratemask(drive), xferspeed);
+ 
+-	u32			drive_conf;
+-	u8			AP, BP, CP, DP;
++	u8			AP = 0, BP = 0, CP = 0;
+ 	u8			TA = 0, TB = 0, TC = 0;
+ 
+-	if (drive->media != ide_disk &&
+-		drive->media != ide_cdrom && speed < XFER_SW_DMA_0)
+-		return -1;
+-
++#if PDC202XX_DEBUG_DRIVE_INFO
++	u32			drive_conf = 0;
+ 	pci_read_config_dword(dev, drive_pci, &drive_conf);
+-	pci_read_config_byte(dev, (drive_pci), &AP);
+-	pci_read_config_byte(dev, (drive_pci)|0x01, &BP);
+-	pci_read_config_byte(dev, (drive_pci)|0x02, &CP);
+-	pci_read_config_byte(dev, (drive_pci)|0x03, &DP);
+-
+-	if (speed < XFER_SW_DMA_0) {
+-		if ((AP & 0x0F) || (BP & 0x07)) {
+-			/* clear PIO modes of lower 8421 bits of A Register */
+-			pci_write_config_byte(dev, (drive_pci), AP &~0x0F);
+-			pci_read_config_byte(dev, (drive_pci), &AP);
+-
+-			/* clear PIO modes of lower 421 bits of B Register */
+-			pci_write_config_byte(dev, (drive_pci)|0x01, BP &~0x07);
+-			pci_read_config_byte(dev, (drive_pci)|0x01, &BP);
++#endif
+ 
+-			pci_read_config_byte(dev, (drive_pci), &AP);
+-			pci_read_config_byte(dev, (drive_pci)|0x01, &BP);
+-		}
+-	} else {
+-		if ((BP & 0xF0) && (CP & 0x0F)) {
+-			/* clear DMA modes of upper 842 bits of B Register */
+-			/* clear PIO forced mode upper 1 bit of B Register */
+-			pci_write_config_byte(dev, (drive_pci)|0x01, BP &~0xF0);
+-			pci_read_config_byte(dev, (drive_pci)|0x01, &BP);
+-
+-			/* clear DMA modes of lower 8421 bits of C Register */
+-			pci_write_config_byte(dev, (drive_pci)|0x02, CP &~0x0F);
+-			pci_read_config_byte(dev, (drive_pci)|0x02, &CP);
+-		}
+-	}
++	/*
++	 * TODO: do this once per channel
++	 */
++	if (dev->device != PCI_DEVICE_ID_PROMISE_20246)
++		pdc_old_disable_66MHz_clock(hwif);
+ 
+-	pci_read_config_byte(dev, (drive_pci), &AP);
+-	pci_read_config_byte(dev, (drive_pci)|0x01, &BP);
+-	pci_read_config_byte(dev, (drive_pci)|0x02, &CP);
++	pci_read_config_byte(dev, drive_pci,     &AP);
++	pci_read_config_byte(dev, drive_pci + 1, &BP);
++	pci_read_config_byte(dev, drive_pci + 2, &CP);
+ 
+ 	switch(speed) {
+-		case XFER_UDMA_6:	speed = XFER_UDMA_5;
+ 		case XFER_UDMA_5:
+ 		case XFER_UDMA_4:	TB = 0x20; TC = 0x01; break;
+ 		case XFER_UDMA_2:	TB = 0x20; TC = 0x01; break;
+@@ -185,7 +121,7 @@ static int pdc202xx_tune_chipset (ide_dr
+ 		case XFER_UDMA_0:
+ 		case XFER_MW_DMA_2:	TB = 0x60; TC = 0x03; break;
+ 		case XFER_MW_DMA_1:	TB = 0x60; TC = 0x04; break;
+-		case XFER_MW_DMA_0:
++		case XFER_MW_DMA_0:	TB = 0xE0; TC = 0x0F; break;
+ 		case XFER_SW_DMA_2:	TB = 0x60; TC = 0x05; break;
+ 		case XFER_SW_DMA_1:	TB = 0x80; TC = 0x06; break;
+ 		case XFER_SW_DMA_0:	TB = 0xC0; TC = 0x0B; break;
+@@ -198,25 +134,39 @@ static int pdc202xx_tune_chipset (ide_dr
+ 	}
+ 
+ 	if (speed < XFER_SW_DMA_0) {
+-		pci_write_config_byte(dev, (drive_pci), AP|TA);
+-		pci_write_config_byte(dev, (drive_pci)|0x01, BP|TB);
++		/*
++		 * preserve SYNC_INT / ERDDY_EN bits while clearing
++		 * Prefetch_EN / IORDY_EN / PA[3:0] bits of register A
++		 */
++		AP &= ~0x3f;
++		if (drive->id->capability & 4)
++			AP |= 0x20;	/* set IORDY_EN bit */
++		if (drive->media == ide_disk)
++			AP |= 0x10;	/* set Prefetch_EN bit */
++		/* clear PB[4:0] bits of register B */
++		BP &= ~0x1f;
++		pci_write_config_byte(dev, drive_pci,     AP | TA);
++		pci_write_config_byte(dev, drive_pci + 1, BP | TB);
+ 	} else {
+-		pci_write_config_byte(dev, (drive_pci)|0x01, BP|TB);
+-		pci_write_config_byte(dev, (drive_pci)|0x02, CP|TC);
++		/* clear MB[2:0] bits of register B */
++		BP &= ~0xe0;
++		/* clear MC[3:0] bits of register C */
++		CP &= ~0x0f;
++		pci_write_config_byte(dev, drive_pci + 1, BP | TB);
++		pci_write_config_byte(dev, drive_pci + 2, CP | TC);
+ 	}
+ 
+ #if PDC202XX_DEBUG_DRIVE_INFO
+ 	printk(KERN_DEBUG "%s: %s drive%d 0x%08x ",
+ 		drive->name, ide_xfer_verbose(speed),
+ 		drive->dn, drive_conf);
+-		pci_read_config_dword(dev, drive_pci, &drive_conf);
++	pci_read_config_dword(dev, drive_pci, &drive_conf);
+ 	printk("0x%08x\n", drive_conf);
+-#endif /* PDC202XX_DEBUG_DRIVE_INFO */
++#endif
+ 
+-	return (ide_config_drive_speed(drive, speed));
++	return ide_config_drive_speed(drive, speed);
+ }
+ 
+-
+ static void pdc202xx_tune_drive(ide_drive_t *drive, u8 pio)
+ {
+ 	pio = ide_get_best_pio_mode(drive, pio, 4, NULL);
+@@ -234,6 +184,8 @@ static u8 pdc202xx_old_cable_detect (ide
+  * Set the control register to use the 66MHz system
+  * clock for UDMA 3/4/5 mode operation when necessary.
+  *
++ * FIXME: this register is shared by both channels, some locking is needed
++ *
+  * It may also be possible to leave the 66MHz clock on
+  * and readjust the timing parameters.
+  */
+@@ -255,68 +207,13 @@ static void pdc_old_disable_66MHz_clock(
+ 
+ static int config_chipset_for_dma (ide_drive_t *drive)
+ {
+-	struct hd_driveid *id	= drive->id;
+-	ide_hwif_t *hwif	= HWIF(drive);
+-	struct pci_dev *dev	= hwif->pci_dev;
+-	u32 drive_conf		= 0;
+-	u8 drive_pci		= 0x60 + (drive->dn << 2);
+-	u8 test1 = 0, test2 = 0, speed = -1;
+-	u8 AP = 0, cable = 0;
+-
+-	u8 ultra_66		= ((id->dma_ultra & 0x0010) ||
+-				   (id->dma_ultra & 0x0008)) ? 1 : 0;
+-
+-	if (dev->device != PCI_DEVICE_ID_PROMISE_20246)
+-		cable = pdc202xx_old_cable_detect(hwif);
+-	else
+-		ultra_66 = 0;
+-
+-	if (ultra_66 && cable) {
+-		printk(KERN_WARNING "Warning: %s channel requires an 80-pin cable for operation.\n", hwif->channel ? "Secondary":"Primary");
+-		printk(KERN_WARNING "%s reduced to Ultra33 mode.\n", drive->name);
+-	}
+-
+-	if (dev->device != PCI_DEVICE_ID_PROMISE_20246)
+-		pdc_old_disable_66MHz_clock(drive->hwif);
++	u8 speed = ide_dma_speed(drive, pdc202xx_ratemask(drive));
+ 
+-	drive_pci = 0x60 + (drive->dn << 2);
+-	pci_read_config_dword(dev, drive_pci, &drive_conf);
+-	if ((drive_conf != 0x004ff304) && (drive_conf != 0x004ff3c4))
+-		goto chipset_is_set;
+-
+-	pci_read_config_byte(dev, drive_pci, &test1);
+-	if (!(test1 & SYNC_ERRDY_EN)) {
+-		if (drive->select.b.unit & 0x01) {
+-			pci_read_config_byte(dev, drive_pci - 4, &test2);
+-			if ((test2 & SYNC_ERRDY_EN) &&
+-			    !(test1 & SYNC_ERRDY_EN)) {
+-				pci_write_config_byte(dev, drive_pci,
+-					test1|SYNC_ERRDY_EN);
+-			}
+-		} else {
+-			pci_write_config_byte(dev, drive_pci,
+-				test1|SYNC_ERRDY_EN);
+-		}
+-	}
+-
+-chipset_is_set:
+-
+-	pci_read_config_byte(dev, (drive_pci), &AP);
+-	if (id->capability & 4) /* IORDY_EN */
+-		pci_write_config_byte(dev, (drive_pci), AP|IORDY_EN);
+-	pci_read_config_byte(dev, (drive_pci), &AP);
+-	if (drive->media == ide_disk)	/* PREFETCH_EN */
+-		pci_write_config_byte(dev, (drive_pci), AP|PREFETCH_EN);
+-
+-	speed = ide_dma_speed(drive, pdc202xx_ratemask(drive));
+-
+-	if (!(speed)) {
+-		/* restore original pci-config space */
+-		pci_write_config_dword(dev, drive_pci, drive_conf);
++	if (!speed)
+ 		return 0;
+-	}
+ 
+-	(void) hwif->speedproc(drive, speed);
++	(void)pdc202xx_tune_chipset(drive, speed);
++
+ 	return ide_dma_enable(drive);
+ }
+ 
+Index: linux-2.6.18/mvl_patches/pro50-0993.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0993.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(993);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

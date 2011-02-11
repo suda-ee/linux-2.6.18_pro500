@@ -1,0 +1,1978 @@
+#! /usr/bin/env bash
+# Patch: -MVL_POWERPC_Rewrite_IO_allocation_mapping_on_powerpc
+# Date: Wed Mar  5 11:41:02 2008
+# MR: 26747
+# Adjustments:
+#     Major adjustments related to the "Refactor 64 bits DMA operations"
+#     commit 12d04eef927bf61328af2c7cbe756c96f98ac3bf that we don't have.
+# 
+# From 3d5134ee8341bffc4f539049abb9e90d469b448d Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Mon, 4 Jun 2007 15:15:36 +1000
+# Subject: [PATCH] [POWERPC] Rewrite IO allocation & mapping on powerpc64
+# 
+# This rewrites pretty much from scratch the handling of MMIO and PIO
+# space allocations on powerpc64.  The main goals are:
+# 
+#  - Get rid of imalloc and use more common code where possible
+#  - Simplify the current mess so that PIO space is allocated and
+#    mapped in a single place for PCI bridges
+#  - Handle allocation constraints of PIO for all bridges including
+#    hot plugged ones within the 2GB space reserved for IO ports,
+#    so that devices on hotplugged busses will now work with drivers
+#    that assume IO ports fit in an int.
+#  - Cleanup and separate tracking of the ISA space in the reserved
+#    low 64K of IO space. No ISA -> Nothing mapped there.
+# 
+# I booted a cell blade with IDE on PIO and MMIO and a dual G5 so
+# far, that's it :-)
+# 
+# With this patch, all allocations are done using the code in
+# mm/vmalloc.c, though we use the low level __get_vm_area with
+# explicit start/stop constraints in order to manage separate
+# areas for vmalloc/vmap, ioremap, and PCI IOs.
+# 
+# This greatly simplifies a lot of things, as you can see in the
+
+PATCHNUM=808
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26747
+Adjustments:
+    Major adjustments related to the "Refactor 64 bits DMA operations"
+    commit 12d04eef927bf61328af2c7cbe756c96f98ac3bf that we don't have.
+
+From 3d5134ee8341bffc4f539049abb9e90d469b448d Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Mon, 4 Jun 2007 15:15:36 +1000
+Subject: [PATCH] [POWERPC] Rewrite IO allocation & mapping on powerpc64
+
+This rewrites pretty much from scratch the handling of MMIO and PIO
+space allocations on powerpc64.  The main goals are:
+
+ - Get rid of imalloc and use more common code where possible
+ - Simplify the current mess so that PIO space is allocated and
+   mapped in a single place for PCI bridges
+ - Handle allocation constraints of PIO for all bridges including
+   hot plugged ones within the 2GB space reserved for IO ports,
+   so that devices on hotplugged busses will now work with drivers
+   that assume IO ports fit in an int.
+ - Cleanup and separate tracking of the ISA space in the reserved
+   low 64K of IO space. No ISA -> Nothing mapped there.
+
+I booted a cell blade with IDE on PIO and MMIO and a dual G5 so
+far, that's it :-)
+
+With this patch, all allocations are done using the code in
+mm/vmalloc.c, though we use the low level __get_vm_area with
+explicit start/stop constraints in order to manage separate
+areas for vmalloc/vmap, ioremap, and PCI IOs.
+
+This greatly simplifies a lot of things, as you can see in the
+diffstat of that patch :-)
+
+A new pair of functions pcibios_map/unmap_io_space() now replace
+all of the previous code that used to manipulate PCI IOs space.
+The allocation is done at mapping time, which is now called from
+scan_phb's, just before the devices are probed (instead of after,
+which is by itself a bug fix). The only other caller is the PCI
+hotplug code for hot adding PCI-PCI bridges (slots).
+
+imalloc is gone, as is the "sub-allocation" thing, but I do beleive
+that hotplug should still work in the sense that the space allocation
+is always done by the PHB, but if you unmap a child bus of this PHB
+(which seems to be possible), then the code should properly tear
+down all the HPTE mappings for that area of the PHB allocated IO space.
+
+I now always reserve the first 64K of IO space for the bridge with
+the ISA bus on it. I have moved the code for tracking ISA in a separate
+file which should also make it smarter if we ever are capable of
+hot unplugging or re-plugging an ISA bridge.
+
+This should have a side effect on platforms like powermac where VGA IOs
+will no longer work. This is done on purpose though as they would have
+worked semi-randomly before. The idea at this point is to isolate drivers
+that might need to access those and fix them by providing a proper
+function to obtain an offset to the legacy IOs of a given bus.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/kernel/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/Makefile
++++ linux-2.6.18/arch/powerpc/kernel/Makefile
+@@ -66,7 +66,7 @@ module-$(CONFIG_PPC64)		+= module_64.o
+ obj-$(CONFIG_MODULES)		+= $(module-y)
+ 
+ pci64-$(CONFIG_PPC64)		+= pci_64.o pci_dn.o pci_iommu.o \
+-				   pci_direct_iommu.o
++				   pci_direct_iommu.o isa-bridge.o
+ pci32-$(CONFIG_PPC32)		:= pci_32.o
+ obj-$(CONFIG_PCI)		+= $(pci64-y) $(pci32-y) pci-common.o
+ obj-$(CONFIG_RAPIDIO)		+= rio.o
+Index: linux-2.6.18/arch/powerpc/kernel/isa-bridge.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/kernel/isa-bridge.c
+@@ -0,0 +1,271 @@
++/*
++ * Routines for tracking a legacy ISA bridge
++ *
++ * Copyrigh 2007 Benjamin Herrenschmidt <benh@kernel.crashing.org>, IBM Corp.
++ *
++ * Some bits and pieces moved over from pci_64.c
++ *
++ * Copyrigh 2003 Anton Blanchard <anton@au.ibm.com>, IBM Corp.
++ *
++ *      This program is free software; you can redistribute it and/or
++ *      modify it under the terms of the GNU General Public License
++ *      as published by the Free Software Foundation; either version
++ *      2 of the License, or (at your option) any later version.
++ */
++
++#define DEBUG
++
++#include <linux/kernel.h>
++#include <linux/pci.h>
++#include <linux/string.h>
++#include <linux/init.h>
++#include <linux/mm.h>
++#include <linux/notifier.h>
++
++#include <asm/processor.h>
++#include <asm/io.h>
++#include <asm/prom.h>
++#include <asm/pci-bridge.h>
++#include <asm/machdep.h>
++#include <asm/ppc-pci.h>
++#include <asm/firmware.h>
++
++unsigned long isa_io_base;	/* NULL if no ISA bus */
++EXPORT_SYMBOL(isa_io_base);
++
++/* Cached ISA bridge dev. */
++static struct device_node *isa_bridge_devnode;
++struct pci_dev *isa_bridge_pcidev;
++EXPORT_SYMBOL_GPL(isa_bridge_pcidev);
++
++#define ISA_SPACE_MASK 0x1
++#define ISA_SPACE_IO 0x1
++
++static void __devinit pci_process_ISA_OF_ranges(struct device_node *isa_node,
++						unsigned long phb_io_base_phys)
++{
++	/* We should get some saner parsing here and remove these structs */
++	struct pci_address {
++		u32 a_hi;
++		u32 a_mid;
++		u32 a_lo;
++	};
++
++	struct isa_address {
++		u32 a_hi;
++		u32 a_lo;
++	};
++
++	struct isa_range {
++		struct isa_address isa_addr;
++		struct pci_address pci_addr;
++		unsigned int size;
++	};
++
++	const struct isa_range *range;
++	unsigned long pci_addr;
++	unsigned int isa_addr;
++	unsigned int size;
++	int rlen = 0;
++
++	range = of_get_property(isa_node, "ranges", &rlen);
++	if (range == NULL || (rlen < sizeof(struct isa_range)))
++		goto inval_range;
++
++	/* From "ISA Binding to 1275"
++	 * The ranges property is laid out as an array of elements,
++	 * each of which comprises:
++	 *   cells 0 - 1:	an ISA address
++	 *   cells 2 - 4:	a PCI address
++	 *			(size depending on dev->n_addr_cells)
++	 *   cell 5:		the size of the range
++	 */
++	if ((range->isa_addr.a_hi && ISA_SPACE_MASK) != ISA_SPACE_IO) {
++		range++;
++		rlen -= sizeof(struct isa_range);
++		if (rlen < sizeof(struct isa_range))
++			goto inval_range;
++	}
++	if ((range->isa_addr.a_hi && ISA_SPACE_MASK) != ISA_SPACE_IO)
++		goto inval_range;
++
++	isa_addr = range->isa_addr.a_lo;
++	pci_addr = (unsigned long) range->pci_addr.a_mid << 32 |
++		range->pci_addr.a_lo;
++
++	/* Assume these are both zero. Note: We could fix that and
++	 * do a proper parsing instead ... oh well, that will do for
++	 * now as nobody uses fancy mappings for ISA bridges
++	 */
++	if ((pci_addr != 0) || (isa_addr != 0)) {
++		printk(KERN_ERR "unexpected isa to pci mapping: %s\n",
++		       __FUNCTION__);
++		return;
++	}
++
++	/* Align size and make sure it's cropped to 64K */
++	size = PAGE_ALIGN(range->size);
++	if (size > 0x10000)
++		size = 0x10000;
++
++	printk(KERN_ERR "no ISA IO ranges or unexpected isa range,"
++	       "mapping 64k\n");
++
++	__ioremap_at(phb_io_base_phys, (void *)ISA_IO_BASE,
++		     size, _PAGE_NO_CACHE|_PAGE_GUARDED);
++	return;
++
++inval_range:
++	printk(KERN_ERR "no ISA IO ranges or unexpected isa range,"
++	       "mapping 64k\n");
++	__ioremap_at(phb_io_base_phys, (void *)ISA_IO_BASE,
++		     0x10000, _PAGE_NO_CACHE|_PAGE_GUARDED);
++}
++
++
++/**
++ * isa_bridge_find_early - Find and map the ISA IO space early before
++ *                         main PCI discovery. This is optionally called by
++ *                         the arch code when adding PCI PHBs to get early
++ *                         access to ISA IO ports
++ */
++void __init isa_bridge_find_early(struct pci_controller *hose)
++{
++	struct device_node *np, *parent = NULL, *tmp;
++
++	/* If we already have an ISA bridge, bail off */
++	if (isa_bridge_devnode != NULL)
++		return;
++
++	/* For each "isa" node in the system. Note : we do a search by
++	 * type and not by name. It might be better to do by name but that's
++	 * what the code used to do and I don't want to break too much at
++	 * once. We can look into changing that separately
++	 */
++	for_each_node_by_type(np, "isa") {
++		/* Look for our hose being a parent */
++		for (parent = of_get_parent(np); parent;) {
++			if (parent == hose->arch_data) {
++				of_node_put(parent);
++				break;
++			}
++			tmp = parent;
++			parent = of_get_parent(parent);
++			of_node_put(tmp);
++		}
++		if (parent != NULL)
++			break;
++	}
++	if (np == NULL)
++		return;
++	isa_bridge_devnode = np;
++
++	/* Now parse the "ranges" property and setup the ISA mapping */
++	pci_process_ISA_OF_ranges(np, hose->io_base_phys);
++
++	/* Set the global ISA io base to indicate we have an ISA bridge */
++	isa_io_base = ISA_IO_BASE;
++
++	pr_debug("ISA bridge (early) is %s\n", np->full_name);
++}
++
++/**
++ * isa_bridge_find_late - Find and map the ISA IO space upon discovery of
++ *                        a new ISA bridge
++ */
++static void __devinit isa_bridge_find_late(struct pci_dev *pdev,
++					   struct device_node *devnode)
++{
++	struct pci_controller *hose = pci_bus_to_host(pdev->bus);
++
++	/* Store ISA device node and PCI device */
++	isa_bridge_devnode = of_node_get(devnode);
++	isa_bridge_pcidev = pdev;
++
++	/* Now parse the "ranges" property and setup the ISA mapping */
++	pci_process_ISA_OF_ranges(devnode, hose->io_base_phys);
++
++	/* Set the global ISA io base to indicate we have an ISA bridge */
++	isa_io_base = ISA_IO_BASE;
++
++	pr_debug("ISA bridge (late) is %s on %s\n",
++		 devnode->full_name, pci_name(pdev));
++}
++
++/**
++ * isa_bridge_remove - Remove/unmap an ISA bridge
++ */
++static void isa_bridge_remove(void)
++{
++	pr_debug("ISA bridge removed !\n");
++
++	/* Clear the global ISA io base to indicate that we have no more
++	 * ISA bridge. Note that drivers don't quite handle that, though
++	 * we should probably do something about it. But do we ever really
++	 * have ISA bridges being removed on machines using legacy devices ?
++	 */
++	isa_io_base = ISA_IO_BASE;
++
++	/* Clear references to the bridge */
++	of_node_put(isa_bridge_devnode);
++	isa_bridge_devnode = NULL;
++	isa_bridge_pcidev = NULL;
++
++	/* Unmap the ISA area */
++	__iounmap_at((void *)ISA_IO_BASE, 0x10000);
++}
++
++/**
++ * isa_bridge_notify - Get notified of PCI devices addition/removal
++ */
++static int __devinit isa_bridge_notify(struct notifier_block *nb,
++				       unsigned long action, void *data)
++{
++	struct device *dev = data;
++	struct pci_dev *pdev = to_pci_dev(dev);
++	struct device_node *devnode = pci_device_to_OF_node(pdev);
++
++	switch(action) {
++	case BUS_NOTIFY_ADD_DEVICE:
++		/* Check if we have an early ISA device, without PCI dev */
++		if (isa_bridge_devnode && isa_bridge_devnode == devnode &&
++		    !isa_bridge_pcidev) {
++			pr_debug("ISA bridge PCI attached: %s\n",
++				 pci_name(pdev));
++			isa_bridge_pcidev = pdev;
++		}
++
++		/* Check if we have no ISA device, and this happens to be one,
++		 * register it as such if it has an OF device
++		 */
++		if (!isa_bridge_devnode && devnode && devnode->type &&
++		    !strcmp(devnode->type, "isa"))
++			isa_bridge_find_late(pdev, devnode);
++
++		return 0;
++	case BUS_NOTIFY_DEL_DEVICE:
++		/* Check if this our existing ISA device */
++		if (pdev == isa_bridge_pcidev ||
++		    (devnode && devnode == isa_bridge_devnode))
++			isa_bridge_remove();
++		return 0;
++	}
++	return 0;
++}
++
++static struct notifier_block isa_bridge_notifier = {
++	.notifier_call = isa_bridge_notify
++};
++
++/**
++ * isa_bridge_init - register to be notified of ISA bridge addition/removal
++ *
++ */
++static int __init isa_bridge_init(void)
++{
++	if (firmware_has_feature(FW_FEATURE_ISERIES))
++		return 0;
++	bus_register_notifier(&pci_bus_type, &isa_bridge_notifier);
++	return 0;
++}
++arch_initcall(isa_bridge_init);
+Index: linux-2.6.18/arch/powerpc/kernel/of_platform.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/of_platform.c
++++ linux-2.6.18/arch/powerpc/kernel/of_platform.c
+@@ -418,14 +418,6 @@ static int __devinit of_pci_phb_probe(st
+ 	/* Process "ranges" property */
+ 	pci_process_bridge_OF_ranges(phb, dev->node, 0);
+ 
+-	/* Setup IO space. We use the non-dynamic version of that code here,
+-	 * which doesn't quite support unplugging. Next kernel release will
+-	 * have a better fix for this.
+-	 * Note also that we don't do ISA, this will also be fixed with a
+-	 * more massive rework.
+-	 */
+-	pci_setup_phb_io(phb, pci_io_base == 0);
+-
+ 	/* Init pci_dn data structures */
+ 	pci_devs_phb_init_dynamic(phb);
+ 
+Index: linux-2.6.18/arch/powerpc/kernel/pci_64.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_64.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_64.c
+@@ -11,7 +11,7 @@
+  *      2 of the License, or (at your option) any later version.
+  */
+ 
+-#undef DEBUG
++#define DEBUG
+ 
+ #include <linux/kernel.h>
+ #include <linux/pci.h>
+@@ -22,6 +22,7 @@
+ #include <linux/list.h>
+ #include <linux/syscalls.h>
+ #include <linux/irq.h>
++#include <linux/vmalloc.h>
+ 
+ #include <asm/processor.h>
+ #include <asm/io.h>
+@@ -41,34 +42,24 @@
+ 
+ unsigned long pci_probe_only = 1;
+ int pci_assign_all_buses = 0;
+-static int pci_initial_scan_done;
+ 
+ static void fixup_resource(struct resource *res, struct pci_dev *dev);
+ static void do_bus_setup(struct pci_bus *bus);
+-static void phbs_remap_io(void);
+ 
+ /* pci_io_base -- the base address from which io bars are offsets.
+  * This is the lowest I/O base address (so bar values are always positive),
+  * and it *must* be the start of ISA space if an ISA bus exists because
+- * ISA drivers use hard coded offsets.  If no ISA bus exists a dummy
+- * page is mapped and isa_io_limit prevents access to it.
++ * ISA drivers use hard coded offsets.  If no ISA bus exists nothing
++ * is mapped on the first 64K of IO space
+  */
+-unsigned long isa_io_base;	/* NULL if no ISA bus */
+-EXPORT_SYMBOL(isa_io_base);
+-unsigned long pci_io_base;
++unsigned long pci_io_base = ISA_IO_BASE;
+ EXPORT_SYMBOL(pci_io_base);
+ 
+-void iSeries_pcibios_init(void);
+-
+ LIST_HEAD(hose_list);
+ 
+ struct dma_mapping_ops pci_dma_ops;
+ EXPORT_SYMBOL(pci_dma_ops);
+ 
+-/* Cached ISA bridge dev. */
+-struct pci_dev *ppc64_isabridge_dev = NULL;
+-EXPORT_SYMBOL_GPL(ppc64_isabridge_dev);
+-
+ static void fixup_broken_pcnet32(struct pci_dev* dev)
+ {
+ 	if ((dev->class>>8 == PCI_CLASS_NETWORK_ETHERNET)) {
+@@ -88,7 +79,7 @@ void  pcibios_resource_to_bus(struct pci
+ 		return;
+ 
+ 	if (res->flags & IORESOURCE_IO)
+-	        offset = (unsigned long)hose->io_base_virt - pci_io_base;
++	        offset = (unsigned long)hose->io_base_virt - _IO_BASE;
+ 
+ 	if (res->flags & IORESOURCE_MEM)
+ 		offset = hose->pci_mem_offset;
+@@ -107,7 +98,7 @@ void pcibios_bus_to_resource(struct pci_
+ 		return;
+ 
+ 	if (res->flags & IORESOURCE_IO)
+-	        offset = (unsigned long)hose->io_base_virt - pci_io_base;
++	        offset = (unsigned long)hose->io_base_virt - _IO_BASE;
+ 
+ 	if (res->flags & IORESOURCE_MEM)
+ 		offset = hose->pci_mem_offset;
+@@ -144,7 +135,7 @@ void pcibios_align_resource(void *data, 
+ 
+ 	if (res->flags & IORESOURCE_IO) {
+ 	        unsigned long offset = (unsigned long)hose->io_base_virt -
+-					pci_io_base;
++					_IO_BASE;
+ 		/* Make sure we start at our min on all hoses */
+ 		if (start - offset < PCIBIOS_MIN_IO)
+ 			start = PCIBIOS_MIN_IO + offset;
+@@ -475,10 +466,16 @@ void __devinit scan_phb(struct pci_contr
+ 	bus->secondary = hose->first_busno;
+ 	hose->bus = bus;
+ 
++	if (!firmware_has_feature(FW_FEATURE_ISERIES))
++		pcibios_map_io_space(bus);
++
+ 	bus->resource[0] = res = &hose->io_resource;
+-	if (res->flags && request_resource(&ioport_resource, res))
++	if (res->flags && request_resource(&ioport_resource, res)) {
+ 		printk(KERN_ERR "Failed to request PCI IO region "
+ 		       "on PCI domain %04x\n", hose->global_number);
++		DBG("res->start = 0x%016lx, res->end = 0x%016lx\n",
++		    res->start, res->end);
++	}
+ 
+ 	for (i = 0; i < 3; ++i) {
+ 		res = &hose->mem_resources[i];
+@@ -536,17 +533,6 @@ static int __init pcibios_init(void)
+ 	if (ppc_md.pcibios_fixup)
+ 		ppc_md.pcibios_fixup();
+ 
+-	/* Cache the location of the ISA bridge (if we have one) */
+-	ppc64_isabridge_dev = pci_get_class(PCI_CLASS_BRIDGE_ISA << 8, NULL);
+-	if (ppc64_isabridge_dev != NULL)
+-		printk(KERN_DEBUG "ISA bridge at %s\n", pci_name(ppc64_isabridge_dev));
+-
+-	if (!firmware_has_feature(FW_FEATURE_ISERIES))
+-		/* map in PCI I/O space */
+-		phbs_remap_io();
+-
+-	pci_initial_scan_done = 1;
+-
+ 	printk(KERN_DEBUG "PCI: Probing PCI hardware done\n");
+ 
+ 	return 0;
+@@ -595,77 +581,6 @@ int pci_proc_domain(struct pci_bus *bus)
+ 	}
+ }
+ 
+-
+-#define ISA_SPACE_MASK 0x1
+-#define ISA_SPACE_IO 0x1
+-
+-static void __devinit pci_process_ISA_OF_ranges(struct device_node *isa_node,
+-				      unsigned long phb_io_base_phys,
+-				      void __iomem * phb_io_base_virt)
+-{
+-	/* Remove these asap */
+-
+-	struct pci_address {
+-		u32 a_hi;
+-		u32 a_mid;
+-		u32 a_lo;
+-	};
+-
+-	struct isa_address {
+-		u32 a_hi;
+-		u32 a_lo;
+-	};
+-
+-	struct isa_range {
+-		struct isa_address isa_addr;
+-		struct pci_address pci_addr;
+-		unsigned int size;
+-	};
+-
+-	const struct isa_range *range;
+-	unsigned long pci_addr;
+-	unsigned int isa_addr;
+-	unsigned int size;
+-	int rlen = 0;
+-
+-	range = of_get_property(isa_node, "ranges", &rlen);
+-	if (range == NULL || (rlen < sizeof(struct isa_range))) {
+-		printk(KERN_ERR "no ISA ranges or unexpected isa range size,"
+-		       "mapping 64k\n");
+-		__ioremap_explicit(phb_io_base_phys,
+-				   (unsigned long)phb_io_base_virt,
+-				   0x10000, _PAGE_NO_CACHE | _PAGE_GUARDED);
+-		return;	
+-	}
+-	
+-	/* From "ISA Binding to 1275"
+-	 * The ranges property is laid out as an array of elements,
+-	 * each of which comprises:
+-	 *   cells 0 - 1:	an ISA address
+-	 *   cells 2 - 4:	a PCI address 
+-	 *			(size depending on dev->n_addr_cells)
+-	 *   cell 5:		the size of the range
+-	 */
+-	if ((range->isa_addr.a_hi && ISA_SPACE_MASK) == ISA_SPACE_IO) {
+-		isa_addr = range->isa_addr.a_lo;
+-		pci_addr = (unsigned long) range->pci_addr.a_mid << 32 | 
+-			range->pci_addr.a_lo;
+-
+-		/* Assume these are both zero */
+-		if ((pci_addr != 0) || (isa_addr != 0)) {
+-			printk(KERN_ERR "unexpected isa to pci mapping: %s\n",
+-					__FUNCTION__);
+-			return;
+-		}
+-		
+-		size = PAGE_ALIGN(range->size);
+-
+-		__ioremap_explicit(phb_io_base_phys, 
+-				   (unsigned long) phb_io_base_virt, 
+-				   size, _PAGE_NO_CACHE | _PAGE_GUARDED);
+-	}
+-}
+-
+ void __devinit pci_process_bridge_OF_ranges(struct pci_controller *hose,
+ 					    struct device_node *dev, int prim)
+ {
+@@ -760,155 +675,122 @@ void __devinit pci_process_bridge_OF_ran
+ 	}
+ }
+ 
+-void __devinit pci_setup_phb_io(struct pci_controller *hose, int primary)
++#ifdef CONFIG_HOTPLUG
++
++int pcibios_unmap_io_space(struct pci_bus *bus)
+ {
+-	unsigned long size = hose->pci_io_size;
+-	unsigned long io_virt_offset;
+-	struct resource *res;
+-	struct device_node *isa_dn;
++	struct pci_controller *hose;
+ 
+-	if (size == 0)
+-		return;
++	WARN_ON(bus == NULL);
+ 
+-	hose->io_base_virt = reserve_phb_iospace(size);
+-	DBG("phb%d io_base_phys 0x%lx io_base_virt 0x%lx\n",
+-		hose->global_number, hose->io_base_phys,
+-		(unsigned long) hose->io_base_virt);
+-
+-	if (primary) {
+-		pci_io_base = (unsigned long)hose->io_base_virt;
+-		isa_dn = of_find_node_by_type(NULL, "isa");
+-		if (isa_dn) {
+-			isa_io_base = pci_io_base;
+-			pci_process_ISA_OF_ranges(isa_dn, hose->io_base_phys,
+-						hose->io_base_virt);
+-			of_node_put(isa_dn);
+-		}
+-	}
++	/* If this is not a PHB, we only flush the hash table over
++	 * the area mapped by this bridge. We don't play with the PTE
++	 * mappings since we might have to deal with sub-page alignemnts
++	 * so flushing the hash table is the only sane way to make sure
++	 * that no hash entries are covering that removed bridge area
++	 * while still allowing other busses overlapping those pages
++	 */
++	if (bus->self) {
++		struct resource *res = bus->resource[0];
+ 
+-	io_virt_offset = (unsigned long)hose->io_base_virt - pci_io_base;
+-	res = &hose->io_resource;
+-	res->start += io_virt_offset;
+-	res->end += io_virt_offset;
++		DBG("IO unmapping for PCI-PCI bridge %s\n",
++		    pci_name(bus->self));
+ 
+-	/* If this is called after the initial PCI scan, then we need to
+-	 * proceed to IO mappings now
+-	 */
+-	if (pci_initial_scan_done)
+-		__ioremap_explicit(hose->io_base_phys,
+-				   (unsigned long)hose->io_base_virt,
+-				   hose->pci_io_size,
+-				   _PAGE_NO_CACHE | _PAGE_GUARDED);
+-}
++		__flush_hash_table_range(&init_mm, res->start + _IO_BASE,
++					 res->end - res->start + 1);
++		return 0;
++	}
+ 
+-void __devinit pci_setup_phb_io_dynamic(struct pci_controller *hose,
+-					int primary)
+-{
+-	unsigned long size = hose->pci_io_size;
+-	unsigned long io_virt_offset;
+-	struct resource *res;
++	/* Get the host bridge */
++	hose = pci_bus_to_host(bus);
+ 
+-	if (size == 0)
+-		return;
++	/* Check if we have IOs allocated */
++	if (hose->io_base_alloc == 0)
++		return 0;
+ 
+-	hose->io_base_virt = __ioremap(hose->io_base_phys, size,
+-					_PAGE_NO_CACHE | _PAGE_GUARDED);
+-	DBG("phb%d io_base_phys 0x%lx io_base_virt 0x%lx\n",
+-		hose->global_number, hose->io_base_phys,
+-		(unsigned long) hose->io_base_virt);
++	DBG("IO unmapping for PHB %s\n",
++	    ((struct device_node *)hose->arch_data)->full_name);
++	DBG("  alloc=0x%p\n", hose->io_base_alloc);
+ 
+-	if (primary)
+-		pci_io_base = (unsigned long)hose->io_base_virt;
++	/* This is a PHB, we fully unmap the IO area */
++	vunmap(hose->io_base_alloc);
+ 
+-	io_virt_offset = (unsigned long)hose->io_base_virt - pci_io_base;
+-	res = &hose->io_resource;
+-	res->start += io_virt_offset;
+-	res->end += io_virt_offset;
++	return 0;
+ }
++EXPORT_SYMBOL_GPL(pcibios_unmap_io_space);
+ 
++#endif /* CONFIG_HOTPLUG */
+ 
+-static int get_bus_io_range(struct pci_bus *bus, unsigned long *start_phys,
+-				unsigned long *start_virt, unsigned long *size)
++int __devinit pcibios_map_io_space(struct pci_bus *bus)
+ {
+-	struct pci_controller *hose = pci_bus_to_host(bus);
+-	struct resource *res;
++	struct vm_struct *area;
++	unsigned long phys_page;
++	unsigned long size_page;
++	unsigned long io_virt_offset;
++	struct pci_controller *hose;
+ 
+-	if (bus->self)
+-		res = bus->resource[0];
+-	else
+-		/* Root Bus */
+-		res = &hose->io_resource;
+-
+-	if (res->end == 0 && res->start == 0)
+-		return 1;
+-
+-	*start_virt = pci_io_base + res->start;
+-	*start_phys = *start_virt + hose->io_base_phys
+-		- (unsigned long) hose->io_base_virt;
++	WARN_ON(bus == NULL);
+ 
+-	if (res->end > res->start)
+-		*size = res->end - res->start + 1;
+-	else {
+-		printk("%s(): unexpected region 0x%lx->0x%lx\n",
+-		       __FUNCTION__, res->start, res->end);
+-		return 1;
++	/* If this not a PHB, nothing to do, page tables still exist and
++	 * thus HPTEs will be faulted in when needed
++	 */
++	if (bus->self) {
++		DBG("IO mapping for PCI-PCI bridge %s\n",
++		    pci_name(bus->self));
++		DBG("  virt=0x%016lx...0x%016lx\n",
++		    bus->resource[0]->start + _IO_BASE,
++		    bus->resource[0]->end + _IO_BASE);
++		return 0;
+ 	}
+ 
+-	return 0;
+-}
++	/* Get the host bridge */
++	hose = pci_bus_to_host(bus);
++	phys_page = _ALIGN_DOWN(hose->io_base_phys, PAGE_SIZE);
++	size_page = _ALIGN_UP(hose->pci_io_size, PAGE_SIZE);
+ 
+-int unmap_bus_range(struct pci_bus *bus)
+-{
+-	unsigned long start_phys;
+-	unsigned long start_virt;
+-	unsigned long size;
+-
+-	if (!bus) {
+-		printk(KERN_ERR "%s() expected bus\n", __FUNCTION__);
+-		return 1;
+-	}
+-	
+-	if (get_bus_io_range(bus, &start_phys, &start_virt, &size))
+-		return 1;
+-	if (__iounmap_explicit((void __iomem *) start_virt, size))
+-		return 1;
++	/* Make sure IO area address is clear */
++	hose->io_base_alloc = NULL;
+ 
+-	return 0;
+-}
+-EXPORT_SYMBOL(unmap_bus_range);
++	/* If there's no IO to map on that bus, get away too */
++	if (hose->pci_io_size == 0 || hose->io_base_phys == 0)
++		return 0;
+ 
+-int remap_bus_range(struct pci_bus *bus)
+-{
+-	unsigned long start_phys;
+-	unsigned long start_virt;
+-	unsigned long size;
++	/* Let's allocate some IO space for that guy. We don't pass
++	 * VM_IOREMAP because we don't care about alignment tricks that
++	 * the core does in that case. Maybe we should due to stupid card
++	 * with incomplete address decoding but I'd rather not deal with
++	 * those outside of the reserved 64K legacy region.
++	 */
++	area = __get_vm_area(size_page, 0, PHB_IO_BASE, PHB_IO_END);
++	if (area == NULL)
++		return -ENOMEM;
++	hose->io_base_alloc = area->addr;
++	hose->io_base_virt = (void __iomem *)(area->addr +
++					      hose->io_base_phys - phys_page);
++
++	DBG("IO mapping for PHB %s\n",
++	    ((struct device_node *)hose->arch_data)->full_name);
++	DBG("  phys=0x%016lx, virt=0x%p (alloc=0x%p)\n",
++	    hose->io_base_phys, hose->io_base_virt, hose->io_base_alloc);
++	DBG("  size=0x%016lx (alloc=0x%016lx)\n",
++	    hose->pci_io_size, size_page);
++
++	/* Establish the mapping */
++	if (__ioremap_at(phys_page, area->addr, size_page,
++			 _PAGE_NO_CACHE | _PAGE_GUARDED) == NULL)
++		return -ENOMEM;
++
++	/* Fixup hose IO resource */
++	io_virt_offset = (unsigned long)hose->io_base_virt - _IO_BASE;
++	hose->io_resource.start += io_virt_offset;
++	hose->io_resource.end += io_virt_offset;
+ 
+-	if (!bus) {
+-		printk(KERN_ERR "%s() expected bus\n", __FUNCTION__);
+-		return 1;
+-	}
+-	
+-	
+-	if (get_bus_io_range(bus, &start_phys, &start_virt, &size))
+-		return 1;
+-	if (start_phys == 0)
+-		return 1;
+-	printk(KERN_DEBUG "mapping IO %lx -> %lx, size: %lx\n", start_phys, start_virt, size);
+-	if (__ioremap_explicit(start_phys, start_virt, size,
+-			       _PAGE_NO_CACHE | _PAGE_GUARDED))
+-		return 1;
++	DBG("  hose->io_resource=0x%016lx...0x%016lx\n",
++	    hose->io_resource.start, hose->io_resource.end);
+ 
+ 	return 0;
+ }
+-EXPORT_SYMBOL(remap_bus_range);
+-
+-static void phbs_remap_io(void)
+-{
+-	struct pci_controller *hose, *tmp;
+-
+-	list_for_each_entry_safe(hose, tmp, &hose_list, list_node)
+-		remap_bus_range(hose->bus);
+-}
++EXPORT_SYMBOL_GPL(pcibios_map_io_space);
+ 
+ static void __devinit fixup_resource(struct resource *res, struct pci_dev *dev)
+ {
+@@ -916,8 +798,7 @@ static void __devinit fixup_resource(str
+ 	unsigned long offset;
+ 
+ 	if (res->flags & IORESOURCE_IO) {
+-		offset = (unsigned long)hose->io_base_virt - pci_io_base;
+-
++		offset = (unsigned long)hose->io_base_virt - _IO_BASE;
+ 		res->start += offset;
+ 		res->end += offset;
+ 	} else if (res->flags & IORESOURCE_MEM) {
+@@ -932,9 +813,20 @@ void __devinit pcibios_fixup_device_reso
+ 	/* Update device resources.  */
+ 	int i;
+ 
+-	for (i = 0; i < PCI_NUM_RESOURCES; i++)
+-		if (dev->resource[i].flags)
+-			fixup_resource(&dev->resource[i], dev);
++	DBG("%s: Fixup resources:\n", pci_name(dev));
++	for (i = 0; i < PCI_NUM_RESOURCES; i++) {
++		struct resource *res = &dev->resource[i];
++		if (!res->flags)
++			continue;
++
++		DBG("  0x%02x < %08lx:0x%016lx...0x%016lx\n",
++		    i, res->flags, res->start, res->end);
++
++		fixup_resource(res, dev);
++
++		DBG("       > %08lx:0x%016lx...0x%016lx\n",
++		    res->flags, res->start, res->end);
++	}
+ }
+ EXPORT_SYMBOL(pcibios_fixup_device_resources);
+ 
+@@ -992,7 +884,7 @@ unsigned long pci_address_to_pio(phys_ad
+ 		if (address >= hose->io_base_phys &&
+ 		    address < (hose->io_base_phys + hose->pci_io_size)) {
+ 			unsigned long base =
+-				(unsigned long)hose->io_base_virt - pci_io_base;
++				(unsigned long)hose->io_base_virt - _IO_BASE;
+ 			return base + (address - hose->io_base_phys);
+ 		}
+ 	}
+Index: linux-2.6.18/arch/powerpc/kernel/pci_iommu.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_iommu.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_iommu.c
+@@ -49,7 +49,7 @@ static inline struct iommu_table *device
+ 	struct pci_dev *pdev;
+ 
+ 	if (!hwdev) {
+-		pdev = ppc64_isabridge_dev;
++		pdev = isa_bridge_pcidev;
+ 		if (!pdev)
+ 			return NULL;
+ 	} else
+@@ -64,7 +64,7 @@ static inline unsigned long device_to_ma
+ 	struct pci_dev *pdev;
+ 
+ 	if (!hwdev) {
+-		pdev = ppc64_isabridge_dev;
++		pdev = isa_bridge_pcidev;
+ 		if (!pdev) /* This is the best guess we can do */
+ 			return 0xfffffffful;
+ 	} else
+Index: linux-2.6.18/arch/powerpc/kernel/rtas_pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/rtas_pci.c
++++ linux-2.6.18/arch/powerpc/kernel/rtas_pci.c
+@@ -278,10 +278,8 @@ void __init find_and_init_phbs(void)
+ {
+ 	struct device_node *node;
+ 	struct pci_controller *phb;
+-	unsigned int index;
+ 	struct device_node *root = of_find_node_by_path("/");
+ 
+-	index = 0;
+ 	for (node = of_get_next_child(root, NULL);
+ 	     node != NULL;
+ 	     node = of_get_next_child(root, node)) {
+@@ -295,8 +293,7 @@ void __init find_and_init_phbs(void)
+ 			continue;
+ 		rtas_setup_phb(phb);
+ 		pci_process_bridge_OF_ranges(phb, node, 0);
+-		pci_setup_phb_io(phb, index == 0);
+-		index++;
++		isa_bridge_find_early(phb);
+ 	}
+ 
+ 	of_node_put(root);
+@@ -335,7 +332,7 @@ int pcibios_remove_root_bus(struct pci_c
+ 		return 1;
+ 	}
+ 
+-	rc = unmap_bus_range(b);
++	rc = pcibios_unmap_io_space(b);
+ 	if (rc) {
+ 		printk(KERN_ERR "%s: failed to unmap IO on bus %s\n",
+ 			__FUNCTION__, b->name);
+Index: linux-2.6.18/arch/powerpc/mm/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/Makefile
++++ linux-2.6.18/arch/powerpc/mm/Makefile
+@@ -11,8 +11,7 @@ obj-$(CONFIG_PPC32)		+= init_32.o pgtabl
+ hash-$(CONFIG_PPC_NATIVE)	:= hash_native_64.o
+ obj-$(CONFIG_PPC64)		+= init_64.o pgtable_64.o mmu_context_64.o \
+ 				   hash_utils_64.o hash_low_64.o tlb_64.o \
+-				   slb_low.o slb.o stab.o mmap.o imalloc.o \
+-				   $(hash-y)
++				   slb_low.o slb.o stab.o mmap.o $(hash-y)
+ obj-$(CONFIG_PPC_STD_MMU_32)	+= ppc_mmu_32.o hash_low_32.o tlb_32.o
+ obj-$(CONFIG_40x)		+= 40x_mmu.o
+ obj-$(CONFIG_44x)		+= 44x_mmu.o
+Index: linux-2.6.18/arch/powerpc/mm/mmu_decl.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/mmu_decl.h
++++ linux-2.6.18/arch/powerpc/mm/mmu_decl.h
+@@ -89,16 +89,4 @@ static inline void flush_HPTE(unsigned c
+ 	else
+ 		_tlbie(va);
+ }
+-#else /* CONFIG_PPC64 */
+-/* imalloc region types */
+-#define IM_REGION_UNUSED	0x1
+-#define IM_REGION_SUBSET	0x2
+-#define IM_REGION_EXISTS	0x4
+-#define IM_REGION_OVERLAP	0x8
+-#define IM_REGION_SUPERSET	0x10
+-
+-extern struct vm_struct * im_get_free_area(unsigned long size);
+-extern struct vm_struct * im_get_area(unsigned long v_addr, unsigned long size,
+-				      int region_type);
+-extern void im_free(void *addr);
+ #endif
+Index: linux-2.6.18/arch/powerpc/mm/pgtable_64.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/pgtable_64.c
++++ linux-2.6.18/arch/powerpc/mm/pgtable_64.c
+@@ -33,41 +33,27 @@
+ #include <linux/stddef.h>
+ #include <linux/vmalloc.h>
+ #include <linux/init.h>
+-#include <linux/delay.h>
+-#include <linux/bootmem.h>
+-#include <linux/highmem.h>
+-#include <linux/idr.h>
+-#include <linux/nodemask.h>
+-#include <linux/module.h>
+ 
+ #include <asm/pgalloc.h>
+ #include <asm/page.h>
+ #include <asm/prom.h>
+-#include <asm/lmb.h>
+-#include <asm/rtas.h>
+ #include <asm/io.h>
+ #include <asm/mmu_context.h>
+ #include <asm/pgtable.h>
+ #include <asm/mmu.h>
+-#include <asm/uaccess.h>
+ #include <asm/smp.h>
+ #include <asm/machdep.h>
+ #include <asm/tlb.h>
+-#include <asm/eeh.h>
+ #include <asm/processor.h>
+-#include <asm/mmzone.h>
+ #include <asm/cputable.h>
+ #include <asm/sections.h>
+ #include <asm/system.h>
+-#include <asm/iommu.h>
+ #include <asm/abs_addr.h>
+-#include <asm/vdso.h>
+ #include <asm/firmware.h>
+ 
+ #include "mmu_decl.h"
+ 
+-unsigned long ioremap_bot = IMALLOC_BASE;
+-static unsigned long phbs_io_bot = PHBS_IO_BASE;
++unsigned long ioremap_bot = IOREMAP_BASE;
+ 
+ /*
+  * map_io_page currently only called by __ioremap
+@@ -101,8 +87,8 @@ static int map_io_page(unsigned long ea,
+ 		 * entry in the hardware page table.
+ 		 *
+ 		 */
+-		if (htab_bolt_mapping(ea, ea + PAGE_SIZE, pa, flags,
+-				      mmu_io_psize)) {
++		if (htab_bolt_mapping(ea, (unsigned long)ea + PAGE_SIZE,
++				      pa, flags, mmu_io_psize)) {
+ 			printk(KERN_ERR "Failed to do bolted mapping IO "
+ 			       "memory at %016lx !\n", pa);
+ 			return -ENOMEM;
+@@ -112,8 +98,11 @@ static int map_io_page(unsigned long ea,
+ }
+ 
+ 
+-static void __iomem * __ioremap_com(phys_addr_t addr, unsigned long pa,
+-			    unsigned long ea, unsigned long size,
++/**
++ * __ioremap_at - Low level function to establish the page tables
++ *                for an IO mapping
++ */
++void __iomem * __ioremap_at(phys_addr_t pa, void *ea, unsigned long size,
+ 			    unsigned long flags)
+ {
+ 	unsigned long i;
+@@ -121,17 +110,35 @@ static void __iomem * __ioremap_com(phys
+ 	if ((flags & _PAGE_PRESENT) == 0)
+ 		flags |= pgprot_val(PAGE_KERNEL);
+ 
++	WARN_ON(pa & ~PAGE_MASK);
++	WARN_ON(((unsigned long)ea) & ~PAGE_MASK);
++	WARN_ON(size & ~PAGE_MASK);
++
+ 	for (i = 0; i < size; i += PAGE_SIZE)
+-		if (map_io_page(ea+i, pa+i, flags))
++		if (map_io_page((unsigned long)ea+i, pa+i, flags))
+ 			return NULL;
+ 
+-	return (void __iomem *) (ea + (addr & ~PAGE_MASK));
++	return (void __iomem *)ea;
++}
++
++/**
++ * __iounmap_from - Low level function to tear down the page tables
++ *                  for an IO mapping. This is used for mappings that
++ *                  are manipulated manually, like partial unmapping of
++ *                  PCI IOs or ISA space.
++ */
++void __iounmap_at(void *ea, unsigned long size)
++{
++	WARN_ON(((unsigned long)ea) & ~PAGE_MASK);
++	WARN_ON(size & ~PAGE_MASK);
++
++	unmap_kernel_range((unsigned long)ea, size);
+ }
+ 
+ void __iomem * __ioremap(phys_addr_t addr, unsigned long size,
+ 			 unsigned long flags)
+ {
+-	unsigned long pa, ea;
++	phys_addr_t paligned;
+ 	void __iomem *ret;
+ 
+ 	/*
+@@ -143,27 +150,30 @@ void __iomem * __ioremap(phys_addr_t add
+ 	 * IMALLOC_END
+ 	 * 
+ 	 */
+-	pa = addr & PAGE_MASK;
+-	size = PAGE_ALIGN(addr + size) - pa;
++	paligned = addr & PAGE_MASK;
++	size = PAGE_ALIGN(addr + size) - paligned;
+ 
+-	if ((size == 0) || (pa == 0))
++	if ((size == 0) || (paligned == 0))
+ 		return NULL;
+ 
+ 	if (mem_init_done) {
+ 		struct vm_struct *area;
+-		area = im_get_free_area(size);
++
++		area = __get_vm_area(size, VM_IOREMAP,
++				     ioremap_bot, IOREMAP_END);
+ 		if (area == NULL)
+ 			return NULL;
+-		ea = (unsigned long)(area->addr);
+-		ret = __ioremap_com(addr, pa, ea, size, flags);
++		ret = __ioremap_at(paligned, area->addr, size, flags);
+ 		if (!ret)
+-			im_free(area->addr);
++			vunmap(area->addr);
+ 	} else {
+-		ea = ioremap_bot;
+-		ret = __ioremap_com(addr, pa, ea, size, flags);
++		ret = __ioremap_at(paligned, (void *)ioremap_bot, size, flags);
+ 		if (ret)
+ 			ioremap_bot += size;
+ 	}
++
++	if (ret)
++		ret += addr & ~PAGE_MASK;
+ 	return ret;
+ }
+ 
+@@ -186,61 +196,9 @@ void __iomem * ioremap_flags(phys_addr_t
+ }
+ 
+ 
+-#define IS_PAGE_ALIGNED(_val) ((_val) == ((_val) & PAGE_MASK))
+-
+-int __ioremap_explicit(phys_addr_t pa, unsigned long ea,
+-		       unsigned long size, unsigned long flags)
+-{
+-	struct vm_struct *area;
+-	void __iomem *ret;
+-	
+-	/* For now, require page-aligned values for pa, ea, and size */
+-	if (!IS_PAGE_ALIGNED(pa) || !IS_PAGE_ALIGNED(ea) ||
+-	    !IS_PAGE_ALIGNED(size)) {
+-		printk(KERN_ERR	"unaligned value in %s\n", __FUNCTION__);
+-		return 1;
+-	}
+-	
+-	if (!mem_init_done) {
+-		/* Two things to consider in this case:
+-		 * 1) No records will be kept (imalloc, etc) that the region
+-		 *    has been remapped
+-		 * 2) It won't be easy to iounmap() the region later (because
+-		 *    of 1)
+-		 */
+-		;
+-	} else {
+-		area = im_get_area(ea, size,
+-			IM_REGION_UNUSED|IM_REGION_SUBSET|IM_REGION_EXISTS);
+-		if (area == NULL) {
+-			/* Expected when PHB-dlpar is in play */
+-			return 1;
+-		}
+-		if (ea != (unsigned long) area->addr) {
+-			printk(KERN_ERR "unexpected addr return from "
+-			       "im_get_area\n");
+-			return 1;
+-		}
+-	}
+-	
+-	ret = __ioremap_com(pa, pa, ea, size, flags);
+-	if (ret == NULL) {
+-		printk(KERN_ERR "ioremap_explicit() allocation failure !\n");
+-		return 1;
+-	}
+-	if (ret != (void *) ea) {
+-		printk(KERN_ERR "__ioremap_com() returned unexpected addr\n");
+-		return 1;
+-	}
+-
+-	return 0;
+-}
+-
+ /*  
+  * Unmap an IO region and remove it from imalloc'd list.
+  * Access to IO memory should be serialized by driver.
+- *
+- * XXX	what about calls before mem_init_done (ie python_countermeasures())
+  */
+ void __iounmap(volatile void __iomem *token)
+ {
+@@ -249,9 +207,14 @@ void __iounmap(volatile void __iomem *to
+ 	if (!mem_init_done)
+ 		return;
+ 	
+-	addr = (void *) ((unsigned long __force) token & PAGE_MASK);
+-
+-	im_free(addr);
++	addr = (void *) ((unsigned long __force)
++			 PCI_FIX_ADDR(token) & PAGE_MASK);
++	if ((unsigned long)addr < ioremap_bot) {
++		printk(KERN_WARNING "Attempt to iounmap early bolted mapping"
++		       " at 0x%p\n", addr);
++		return;
++	}
++	vunmap(addr);
+ }
+ 
+ void iounmap(volatile void __iomem *token)
+@@ -262,77 +225,8 @@ void iounmap(volatile void __iomem *toke
+ 		__iounmap(token);
+ }
+ 
+-static int iounmap_subset_regions(unsigned long addr, unsigned long size)
+-{
+-	struct vm_struct *area;
+-
+-	/* Check whether subsets of this region exist */
+-	area = im_get_area(addr, size, IM_REGION_SUPERSET);
+-	if (area == NULL)
+-		return 1;
+-
+-	while (area) {
+-		iounmap((void __iomem *) area->addr);
+-		area = im_get_area(addr, size,
+-				IM_REGION_SUPERSET);
+-	}
+-
+-	return 0;
+-}
+-
+-int __iounmap_explicit(volatile void __iomem *start, unsigned long size)
+-{
+-	struct vm_struct *area;
+-	unsigned long addr;
+-	int rc;
+-	
+-	addr = (unsigned long __force) start & PAGE_MASK;
+-
+-	/* Verify that the region either exists or is a subset of an existing
+-	 * region.  In the latter case, split the parent region to create 
+-	 * the exact region 
+-	 */
+-	area = im_get_area(addr, size, 
+-			    IM_REGION_EXISTS | IM_REGION_SUBSET);
+-	if (area == NULL) {
+-		/* Determine whether subset regions exist.  If so, unmap */
+-		rc = iounmap_subset_regions(addr, size);
+-		if (rc) {
+-			printk(KERN_ERR
+-			       "%s() cannot unmap nonexistent range 0x%lx\n",
+- 				__FUNCTION__, addr);
+-			return 1;
+-		}
+-	} else {
+-		iounmap((void __iomem *) area->addr);
+-	}
+-	/*
+-	 * FIXME! This can't be right:
+-	iounmap(area->addr);
+-	 * Maybe it should be "iounmap(area);"
+-	 */
+-	return 0;
+-}
+-
+ EXPORT_SYMBOL(ioremap);
+ EXPORT_SYMBOL(ioremap_flags);
+ EXPORT_SYMBOL(__ioremap);
+ EXPORT_SYMBOL(iounmap);
+ EXPORT_SYMBOL(__iounmap);
+-
+-static DEFINE_SPINLOCK(phb_io_lock);
+-
+-void __iomem * reserve_phb_iospace(unsigned long size)
+-{
+-	void __iomem *virt_addr;
+-		
+-	if (phbs_io_bot >= IMALLOC_BASE) 
+-		panic("reserve_phb_iospace(): phb io space overflow\n");
+-			
+-	spin_lock(&phb_io_lock);
+-	virt_addr = (void __iomem *) phbs_io_bot;
+-	phbs_io_bot += size;
+-	spin_unlock(&phb_io_lock);
+-
+-	return virt_addr;
+-}
+Index: linux-2.6.18/arch/powerpc/mm/tlb_64.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/tlb_64.c
++++ linux-2.6.18/arch/powerpc/mm/tlb_64.c
+@@ -232,3 +232,59 @@ void pte_free_finish(void)
+ 	pte_free_submit(*batchp);
+ 	*batchp = NULL;
+ }
++
++/**
++ * __flush_hash_table_range - Flush all HPTEs for a given address range
++ *                            from the hash table (and the TLB). But keeps
++ *                            the linux PTEs intact.
++ *
++ * @mm		: mm_struct of the target address space (generally init_mm)
++ * @start	: starting address
++ * @end         : ending address (not included in the flush)
++ *
++ * This function is mostly to be used by some IO hotplug code in order
++ * to remove all hash entries from a given address range used to map IO
++ * space on a removed PCI-PCI bidge without tearing down the full mapping
++ * since 64K pages may overlap with other bridges when using 64K pages
++ * with 4K HW pages on IO space.
++ *
++ * Because of that usage pattern, it's only available with CONFIG_HOTPLUG
++ * and is implemented for small size rather than speed.
++ */
++#ifdef CONFIG_HOTPLUG
++
++void __flush_hash_table_range(struct mm_struct *mm, unsigned long start,
++			      unsigned long end)
++{
++	unsigned long flags;
++
++	start = _ALIGN_DOWN(start, PAGE_SIZE);
++	end = _ALIGN_UP(end, PAGE_SIZE);
++
++	BUG_ON(!mm->pgd);
++
++	/* Note: Normally, we should only ever use a batch within a
++	 * PTE locked section. This violates the rule, but will work
++	 * since we don't actually modify the PTEs, we just flush the
++	 * hash while leaving the PTEs intact (including their reference
++	 * to being hashed). This is not the most performance oriented
++	 * way to do things but is fine for our needs here.
++	 */
++	local_irq_save(flags);
++	arch_enter_lazy_mmu_mode();
++	for (; start < end; start += PAGE_SIZE) {
++		pte_t *ptep = find_linux_pte(mm->pgd, start);
++		unsigned long pte;
++
++		if (ptep == NULL)
++			continue;
++		pte = pte_val(*ptep);
++		if (!(pte & _PAGE_HASHPTE))
++			continue;
++		hpte_need_flush(mm, start, ptep, pte, 0);
++	}
++	arch_leave_lazy_mmu_mode();
++	local_irq_restore(flags);
++}
++
++#endif /* CONFIG_HOTPLUG */
+Index: linux-2.6.18/arch/powerpc/platforms/iseries/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/iseries/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/iseries/pci.c
+@@ -743,6 +743,11 @@ void __init iSeries_pcibios_init(void)
+ 	/* Install IO hooks */
+ 	ppc_pci_io = iseries_pci_io;
+ 
++	/* iSeries has no IO space in the common sense, it needs to set
++	 * the IO base to 0
++	 */
++	pci_io_base = 0;
++
+ 	if (root == NULL) {
+ 		printk(KERN_CRIT "iSeries_pcibios_init: can't find root "
+ 				"of device tree\n");
+Index: linux-2.6.18/arch/powerpc/platforms/maple/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/maple/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/maple/pci.c
+@@ -527,23 +527,6 @@ void __devinit maple_pci_irq_fixup(struc
+ 	DBG(" <- maple_pci_irq_fixup\n");
+ }
+ 
+-static void __init maple_fixup_phb_resources(void)
+-{
+-	struct pci_controller *hose, *tmp;
+-	
+-	list_for_each_entry_safe(hose, tmp, &hose_list, list_node) {
+-		unsigned long offset = (unsigned long)hose->io_base_virt - pci_io_base;
+-
+-		hose->io_resource.start += offset;
+-		hose->io_resource.end += offset;
+-
+-		printk(KERN_INFO "PCI Host %d, io start: %llx; io end: %llx\n",
+-		       hose->global_number,
+-		       (unsigned long long)hose->io_resource.start,
+-		       (unsigned long long)hose->io_resource.end);
+-	}
+-}
+-
+ void __init maple_pci_init(void)
+ {
+ 	struct device_node *np, *root;
+@@ -578,24 +561,6 @@ void __init maple_pci_init(void)
+ 	if (ht && maple_add_bridge(ht) != 0)
+ 		of_node_put(ht);
+ 
+-        /*
+-         * We need to call pci_setup_phb_io for the HT bridge first
+-         * so it gets the I/O port numbers starting at 0, and we
+-         * need to call it for the AGP bridge after that so it gets
+-         * small positive I/O port numbers.
+-         */
+-        if (u3_ht)
+-                pci_setup_phb_io(u3_ht, 1);
+-        if (u3_agp)
+-                pci_setup_phb_io(u3_agp, 0);
+-        if (u4_pcie)
+-                pci_setup_phb_io(u4_pcie, 0);
+-
+-	/* Fixup the IO resources on our host bridges as the common code
+-	 * does it only for childs of the host bridges
+-	 */
+-	maple_fixup_phb_resources();
+-
+ 	/* Setup the linkage between OF nodes and PHBs */ 
+ 	pci_devs_phb_init();
+ 
+Index: linux-2.6.18/arch/powerpc/platforms/pasemi/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/pasemi/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/pasemi/pci.c
+@@ -140,29 +140,11 @@ static int __init pas_add_bridge(struct 
+ 	printk(KERN_INFO "Found PA-PXP PCI host bridge.\n");
+ 
+ 	/* Interpret the "ranges" property */
+-	/* This also maps the I/O region and sets isa_io/mem_base */
+ 	pci_process_bridge_OF_ranges(hose, dev, 1);
+-	pci_setup_phb_io(hose, 1);
+ 
+ 	return 0;
+ }
+ 
+-
+-static void __init pas_fixup_phb_resources(void)
+-{
+-	struct pci_controller *hose, *tmp;
+-
+-	list_for_each_entry_safe(hose, tmp, &hose_list, list_node) {
+-		unsigned long offset = (unsigned long)hose->io_base_virt - pci_io_base;
+-		hose->io_resource.start += offset;
+-		hose->io_resource.end += offset;
+-		printk(KERN_INFO "PCI Host %d, io start: %lx; io end: %lx\n",
+-		       hose->global_number,
+-		       hose->io_resource.start, hose->io_resource.end);
+-	}
+-}
+-
+-
+ void __init pas_pci_init(void)
+ {
+ 	struct device_node *np, *root;
+@@ -180,8 +162,6 @@ void __init pas_pci_init(void)
+ 
+ 	of_node_put(root);
+ 
+-	pas_fixup_phb_resources();
+-
+ 	/* Setup the linkage between OF nodes and PHBs */
+ 	pci_devs_phb_init();
+ 
+Index: linux-2.6.18/arch/powerpc/platforms/powermac/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/powermac/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/powermac/pci.c
+@@ -995,19 +995,6 @@ void __devinit pmac_pci_irq_fixup(struct
+ #endif /* CONFIG_PPC32 */
+ }
+ 
+-#ifdef CONFIG_PPC64
+-static void __init pmac_fixup_phb_resources(void)
+-{
+-	struct pci_controller *hose, *tmp;
+-
+-	list_for_each_entry_safe(hose, tmp, &hose_list, list_node) {
+-		printk(KERN_INFO "PCI Host %d, io start: %lx; io end: %lx\n",
+-		       hose->global_number,
+-		       hose->io_resource.start, hose->io_resource.end);
+-	}
+-}
+-#endif
+-
+ void __init pmac_pci_init(void)
+ {
+ 	struct device_node *np, *root;
+@@ -1042,25 +1029,6 @@ void __init pmac_pci_init(void)
+ 	if (ht && pmac_add_bridge(ht) != 0)
+ 		of_node_put(ht);
+ 
+-	/*
+-	 * We need to call pci_setup_phb_io for the HT bridge first
+-	 * so it gets the I/O port numbers starting at 0, and we
+-	 * need to call it for the AGP bridge after that so it gets
+-	 * small positive I/O port numbers.
+-	 */
+-	if (u3_ht)
+-		pci_setup_phb_io(u3_ht, 1);
+-	if (u3_agp)
+-		pci_setup_phb_io(u3_agp, 0);
+-	if (u4_pcie)
+-		pci_setup_phb_io(u4_pcie, 0);
+-
+-	/*
+-	 * On ppc64, fixup the IO resources on our host bridges as
+-	 * the common code does it only for children of the host bridges
+-	 */
+-	pmac_fixup_phb_resources();
+-
+ 	/* Setup the linkage between OF nodes and PHBs */
+ 	pci_devs_phb_init();
+ 
+Index: linux-2.6.18/arch/powerpc/platforms/pseries/pci_dlpar.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/pseries/pci_dlpar.c
++++ linux-2.6.18/arch/powerpc/platforms/pseries/pci_dlpar.c
+@@ -198,8 +198,6 @@ struct pci_controller * __devinit init_p
+ 	rtas_setup_phb(phb);
+ 	pci_process_bridge_OF_ranges(phb, dn, 0);
+ 
+-	pci_setup_phb_io_dynamic(phb, primary);
+-
+ 	pci_devs_phb_init_dynamic(phb);
+ 
+ 	if (dn->child)
+Index: linux-2.6.18/arch/powerpc/platforms/pseries/pseries.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/pseries/pseries.h
++++ linux-2.6.18/arch/powerpc/platforms/pseries/pseries.h
+@@ -33,6 +33,8 @@ static inline void setup_kexec_cpu_down_
+ static inline void setup_kexec_cpu_down_mpic(void) { }
+ #endif
+ 
++extern void pSeries_final_fixup(void);
++
+ /* Poweron flag used for enabling auto ups restart */
+ extern unsigned long rtas_poweron_auto;
+ 
+Index: linux-2.6.18/drivers/pci/hotplug/rpadlpar_core.c
+===================================================================
+--- linux-2.6.18.orig/drivers/pci/hotplug/rpadlpar_core.c
++++ linux-2.6.18/drivers/pci/hotplug/rpadlpar_core.c
+@@ -151,8 +151,8 @@ static void dlpar_pci_add_bus(struct dev
+ 	/* Claim new bus resources */
+ 	pcibios_claim_one_bus(dev->bus);
+ 
+-	/* ioremap() for child bus, which may or may not succeed */
+-	remap_bus_range(dev->subordinate);
++	/* Map IO space for child bus, which may or may not succeed */
++	pcibios_map_io_space(dev->subordinate);
+ 
+ 	/* Add new devices to global lists.  Register in proc, sysfs. */
+ 	pci_bus_add_devices(phb->bus);
+@@ -387,7 +387,7 @@ int dlpar_remove_pci_slot(char *drc_name
+ 		}
+ 	}
+ 
+-	if (unmap_bus_range(bus)) {
++	if (pcibios_unmap_io_space(bus)) {
+ 		printk(KERN_ERR "%s: failed to unmap bus range\n",
+ 			__FUNCTION__);
+ 		return -ERANGE;
+Index: linux-2.6.18/include/asm-powerpc/floppy.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/floppy.h
++++ linux-2.6.18/include/asm-powerpc/floppy.h
+@@ -29,7 +29,7 @@
+ #define fd_free_irq()           free_irq(FLOPPY_IRQ, NULL);
+ 
+ #include <linux/pci.h>
+-#include <asm/ppc-pci.h>	/* for ppc64_isabridge_dev */
++#include <asm/ppc-pci.h>	/* for isa_bridge_pcidev */
+ 
+ #define fd_dma_setup(addr,size,mode,io) fd_ops->_dma_setup(addr,size,mode,io)
+ 
+@@ -139,12 +139,12 @@ static int hard_dma_setup(char *addr, un
+ 	if (bus_addr 
+ 	    && (addr != prev_addr || size != prev_size || dir != prev_dir)) {
+ 		/* different from last time -- unmap prev */
+-		pci_unmap_single(ppc64_isabridge_dev, bus_addr, prev_size, prev_dir);
++		pci_unmap_single(isa_bridge_pcidev, bus_addr, prev_size, prev_dir);
+ 		bus_addr = 0;
+ 	}
+ 
+ 	if (!bus_addr)	/* need to map it */
+-		bus_addr = pci_map_single(ppc64_isabridge_dev, addr, size, dir);
++		bus_addr = pci_map_single(isa_bridge_pcidev, addr, size, dir);
+ 
+ 	/* remember this one as prev */
+ 	prev_addr = addr;
+Index: linux-2.6.18/include/asm-powerpc/io.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/io.h
++++ linux-2.6.18/include/asm-powerpc/io.h
+@@ -607,9 +607,9 @@ static inline void iosync(void)
+  *
+  * * iounmap undoes such a mapping and can be hooked
+  *
+- * * __ioremap_explicit (and the pending __iounmap_explicit) are low level
+- *   functions to create hand-made mappings for use only by the PCI code
+- *   and cannot currently be hooked.
++ * * __ioremap_at (and the pending __iounmap_at) are low level functions to
++ *   create hand-made mappings for use only by the PCI code and cannot
++ *   currently be hooked. Must be page aligned.
+  *
+  * * __ioremap is the low level implementation used by ioremap and
+  *   ioremap_flags and cannot be hooked (but can be used by a hook on one
+@@ -629,12 +629,9 @@ extern void __iomem *__ioremap(phys_addr
+ 			       unsigned long flags);
+ extern void __iounmap(volatile void __iomem *addr);
+ 
+-extern int __ioremap_explicit(phys_addr_t p_addr, unsigned long v_addr,
+-		     	      unsigned long size, unsigned long flags);
+-extern int __iounmap_explicit(volatile void __iomem *start,
+-			      unsigned long size);
+-
+-extern void __iomem * reserve_phb_iospace(unsigned long size);
++extern void __iomem * __ioremap_at(phys_addr_t pa, void *ea,
++				   unsigned long size, unsigned long flags);
++extern void __iounmap_at(void *ea, unsigned long size);
+ 
+ /*
+  * When CONFIG_PPC_INDIRECT_IO is set, we use the generic iomap implementation
+@@ -644,8 +641,8 @@ extern void __iomem * reserve_phb_iospac
+  */
+ #define HAVE_ARCH_PIO_SIZE		1
+ #define PIO_OFFSET			0x00000000UL
+-#define PIO_MASK			0x3fffffffUL
+-#define PIO_RESERVED			0x40000000UL
++#define PIO_MASK			(FULL_IO_SIZE - 1)
++#define PIO_RESERVED			(FULL_IO_SIZE)
+ 
+ #define mmio_read16be(addr)		readw_be(addr)
+ #define mmio_read32be(addr)		readl_be(addr)
+Index: linux-2.6.18/include/asm-powerpc/pci-bridge.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pci-bridge.h
++++ linux-2.6.18/include/asm-powerpc/pci-bridge.h
+@@ -122,6 +122,7 @@ struct pci_controller {
+ 	int last_busno;
+ 
+ 	void __iomem *io_base_virt;
++	void *io_base_alloc;
+ 	resource_size_t io_base_phys;
+ 
+ 	/* Some machines have a non 1:1 mapping of
+@@ -237,6 +238,11 @@ static inline struct pci_controller *pci
+ 
+ extern void pcibios_free_controller(struct pci_controller *phb);
+ 
++extern void isa_bridge_find_early(struct pci_controller *hose);
++
++extern int pcibios_unmap_io_space(struct pci_bus *bus);
++extern int pcibios_map_io_space(struct pci_bus *bus);
++
+ /* Return values for ppc_md.pci_probe_mode function */
+ #define PCI_PROBE_NONE		-1	/* Don't look at this bus at all */
+ #define PCI_PROBE_NORMAL	0	/* Do normal PCI probing */
+Index: linux-2.6.18/include/asm-powerpc/pci.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pci.h
++++ linux-2.6.18/include/asm-powerpc/pci.h
+@@ -217,10 +217,6 @@ static inline struct resource *pcibios_s
+ 	return root;
+ }
+ 
+-extern int unmap_bus_range(struct pci_bus *bus);
+-
+-extern int remap_bus_range(struct pci_bus *bus);
+-
+ extern void pcibios_fixup_device_resources(struct pci_dev *dev,
+ 			struct pci_bus *bus);
+ 
+Index: linux-2.6.18/include/asm-powerpc/pgtable-ppc64.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pgtable-ppc64.h
++++ linux-2.6.18/include/asm-powerpc/pgtable-ppc64.h
+@@ -27,7 +27,7 @@ struct mm_struct;
+  */
+ #define PGTABLE_EADDR_SIZE (PTE_INDEX_SIZE + PMD_INDEX_SIZE + \
+                 	    PUD_INDEX_SIZE + PGD_INDEX_SIZE + PAGE_SHIFT)
+-#define PGTABLE_RANGE (1UL << PGTABLE_EADDR_SIZE)
++#define PGTABLE_RANGE (ASM_CONST(1) << PGTABLE_EADDR_SIZE)
+ 
+ #if TASK_SIZE_USER64 > PGTABLE_RANGE
+ #error TASK_SIZE_USER64 exceeds pagetable range
+@@ -37,19 +37,28 @@ struct mm_struct;
+ #error TASK_SIZE_USER64 exceeds user VSID range
+ #endif
+ 
++
+ /*
+  * Define the address range of the vmalloc VM area.
+  */
+ #define VMALLOC_START ASM_CONST(0xD000000000000000)
+-#define VMALLOC_SIZE  ASM_CONST(0x80000000000)
++#define VMALLOC_SIZE  (PGTABLE_RANGE >> 1)
+ #define VMALLOC_END   (VMALLOC_START + VMALLOC_SIZE)
+ 
+ /*
+- * Define the address range of the imalloc VM area.
+- */
+-#define PHBS_IO_BASE	VMALLOC_END
+-#define IMALLOC_BASE	(PHBS_IO_BASE + 0x80000000ul)	/* Reserve 2 gigs for PHBs */
+-#define IMALLOC_END	(VMALLOC_START + PGTABLE_RANGE)
++ * Define the address ranges for MMIO and IO space :
++ *
++ *  ISA_IO_BASE = VMALLOC_END, 64K reserved area
++ *  PHB_IO_BASE = ISA_IO_BASE + 64K to ISA_IO_BASE + 2G, PHB IO spaces
++ * IOREMAP_BASE = ISA_IO_BASE + 2G to VMALLOC_START + PGTABLE_RANGE
++ */
++#define FULL_IO_SIZE	0x80000000ul
++#define  ISA_IO_BASE	(VMALLOC_END)
++#define  ISA_IO_END	(VMALLOC_END + 0x10000ul)
++#define  PHB_IO_BASE	(ISA_IO_END)
++#define  PHB_IO_END	(VMALLOC_END + FULL_IO_SIZE)
++#define IOREMAP_BASE	(PHB_IO_END)
++#define IOREMAP_END	(VMALLOC_START + PGTABLE_RANGE)
+ 
+ /*
+  * Region IDs
+Index: linux-2.6.18/include/asm-powerpc/ppc-pci.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/ppc-pci.h
++++ linux-2.6.18/include/asm-powerpc/ppc-pci.h
+@@ -23,7 +23,7 @@ extern struct list_head hose_list;
+ 
+ extern void find_and_init_phbs(void);
+ 
+-extern struct pci_dev *ppc64_isabridge_dev;	/* may be NULL if no ISA bus */
++extern struct pci_dev *isa_bridge_pcidev;	/* may be NULL if no ISA bus */
+ 
+ /** Bus Unit ID macros; get low and hi 32-bits of the 64-bit BUID */
+ #define BUID_HI(buid) ((buid) >> 32)
+@@ -44,8 +44,8 @@ extern void init_pci_config_tokens (void
+ extern unsigned long get_phb_buid (struct device_node *);
+ extern int rtas_setup_phb(struct pci_controller *phb);
+ 
+-/* From pSeries_pci.h */
+-extern void pSeries_final_fixup(void);
++/* From iSeries PCI */
++extern void iSeries_pcibios_init(void);
+ 
+ extern unsigned long pci_probe_only;
+ 
+Index: linux-2.6.18/include/asm-powerpc/tlbflush.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/tlbflush.h
++++ linux-2.6.18/include/asm-powerpc/tlbflush.h
+@@ -155,6 +155,11 @@ static inline void flush_tlb_kernel_rang
+ {
+ }
+ 
++/* Private function for use by PCI IO mapping code */
++extern void __flush_hash_table_range(struct mm_struct *mm, unsigned long start,
++				     unsigned long end);
++
++
+ #endif
+ 
+ /*
+Index: linux-2.6.18/mvl_patches/pro50-0808.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0808.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(808);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

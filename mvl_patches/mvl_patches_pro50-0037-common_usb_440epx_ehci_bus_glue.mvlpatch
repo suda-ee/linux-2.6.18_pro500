@@ -1,0 +1,446 @@
+#! /usr/bin/env bash
+# Patch: -common_usb_440epx_ehci_bus_glue
+# Date: Fri Jun 15 10:09:37 2007
+# Source: http://www.mail-archive.com/linux-usb-devel@lists.sourceforge.net/msg53364.html
+# MR: 23304
+# Type: Enhancement
+# Disposition: Backport from linux-usb-devel
+# Description:
+#     
+# 
+# This patch adds support for the AMCC 440EPx EHCI controller whose
+# in-memory data structures and the registers are represented in big-
+# endian format.
+# 
+# (Sorry, first try was line wrapped)
+# 
+# Signed-off-by: Stefan Roese <ml@stefan-roese.de>
+# 
+
+PATCHNUM=37
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: http://www.mail-archive.com/linux-usb-devel@lists.sourceforge.net/msg53364.html
+MR: 23304
+Type: Enhancement
+Disposition: Backport from linux-usb-devel
+Description:
+    
+
+This patch adds support for the AMCC 440EPx EHCI controller whose
+in-memory data structures and the registers are represented in big-
+endian format.
+
+(Sorry, first try was line wrapped)
+
+Signed-off-by: Stefan Roese <ml@stefan-roese.de>
+
+Index: linux-2.6.18/drivers/usb/host/ehci-hcd.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ehci-hcd.c
++++ linux-2.6.18/drivers/usb/host/ehci-hcd.c
+@@ -983,6 +983,11 @@ MODULE_LICENSE ("GPL");
+ #define	PS3_SYSTEM_BUS_DRIVER	ps3_ehci_sb_driver
+ #endif
+ 
++#ifdef CONFIG_440EPX
++#include "ehci-ppc-soc.c"
++#define	PLATFORM_DRIVER		ehci_ppc_soc_driver
++#endif
++
+ #if !defined(PCI_DRIVER) && !defined(PLATFORM_DRIVER) && \
+     !defined(PS3_SYSTEM_BUS_DRIVER)
+ #error "missing bus glue for ehci-hcd"
+Index: linux-2.6.18/drivers/usb/host/ehci-ppc-soc.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/usb/host/ehci-ppc-soc.c
+@@ -0,0 +1,182 @@
++/*
++ * EHCI HCD (Host Controller Driver) for USB.
++ *
++ * (C) Copyright 2006-2007 Stefan Roese <sr@denx.de>, DENX Software Engineering
++ *
++ * Bus Glue for PPC On-Chip EHCI driver
++ * Tested on AMCC 440EPx
++ *
++ * Based on "ehci-au12xx.c" by David Brownell <dbrownell@users.sourceforge.net>
++ *
++ * This file is licenced under the GPL.
++ */
++
++#include <linux/platform_device.h>
++
++extern int usb_disabled(void);
++
++/**
++ * usb_ehci_ppc_soc_probe - initialize PPC-SoC-based HCDs
++ * Context: !in_interrupt()
++ *
++ * Allocates basic resources for this USB host controller, and
++ * then invokes the start() method for the HCD associated with it
++ * through the hotplug entry's driver_data.
++ *
++ */
++int usb_ehci_ppc_soc_probe(const struct hc_driver *driver,
++			   struct usb_hcd **hcd_out,
++			   struct platform_device *dev)
++{
++	int retval;
++	struct usb_hcd *hcd;
++	struct ehci_hcd *ehci;
++
++	if (dev->resource[1].flags != IORESOURCE_IRQ) {
++		pr_debug("resource[1] is not IORESOURCE_IRQ");
++		retval = -ENOMEM;
++	}
++	hcd = usb_create_hcd(driver, &dev->dev, "PPC-SOC EHCI");
++	if (!hcd)
++		return -ENOMEM;
++	hcd->rsrc_start = dev->resource[0].start;
++	hcd->rsrc_len = dev->resource[0].end - dev->resource[0].start + 1;
++
++	if (!request_mem_region(hcd->rsrc_start, hcd->rsrc_len, hcd_name)) {
++		pr_debug("request_mem_region failed");
++		retval = -EBUSY;
++		goto err1;
++	}
++
++	hcd->regs = ioremap(hcd->rsrc_start, hcd->rsrc_len);
++	if (!hcd->regs) {
++		pr_debug("ioremap failed");
++		retval = -ENOMEM;
++		goto err2;
++	}
++
++	ehci = hcd_to_ehci(hcd);
++	ehci->big_endian_mmio = 1;
++	ehci->big_endian_desc = 1;
++	ehci->caps = hcd->regs;
++	ehci->regs = hcd->regs + HC_LENGTH(ehci_readl(ehci, &ehci->caps->hc_capbase));
++
++	/* cache this readonly data; minimize chip reads */
++	ehci->hcs_params = ehci_readl(ehci, &ehci->caps->hcs_params);
++
++#if defined(CONFIG_440EPX)
++	/*
++	 * 440EPx Errata USBH_3
++	 * Fix: Enable Break Memory Transfer (BMT) in INSNREG3
++	 */
++	out_be32((void *)((ulong)(&ehci->regs->command) + 0x8c), (1 << 0));
++	ehci_dbg(ehci, "Break Memory Transfer (BMT) has beed enabled!\n");
++#endif
++
++	retval = usb_add_hcd(hcd, dev->resource[1].start, IRQF_DISABLED);
++	if (retval == 0)
++		return retval;
++
++	iounmap(hcd->regs);
++err2:
++	release_mem_region(hcd->rsrc_start, hcd->rsrc_len);
++err1:
++	usb_put_hcd(hcd);
++	return retval;
++}
++
++/* may be called without controller electrically present */
++/* may be called with controller, bus, and devices active */
++
++/**
++ * usb_ehci_hcd_ppc_soc_remove - shutdown processing for PPC-SoC-based HCDs
++ * @dev: USB Host Controller being removed
++ * Context: !in_interrupt()
++ *
++ * Reverses the effect of usb_ehci_hcd_ppc_soc_probe(), first invoking
++ * the HCD's stop() method.  It is always called from a thread
++ * context, normally "rmmod", "apmd", or something similar.
++ *
++ */
++void usb_ehci_ppc_soc_remove(struct usb_hcd *hcd, struct platform_device *dev)
++{
++	usb_remove_hcd(hcd);
++	iounmap(hcd->regs);
++	release_mem_region(hcd->rsrc_start, hcd->rsrc_len);
++	usb_put_hcd(hcd);
++}
++
++static const struct hc_driver ehci_ppc_soc_hc_driver = {
++	.description = hcd_name,
++	.product_desc = "PPC-SOC EHCI",
++	.hcd_priv_size = sizeof(struct ehci_hcd),
++
++	/*
++	 * generic hardware linkage
++	 */
++	.irq = ehci_irq,
++	.flags = HCD_MEMORY | HCD_USB2,
++
++	/*
++	 * basic lifecycle operations
++	 */
++	.reset = ehci_init,
++	.start = ehci_run,
++	.stop = ehci_stop,
++	.shutdown = ehci_shutdown,
++
++	/*
++	 * managing i/o requests and associated device resources
++	 */
++	.urb_enqueue = ehci_urb_enqueue,
++	.urb_dequeue = ehci_urb_dequeue,
++	.endpoint_disable = ehci_endpoint_disable,
++
++	/*
++	 * scheduling support
++	 */
++	.get_frame_number = ehci_get_frame,
++
++	/*
++	 * root hub support
++	 */
++	.hub_status_data = ehci_hub_status_data,
++	.hub_control = ehci_hub_control,
++#ifdef	CONFIG_PM
++	.hub_suspend = ehci_hub_suspend,
++	.hub_resume = ehci_hub_resume,
++#endif
++};
++
++static int ehci_hcd_ppc_soc_drv_probe(struct platform_device *pdev)
++{
++	struct usb_hcd *hcd = NULL;
++	int ret;
++
++	pr_debug("In ehci_hcd_ppc_soc_drv_probe\n");
++
++	if (usb_disabled())
++		return -ENODEV;
++
++	ret = usb_ehci_ppc_soc_probe(&ehci_ppc_soc_hc_driver, &hcd, pdev);
++	return ret;
++}
++
++static int ehci_hcd_ppc_soc_drv_remove(struct platform_device *pdev)
++{
++	struct usb_hcd *hcd = platform_get_drvdata(pdev);
++
++	usb_ehci_ppc_soc_remove(hcd, pdev);
++	return 0;
++}
++
++MODULE_ALIAS("ppc-soc-ehci");
++static struct platform_driver ehci_ppc_soc_driver = {
++	.probe = ehci_hcd_ppc_soc_drv_probe,
++	.remove = ehci_hcd_ppc_soc_drv_remove,
++	.shutdown = usb_hcd_platform_shutdown,
++	.driver = {
++		.name = "ppc-soc-ehci",
++		.bus = &platform_bus_type
++	}
++};
+Index: linux-2.6.18/mvl_patches/pro50-0037.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0037.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(37);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

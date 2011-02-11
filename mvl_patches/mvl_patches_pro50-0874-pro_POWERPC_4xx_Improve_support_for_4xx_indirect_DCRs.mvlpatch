@@ -1,0 +1,383 @@
+#! /usr/bin/env bash
+# Patch: -pro_POWERPC_4xx_Improve_support_for_4xx_indirect_DCRs
+# Date: Wed Mar  5 11:44:24 2008
+# MR: 26747
+# Disposition: backport from
+# git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# 
+# From 0e6140a56f2878816ecf9db50f40133d25d987e4 Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Fri, 21 Dec 2007 15:39:22 +1100
+# Subject: [PATCH] [POWERPC] 4xx: Improve support for 4xx indirect DCRs
+# 
+# Accessing indirect DCRs is done via a pair of address/data DCRs.
+# 
+# Such accesses are thus inherently racy, vs. interrupts, preemption
+# and possibly SMP if 4xx SMP cores are ever used.
+# 
+# This updates the mfdcri/mtdcri macros in dcr-native.h (which were
+# so far unused) to use a spinlock.
+# 
+# In addition, add some common definitions to a new dcr-regs.h file.
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+
+PATCHNUM=874
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26747
+Disposition: backport from
+git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+
+From 0e6140a56f2878816ecf9db50f40133d25d987e4 Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Fri, 21 Dec 2007 15:39:22 +1100
+Subject: [PATCH] [POWERPC] 4xx: Improve support for 4xx indirect DCRs
+
+Accessing indirect DCRs is done via a pair of address/data DCRs.
+
+Such accesses are thus inherently racy, vs. interrupts, preemption
+and possibly SMP if 4xx SMP cores are ever used.
+
+This updates the mfdcri/mtdcri macros in dcr-native.h (which were
+so far unused) to use a spinlock.
+
+In addition, add some common definitions to a new dcr-regs.h file.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+Index: linux-2.6.18/include/asm-powerpc/dcr-native.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/dcr-native.h
++++ linux-2.6.18/include/asm-powerpc/dcr-native.h
+@@ -22,6 +22,8 @@
+ #ifdef __KERNEL__
+ #ifndef __ASSEMBLY__
+ 
++#include <linux/spinlock.h>
++
+ typedef struct {
+ 	unsigned int base;
+ } dcr_host_t;
+@@ -55,20 +57,28 @@ do {								\
+ } while (0)
+ 
+ /* R/W of indirect DCRs make use of standard naming conventions for DCRs */
+-#define mfdcri(base, reg)			\
+-({						\
+-	mtdcr(base ## _CFGADDR, base ## _ ## reg);	\
+-	mfdcr(base ## _CFGDATA);			\
++extern spinlock_t dcr_ind_lock;
++
++#define mfdcri(base, reg)				\
++({							\
++	unsigned long flags; 				\
++	unsigned int val;				\
++	spin_lock_irqsave(&dcr_ind_lock, flags);	\
++	mtdcr(DCRN_ ## base ## _CONFIG_ADDR, reg);	\
++	val = mfdcr(DCRN_ ## base ## _CONFIG_DATA);	\
++	spin_unlock_irqrestore(&dcr_ind_lock, flags);	\
++	val;						\
+ })
+ 
+-#define mtdcri(base, reg, data)			\
+-do {						\
+-	mtdcr(base ## _CFGADDR, base ## _ ## reg);	\
+-	mtdcr(base ## _CFGDATA, data);		\
++#define mtdcri(base, reg, data)				\
++do {							\
++	unsigned long flags; 				\
++	spin_lock_irqsave(&dcr_ind_lock, flags);	\
++	mtdcr(DCRN_ ## base ## _CONFIG_ADDR, reg);	\
++	mtdcr(DCRN_ ## base ## _CONFIG_DATA, data);	\
++	spin_unlock_irqrestore(&dcr_ind_lock, flags);	\
+ } while (0)
+ 
+ #endif /* __ASSEMBLY__ */
+ #endif /* __KERNEL__ */
+ #endif /* _ASM_POWERPC_DCR_NATIVE_H */
+-
+-
+Index: linux-2.6.18/include/asm-powerpc/dcr-regs.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-powerpc/dcr-regs.h
+@@ -0,0 +1,71 @@
++/*
++ * Common DCR / SDR / CPR register definitions used on various IBM/AMCC
++ * 4xx processors
++ *
++ *    Copyright 2007 Benjamin Herrenschmidt, IBM Corp
++ *                   <benh@kernel.crashing.org>
++ *
++ * Mostly lifted from asm-ppc/ibm4xx.h by
++ *
++ *    Copyright (c) 1999 Grant Erickson <grant@lcse.umn.edu>
++ *
++ */
++
++#ifndef __DCR_REGS_H__
++#define __DCR_REGS_H__
++
++/*
++ * Most DCRs used for controlling devices such as the MAL, DMA engine,
++ * etc... are obtained for the device tree.
++ *
++ * The definitions in this files are fixed DCRs and indirect DCRs that
++ * are commonly used outside of specific drivers or refer to core
++ * common registers that may occasionally have to be tweaked outside
++ * of the driver main register set
++ */
++
++/* CPRs (440GX and 440SP/440SPe) */
++#define DCRN_CPR0_CONFIG_ADDR	0xc
++#define DCRN_CPR0_CONFIG_DATA	0xd
++
++/* SDRs (440GX and 440SP/440SPe) */
++#define DCRN_SDR0_CONFIG_ADDR 	0xe
++#define DCRN_SDR0_CONFIG_DATA	0xf
++
++#define SDR0_PFC0		0x4100
++#define SDR0_PFC1		0x4101
++#define SDR0_PFC1_EPS		0x1c00000
++#define SDR0_PFC1_EPS_SHIFT	22
++#define SDR0_PFC1_RMII		0x02000000
++#define SDR0_MFR		0x4300
++#define SDR0_MFR_TAH0 		0x80000000  	/* TAHOE0 Enable */
++#define SDR0_MFR_TAH1 		0x40000000  	/* TAHOE1 Enable */
++#define SDR0_MFR_PCM  		0x10000000  	/* PPC440GP irq compat mode */
++#define SDR0_MFR_ECS  		0x08000000  	/* EMAC int clk */
++#define SDR0_MFR_T0TXFL		0x00080000
++#define SDR0_MFR_T0TXFH		0x00040000
++#define SDR0_MFR_T1TXFL		0x00020000
++#define SDR0_MFR_T1TXFH		0x00010000
++#define SDR0_MFR_E0TXFL		0x00008000
++#define SDR0_MFR_E0TXFH		0x00004000
++#define SDR0_MFR_E0RXFL		0x00002000
++#define SDR0_MFR_E0RXFH		0x00001000
++#define SDR0_MFR_E1TXFL		0x00000800
++#define SDR0_MFR_E1TXFH		0x00000400
++#define SDR0_MFR_E1RXFL		0x00000200
++#define SDR0_MFR_E1RXFH		0x00000100
++#define SDR0_MFR_E2TXFL		0x00000080
++#define SDR0_MFR_E2TXFH		0x00000040
++#define SDR0_MFR_E2RXFL		0x00000020
++#define SDR0_MFR_E2RXFH		0x00000010
++#define SDR0_MFR_E3TXFL		0x00000008
++#define SDR0_MFR_E3TXFH		0x00000004
++#define SDR0_MFR_E3RXFL		0x00000002
++#define SDR0_MFR_E3RXFH		0x00000001
++#define SDR0_UART0		0x0120
++#define SDR0_UART1		0x0121
++#define SDR0_UART2		0x0122
++#define SDR0_UART3		0x0123
++#define SDR0_CUST0		0x4000
++
++#endif /* __DCR_REGS_H__ */
+Index: linux-2.6.18/mvl_patches/pro50-0874.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0874.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(874);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

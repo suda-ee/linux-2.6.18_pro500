@@ -1,0 +1,582 @@
+#! /usr/bin/env bash
+# Patch: -ALSA_soc_0.13_ASoC_headers
+# Date: Mon Jul 21 10:28:24 2008
+# MR: 26835
+# Disposition: Backport from 2.6.21-rc1
+# Adjustments:
+# 
+# From 1c433fbda4896a6455d97b66a4f2646cbdd52a8c Mon Sep 17 00:00:00 2001
+# From: Graeme Gregory <gg@opensource.wolfsonmicro.com>
+# Date: Fri, 2 Feb 2007 17:13:05 +0100
+# Subject: [PATCH] [ALSA] soc - 0.13 ASoC headers
+# 
+# This patch updates the API's to include the new DAI configuration and
+# clocking architecture.
+# Changes:-
+#  o Removed DAI automatic matching and capabilities structure (struct
+# snd_soc_dai_mode) and macros.
+#  o Added DAI operations for codec and CPU interfaces.
+#  o Removed config_sysclk() function and struct snd_soc_clock_info. No
+# longer needed as clocking is now configured manually in the machine
+# drivers. Also removed other clocking data from structures.
+#  o Updated version to 0.13
+#  o Added shift to SOC_SINGLE_EXT kcontrol macro.
+# 
+# Signed-off-by: Graeme Gregory <gg@opensource.wolfsonmicro.com>
+# Signed-off-by: Liam Girdwood <lg@opensource.wolfsonmicro.com>
+# Signed-off-by: Takashi Iwai <tiwai@suse.de>
+# Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+
+PATCHNUM=1340
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26835
+Disposition: Backport from 2.6.21-rc1
+Adjustments:
+
+From 1c433fbda4896a6455d97b66a4f2646cbdd52a8c Mon Sep 17 00:00:00 2001
+From: Graeme Gregory <gg@opensource.wolfsonmicro.com>
+Date: Fri, 2 Feb 2007 17:13:05 +0100
+Subject: [PATCH] [ALSA] soc - 0.13 ASoC headers
+
+This patch updates the API's to include the new DAI configuration and
+clocking architecture.
+Changes:-
+ o Removed DAI automatic matching and capabilities structure (struct
+snd_soc_dai_mode) and macros.
+ o Added DAI operations for codec and CPU interfaces.
+ o Removed config_sysclk() function and struct snd_soc_clock_info. No
+longer needed as clocking is now configured manually in the machine
+drivers. Also removed other clocking data from structures.
+ o Updated version to 0.13
+ o Added shift to SOC_SINGLE_EXT kcontrol macro.
+
+Signed-off-by: Graeme Gregory <gg@opensource.wolfsonmicro.com>
+Signed-off-by: Liam Girdwood <lg@opensource.wolfsonmicro.com>
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+Index: linux-2.6.18/include/sound/soc.h
+===================================================================
+--- linux-2.6.18.orig/include/sound/soc.h
++++ linux-2.6.18/include/sound/soc.h
+@@ -22,7 +22,7 @@
+ #include <sound/control.h>
+ #include <sound/ac97_codec.h>
+ 
+-#define SND_SOC_VERSION "0.12"
++#define SND_SOC_VERSION "0.13.0"
+ 
+ /*
+  * Convenience kcontrol builders
+@@ -60,12 +60,12 @@
+ 	.info = snd_soc_info_enum_double, \
+ 	.get = snd_soc_get_enum_double, .put = snd_soc_put_enum_double, \
+ 	.private_value = (unsigned long)&xenum }
+-#define SOC_SINGLE_EXT(xname, xreg, xmask, xinvert,\
++#define SOC_SINGLE_EXT(xname, xreg, xshift, xmask, xinvert,\
+ 	 xhandler_get, xhandler_put) \
+ {	.iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname, \
+-	.info = snd_soc_info_volsw_ext, \
++	.info = snd_soc_info_volsw, \
+ 	.get = xhandler_get, .put = xhandler_put, \
+-	.private_value =  SOC_SINGLE_VALUE_EXT(xreg, xmask, xinvert) }
++	.private_value = SOC_SINGLE_VALUE(xreg, xshift, xmask, xinvert) }
+ #define SOC_SINGLE_BOOL_EXT(xname, xdata, xhandler_get, xhandler_put) \
+ {	.iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname, \
+ 	.info = snd_soc_info_bool_ext, \
+@@ -87,20 +87,29 @@
+ /*
+  * DAI hardware audio formats
+  */
+-#define SND_SOC_DAIFMT_I2S		(1 << 0)	/* I2S mode */
+-#define SND_SOC_DAIFMT_RIGHT_J	(1 << 1)	/* Right justified mode */
+-#define SND_SOC_DAIFMT_LEFT_J	(1 << 2)	/* Left Justified mode */
+-#define SND_SOC_DAIFMT_DSP_A	(1 << 3)	/* L data msb after FRM or LRC */
+-#define SND_SOC_DAIFMT_DSP_B	(1 << 4)	/* L data msb during FRM or LRC */
+-#define SND_SOC_DAIFMT_AC97		(1 << 5)	/* AC97 */
++#define SND_SOC_DAIFMT_I2S		0	/* I2S mode */
++#define SND_SOC_DAIFMT_RIGHT_J	1	/* Right justified mode */
++#define SND_SOC_DAIFMT_LEFT_J	2	/* Left Justified mode */
++#define SND_SOC_DAIFMT_DSP_A	3	/* L data msb after FRM or LRC */
++#define SND_SOC_DAIFMT_DSP_B	4	/* L data msb during FRM or LRC */
++#define SND_SOC_DAIFMT_AC97		5	/* AC97 */
++
++#define SND_SOC_DAIFMT_MSB 	SND_SOC_DAIFMT_LEFT_J
++#define SND_SOC_DAIFMT_LSB	SND_SOC_DAIFMT_RIGHT_J
++
++/*
++ * DAI Gating
++ */
++#define SND_SOC_DAIFMT_CONT			(0 << 4)	/* continuous clock */
++#define SND_SOC_DAIFMT_GATED		(1 << 4)	/* clock is gated when not Tx/Rx */
+ 
+ /*
+  * DAI hardware signal inversions
+  */
+-#define SND_SOC_DAIFMT_NB_NF		(1 << 8)	/* normal bit clock + frame */
+-#define SND_SOC_DAIFMT_NB_IF		(1 << 9)	/* normal bclk + inv frm */
+-#define SND_SOC_DAIFMT_IB_NF		(1 << 10)	/* invert bclk + nor frm */
+-#define SND_SOC_DAIFMT_IB_IF		(1 << 11)	/* invert bclk + frm */
++#define SND_SOC_DAIFMT_NB_NF		(0 << 8)	/* normal bit clock + frame */
++#define SND_SOC_DAIFMT_NB_IF		(1 << 8)	/* normal bclk + inv frm */
++#define SND_SOC_DAIFMT_IB_NF		(2 << 8)	/* invert bclk + nor frm */
++#define SND_SOC_DAIFMT_IB_IF		(3 << 8)	/* invert bclk + frm */
+ 
+ /*
+  * DAI hardware clock masters
+@@ -108,58 +117,22 @@
+  * i.e. if the codec is clk and frm master then the interface is
+  * clk and frame slave.
+  */
+-#define SND_SOC_DAIFMT_CBM_CFM	(1 << 12) /* codec clk & frm master */
+-#define SND_SOC_DAIFMT_CBS_CFM	(1 << 13) /* codec clk slave & frm master */
+-#define SND_SOC_DAIFMT_CBM_CFS	(1 << 14) /* codec clk master & frame slave */
+-#define SND_SOC_DAIFMT_CBS_CFS	(1 << 15) /* codec clk & frm slave */
++#define SND_SOC_DAIFMT_CBM_CFM	(0 << 12) /* codec clk & frm master */
++#define SND_SOC_DAIFMT_CBS_CFM	(1 << 12) /* codec clk slave & frm master */
++#define SND_SOC_DAIFMT_CBM_CFS	(2 << 12) /* codec clk master & frame slave */
++#define SND_SOC_DAIFMT_CBS_CFS	(3 << 12) /* codec clk & frm slave */
+ 
+-#define SND_SOC_DAIFMT_FORMAT_MASK		0x00ff
++#define SND_SOC_DAIFMT_FORMAT_MASK		0x000f
++#define SND_SOC_DAIFMT_CLOCK_MASK		0x00f0
+ #define SND_SOC_DAIFMT_INV_MASK			0x0f00
+-#define SND_SOC_DAIFMT_CLOCK_MASK		0xf000
+-
+-/*
+- * DAI hardware audio direction
+- */
+-#define SND_SOC_DAIDIR_PLAYBACK		0x1
+-#define SND_SOC_DAIDIR_CAPTURE		0x2
+-
+-/*
+- * DAI hardware Time Division Multiplexing (TDM) Slots
+- * Left and Right data word positions
+- * This is measured in words (sample size) and not bits.
+- */
+-#define SND_SOC_DAITDM_LRDW(l,r)	((l << 8) | r)
+-
+-/*
+- * DAI hardware clock ratios
+- * bit clock can either be a generated by dividing mclk or
+- * by multiplying sample rate, hence there are 2 definitions below
+- * depending on codec type.
+- */
+-/* ratio of sample rate to mclk/sysclk */
+-#define SND_SOC_FS_ALL			0xffff	/* all mclk supported */
++#define SND_SOC_DAIFMT_MASTER_MASK		0xf000
+ 
+-/* bit clock dividers */
+-#define SND_SOC_FSBD(x)			(1 << (x - 1))	/* ratio mclk:bclk */
+-#define SND_SOC_FSBD_REAL(x)	(ffs(x))
+-
+-/* bit clock ratio to (sample rate * channels * word size) */
+-#define SND_SOC_FSBW(x)			(1 << (x - 1))
+-#define SND_SOC_FSBW_REAL(x)		(ffs(x))
+-/* all bclk ratios supported */
+-#define SND_SOC_FSB_ALL			~0ULL
+ 
+ /*
+- * DAI hardware flags
++ * Master Clock Directions
+  */
+-/* use bfs mclk divider mode (BCLK = MCLK / x) */
+-#define SND_SOC_DAI_BFS_DIV		0x1
+-/* use bfs rate mulitplier  (BCLK = RATE * x)*/
+-#define SND_SOC_DAI_BFS_RATE	0x2
+-/* use bfs rcw multiplier (BCLK = RATE * CHN * WORD SIZE) */
+-#define SND_SOC_DAI_BFS_RCW		0x4
+-/* capture and playback can use different clocks */
+-#define SND_SOC_DAI_ASYNC		0x8
++#define SND_SOC_CLOCK_IN	0
++#define SND_SOC_CLOCK_OUT	1
+ 
+ /*
+  * AC97 codec ID's bitmask
+@@ -195,7 +168,6 @@ int snd_soc_register_card(struct snd_soc
+ /* set runtime hw params */
+ int snd_soc_set_runtime_hwparams(struct snd_pcm_substream *substream,
+ 	const struct snd_pcm_hardware *hw);
+-int snd_soc_get_rate(int rate);
+ 
+ /* codec IO */
+ #define snd_soc_read(codec, reg) codec->read(codec, reg)
+@@ -244,6 +216,8 @@ int snd_soc_put_volsw_2r(struct snd_kcon
+ /* SoC PCM stream information */
+ struct snd_soc_pcm_stream {
+ 	char *stream_name;
++	u64 formats;			/* SNDRV_PCM_FMTBIT_* */
++	unsigned int rates;		/* SNDRV_PCM_RATE_* */
+ 	unsigned int rate_min;		/* min rate */
+ 	unsigned int rate_max;		/* max rate */
+ 	unsigned int channels_min;	/* min channels */
+@@ -261,23 +235,43 @@ struct snd_soc_ops {
+ 	int (*trigger)(struct snd_pcm_substream *, int);
+ };
+ 
+-/* SoC DAI hardware mode */
+-struct snd_soc_dai_mode {
+-	u16 fmt;		/* SND_SOC_DAIFMT_* */
+-	u16 tdm;		/* SND_SOC_HWTDM_* */
+-	u64 pcmfmt; 	/* SNDRV_PCM_FMTBIT_* */
+-	u16 pcmrate;	/* SND_SOC_HWRATE_* */
+-	u16 pcmdir:2;	/* SND_SOC_HWDIR_* */
+-	u16 flags:8;	/* hw flags */
+-	u16 fs;			/* mclk to rate divider */
+-	u64 bfs;		/* mclk to bclk dividers */
+-	unsigned long priv;		/* private mode data */
+-};
+-
+-/* DAI capabilities */
+-struct snd_soc_dai_cap {
+-	int num_modes;				/* number of DAI modes */
+-	struct snd_soc_dai_mode *mode;	/* array of supported DAI modes */
++/* ASoC codec DAI ops */
++struct snd_soc_codec_ops {
++	/* codec DAI clocking configuration */
++	int (*set_sysclk)(struct snd_soc_codec_dai *codec_dai,
++		int clk_id, unsigned int freq, int dir);
++	int (*set_pll)(struct snd_soc_codec_dai *codec_dai,
++		int pll_id, unsigned int freq_in, unsigned int freq_out);
++	int (*set_clkdiv)(struct snd_soc_codec_dai *codec_dai,
++		int div_id, int div);
++
++	/* CPU DAI format configuration */
++	int (*set_fmt)(struct snd_soc_codec_dai *codec_dai,
++		unsigned int fmt);
++	int (*set_tdm_slot)(struct snd_soc_codec_dai *codec_dai,
++		unsigned int mask, int slots);
++	int (*set_tristate)(struct snd_soc_codec_dai *, int tristate);
++
++	/* digital mute */
++	int (*digital_mute)(struct snd_soc_codec_dai *, int mute);
++};
++
++/* ASoC cpu DAI ops */
++struct snd_soc_cpu_ops {
++	/* CPU DAI clocking configuration */
++	int (*set_sysclk)(struct snd_soc_cpu_dai *cpu_dai,
++		int clk_id, unsigned int freq, int dir);
++	int (*set_clkdiv)(struct snd_soc_cpu_dai *cpu_dai,
++		int div_id, int div);
++	int (*set_pll)(struct snd_soc_cpu_dai *cpu_dai,
++		int pll_id, unsigned int freq_in, unsigned int freq_out);
++
++	/* CPU DAI format configuration */
++	int (*set_fmt)(struct snd_soc_cpu_dai *cpu_dai,
++		unsigned int fmt);
++	int (*set_tdm_slot)(struct snd_soc_cpu_dai *cpu_dai,
++		unsigned int mask, int slots);
++	int (*set_tristate)(struct snd_soc_cpu_dai *, int tristate);
+ };
+ 
+ /* SoC Codec DAI */
+@@ -288,22 +282,16 @@ struct snd_soc_codec_dai {
+ 	/* DAI capabilities */
+ 	struct snd_soc_pcm_stream playback;
+ 	struct snd_soc_pcm_stream capture;
+-	struct snd_soc_dai_cap caps;
+ 
+ 	/* DAI runtime info */
+-	struct snd_soc_dai_mode dai_runtime;
+-	struct snd_soc_ops ops;
+-	unsigned int (*config_sysclk)(struct snd_soc_codec_dai*,
+-		struct snd_soc_clock_info *info, unsigned int clk);
+-	int (*digital_mute)(struct snd_soc_codec *,
+-		struct snd_soc_codec_dai*, int);
+-	unsigned int mclk;		/* the audio master clock */
+-	unsigned int pll_in;	/* the PLL input clock */
+-	unsigned int pll_out;	/* the PLL output clock */
+-	unsigned int clk_div;	/* internal clock divider << 1 (for fractions) */
++	struct snd_soc_codec *codec;
+ 	unsigned int active;
+ 	unsigned char pop_wait:1;
+ 
++	/* ops */
++	struct snd_soc_ops ops;
++	struct snd_soc_codec_ops dai_ops;
++
+ 	/* DAI private data */
+ 	void *private_data;
+ };
+@@ -323,20 +311,18 @@ struct snd_soc_cpu_dai {
+ 		struct snd_soc_cpu_dai *cpu_dai);
+ 	int (*resume)(struct platform_device *pdev,
+ 		struct snd_soc_cpu_dai *cpu_dai);
+-	unsigned int (*config_sysclk)(struct snd_soc_cpu_dai *cpu_dai,
+-		struct snd_soc_clock_info *info, unsigned int clk);
++
++	/* ops */
++	struct snd_soc_ops ops;
++	struct snd_soc_cpu_ops dai_ops;
+ 
+ 	/* DAI capabilities */
+ 	struct snd_soc_pcm_stream capture;
+ 	struct snd_soc_pcm_stream playback;
+-	struct snd_soc_dai_cap caps;
+ 
+ 	/* DAI runtime info */
+-	struct snd_soc_dai_mode dai_runtime;
+-	struct snd_soc_ops ops;
+ 	struct snd_pcm_runtime *runtime;
+ 	unsigned char active:1;
+-	unsigned int mclk;
+ 	void *dma_data;
+ 
+ 	/* DAI private data */
+@@ -417,14 +403,12 @@ struct snd_soc_dai_link  {
+ 	/* DAI */
+ 	struct snd_soc_codec_dai *codec_dai;
+ 	struct snd_soc_cpu_dai *cpu_dai;
+-	u32 flags;			/* DAI config preference flags */
++
++	/* machine stream operations */
++	struct snd_soc_ops *ops;
+ 
+ 	/* codec/machine specific init - e.g. add machine controls */
+ 	int (*init)(struct snd_soc_codec *codec);
+-
+-	/* audio sysclock configuration */
+-	unsigned int (*config_sysclk)(struct snd_soc_pcm_runtime *rtd,
+-		struct snd_soc_clock_info *info);
+ };
+ 
+ /* SoC machine */
+@@ -441,9 +425,6 @@ struct snd_soc_machine {
+ 	int (*resume_pre)(struct platform_device *pdev);
+ 	int (*resume_post)(struct platform_device *pdev);
+ 
+-	/* machine stream operations */
+-	struct snd_soc_ops *ops;
+-
+ 	/* CPU <--> Codec DAI links  */
+ 	struct snd_soc_dai_link *dai_link;
+ 	int num_links;
+@@ -462,8 +443,7 @@ struct snd_soc_device {
+ 
+ /* runtime channel data */
+ struct snd_soc_pcm_runtime {
+-	struct snd_soc_codec_dai *codec_dai;
+-	struct snd_soc_cpu_dai *cpu_dai;
++	struct snd_soc_dai_link *dai;
+ 	struct snd_soc_device *socdev;
+ };
+ 
+@@ -478,11 +458,4 @@ struct soc_enum {
+ 	void *dapm;
+ };
+ 
+-/* clocking configuration data */
+-struct snd_soc_clock_info {
+-	unsigned int rate;
+-	unsigned int fs;
+-	unsigned int bclk_master;
+-};
+-
+ #endif
+Index: linux-2.6.18/mvl_patches/pro50-1340.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1340.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1340);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

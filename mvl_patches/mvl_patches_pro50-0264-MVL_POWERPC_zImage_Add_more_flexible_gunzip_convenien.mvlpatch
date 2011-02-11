@@ -1,0 +1,633 @@
+#! /usr/bin/env bash
+# Patch: -MVL_POWERPC_zImage_Add_more_flexible_gunzip_convenien
+# Date: Wed Sep 26 11:13:56 2007
+# MR: 24856
+# Adjustments:
+#     arch/powerpc/boot/Makefile stuff modified.
+# From ad9d2716cfc1cda5a7e0d7bc0db45e3af8a4adbb Mon Sep 17 00:00:00 2001
+# From: David Gibson <david@gibson.dropbear.id.au>
+# Date: Mon, 5 Mar 2007 14:24:52 +1100
+# Subject: [PATCH] [POWERPC] zImage: Add more flexible gunzip convenience functions
+# 
+# At present, arch/powerpc/boot/main.c includes a gunzip() function
+# which is a convenient wrapper around zlib.  However, it doesn't
+# conveniently allow decompressing part of an image to one location,
+# then the remainder to a different address.
+# 
+# This patch adds a new set of more flexible convenience wrappers around
+# zlib, moving them to their own file, gunzip_util.c, in the process.
+# These wrappers allow decompressing sections of the compressed image to
+
+PATCHNUM=264
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+Adjustments:
+    arch/powerpc/boot/Makefile stuff modified.
+From ad9d2716cfc1cda5a7e0d7bc0db45e3af8a4adbb Mon Sep 17 00:00:00 2001
+From: David Gibson <david@gibson.dropbear.id.au>
+Date: Mon, 5 Mar 2007 14:24:52 +1100
+Subject: [PATCH] [POWERPC] zImage: Add more flexible gunzip convenience functions
+
+At present, arch/powerpc/boot/main.c includes a gunzip() function
+which is a convenient wrapper around zlib.  However, it doesn't
+conveniently allow decompressing part of an image to one location,
+then the remainder to a different address.
+
+This patch adds a new set of more flexible convenience wrappers around
+zlib, moving them to their own file, gunzip_util.c, in the process.
+These wrappers allow decompressing sections of the compressed image to
+different locations.  In addition, they transparently handle
+uncompressed data, avoiding special case code to handle uncompressed
+vmlinux images.
+
+The patch also converts main.c to use the new wrappers, using the new
+flexibility to avoid decompressing the vmlinux's ELF header twice as
+we did previously.  That in turn means we avoid extending our
+allocations for the vmlinux to allow space for the extra copy of the
+ELF header.
+
+Signed-off-by: David Gibson <dwg@au1.ibm.com>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/boot/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/Makefile
++++ linux-2.6.18/arch/powerpc/boot/Makefile
+@@ -48,8 +48,9 @@ zliblinuxheader := zlib.h zconf.h zutil.
+ $(addprefix $(obj)/,$(zlib) main.o): $(addprefix $(obj)/,$(zliblinuxheader)) \
+ 		$(addprefix $(obj)/,$(zlibheader))
+ 
+-src-wlib := string.S stdio.c main.c flatdevtree.c flatdevtree_misc.c ns16550.c \
+-		serial.c simple_alloc.c div64.S util.S $(zlib)
++src-wlib := string.S stdio.c main.c flatdevtree.c flatdevtree_misc.c \
++		ns16550.c serial.c simple_alloc.c div64.S util.S \
++		gunzip_util.c $(zlib)
+ src-plat := of.c
+ src-boot := crt0.S $(src-wlib) $(src-plat) empty.c
+ 
+Index: linux-2.6.18/arch/powerpc/boot/gunzip_util.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/boot/gunzip_util.c
+@@ -0,0 +1,140 @@
++/*
++ * Copyright 2007 David Gibson, IBM Corporation.
++ * Based on earlier work, Copyright (C) Paul Mackerras 1997.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */
++
++#include <stddef.h>
++#include "string.h"
++#include "stdio.h"
++#include "ops.h"
++#include "gunzip_util.h"
++
++struct gunzip_state state;
++
++#define HEAD_CRC	2
++#define EXTRA_FIELD	4
++#define ORIG_NAME	8
++#define COMMENT		0x10
++#define RESERVED	0xe0
++
++void gunzip_start(struct gunzip_state *state, void *src, int srclen)
++{
++	char *hdr = src;
++	int hdrlen = 0;
++
++	memset(state, 0, sizeof(*state));
++
++	/* Check for gzip magic number */
++	if ((hdr[0] == 0x1f) && (hdr[1] == 0x8b)) {
++		/* gzip data, initialize zlib parameters */
++		int r, flags;
++
++		state->s.workspace = state->scratch;
++		if (zlib_inflate_workspacesize() > sizeof(state->scratch)) {
++			printf("insufficient scratch space for gunzip\n\r");
++			exit();
++		}
++
++		/* skip header */
++		hdrlen = 10;
++		flags = hdr[3];
++		if (hdr[2] != Z_DEFLATED || (flags & RESERVED) != 0) {
++			printf("bad gzipped data\n\r");
++			exit();
++		}
++		if ((flags & EXTRA_FIELD) != 0)
++			hdrlen = 12 + hdr[10] + (hdr[11] << 8);
++		if ((flags & ORIG_NAME) != 0)
++			while (hdr[hdrlen++] != 0)
++				;
++		if ((flags & COMMENT) != 0)
++			while (hdr[hdrlen++] != 0)
++				;
++		if ((flags & HEAD_CRC) != 0)
++			hdrlen += 2;
++		if (hdrlen >= srclen) {
++			printf("gunzip_start: ran out of data in header\n\r");
++			exit();
++		}
++
++		r = zlib_inflateInit2(&state->s, -MAX_WBITS);
++		if (r != Z_OK) {
++			printf("inflateInit2 returned %d\n\r", r);
++			exit();
++		}
++	}
++
++	state->s.next_in = src + hdrlen;
++	state->s.avail_in = srclen - hdrlen;
++}
++
++int gunzip_partial(struct gunzip_state *state, void *dst, int dstlen)
++{
++	int len;
++
++	if (state->s.workspace) {
++		/* gunzipping */
++		int r;
++
++		state->s.next_out = dst;
++		state->s.avail_out = dstlen;
++		r = zlib_inflate(&state->s, Z_FULL_FLUSH);
++		if (r != Z_OK && r != Z_STREAM_END) {
++			printf("inflate returned %d msg: %s\n\r", r, state->s.msg);
++			exit();
++		}
++		len = state->s.next_out - (unsigned char *)dst;
++	} else {
++		/* uncompressed image */
++		len = min(state->s.avail_in, (unsigned)dstlen);
++		memcpy(dst, state->s.next_in, len);
++		state->s.next_in += len;
++		state->s.avail_in -= len;
++	}
++	return len;
++}
++
++void gunzip_exactly(struct gunzip_state *state, void *dst, int dstlen)
++{
++	int len;
++
++	len  = gunzip_partial(state, dst, dstlen);
++	if (len < dstlen) {
++		printf("gunzip_block: ran out of data\n\r");
++		exit();
++	}
++}
++
++void gunzip_discard(struct gunzip_state *state, int len)
++{
++	static char discard_buf[128];
++
++	while (len > sizeof(discard_buf)) {
++		gunzip_exactly(state, discard_buf, sizeof(discard_buf));
++		len -= sizeof(discard_buf);
++	}
++
++	if (len > 0)
++		gunzip_exactly(state, discard_buf, len);
++}
++
++int gunzip_finish(struct gunzip_state *state, void *dst, int dstlen)
++{
++	int len;
++
++	if (state->s.workspace) {
++		len = gunzip_partial(state, dst, dstlen);
++		zlib_inflateEnd(&state->s);
++	} else {
++		/* uncompressed image */
++		len = min(state->s.avail_in, (unsigned)dstlen);
++		memcpy(dst, state->s.next_in, len);
++	}
++
++	return len;
++}
+Index: linux-2.6.18/arch/powerpc/boot/gunzip_util.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/boot/gunzip_util.h
+@@ -0,0 +1,30 @@
++/*
++ * Decompression convenience functions
++ *
++ * Copyright 2007 David Gibson, IBM Corporation.
++ *
++ * This file is licensed under the terms of the GNU General Public
++ * License version 2.  This program is licensed "as is" without any
++ * warranty of any kind, whether express or implied.
++ */
++#ifndef _PPC_BOOT_GUNZIP_UTIL_H_
++#define _PPC_BOOT_GUNZIP_UTIL_H_
++
++#include "zlib.h"
++
++/* scratch space for gunzip; 46912 is from zlib_inflate_workspacesize() */
++#define GUNZIP_SCRATCH_SIZE	46912
++
++struct gunzip_state {
++	z_stream s;
++	char scratch[46912];
++};
++
++void gunzip_start(struct gunzip_state *state, void *src, int srclen);
++int gunzip_partial(struct gunzip_state *state, void *dst, int dstlen);
++void gunzip_exactly(struct gunzip_state *state, void *dst, int len);
++void gunzip_discard(struct gunzip_state *state, int len);
++int gunzip_finish(struct gunzip_state *state, void *dst, int len);
++
++#endif /* _PPC_BOOT_GUNZIP_UTIL_H_ */
++
+Index: linux-2.6.18/arch/powerpc/boot/main.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/main.c
++++ linux-2.6.18/arch/powerpc/boot/main.c
+@@ -14,8 +14,8 @@
+ #include "page.h"
+ #include "string.h"
+ #include "stdio.h"
+-#include "zlib.h"
+ #include "ops.h"
++#include "gunzip_util.h"
+ #include "flatdevtree.h"
+ 
+ extern void flush_cache(void *, unsigned long);
+@@ -30,6 +30,8 @@ extern char _initrd_end[];
+ extern char _dtb_start[];
+ extern char _dtb_end[];
+ 
++static struct gunzip_state gzstate;
++
+ struct addr_range {
+ 	unsigned long addr;
+ 	unsigned long size;
+@@ -42,71 +44,12 @@ static struct addr_range initrd;
+ static unsigned long elfoffset;
+ static int is_64bit;
+ 
+-/* scratch space for gunzip; 46912 is from zlib_inflate_workspacesize() */
+-static char scratch[46912];
+ static char elfheader[256];
+ 
+ typedef void (*kernel_entry_t)(unsigned long, unsigned long, void *);
+ 
+ #undef DEBUG
+ 
+-#define HEAD_CRC	2
+-#define EXTRA_FIELD	4
+-#define ORIG_NAME	8
+-#define COMMENT		0x10
+-#define RESERVED	0xe0
+-
+-static void gunzip(void *dst, int dstlen, unsigned char *src, int *lenp)
+-{
+-	z_stream s;
+-	int r, i, flags;
+-
+-	/* skip header */
+-	i = 10;
+-	flags = src[3];
+-	if (src[2] != Z_DEFLATED || (flags & RESERVED) != 0) {
+-		printf("bad gzipped data\n\r");
+-		exit();
+-	}
+-	if ((flags & EXTRA_FIELD) != 0)
+-		i = 12 + src[10] + (src[11] << 8);
+-	if ((flags & ORIG_NAME) != 0)
+-		while (src[i++] != 0)
+-			;
+-	if ((flags & COMMENT) != 0)
+-		while (src[i++] != 0)
+-			;
+-	if ((flags & HEAD_CRC) != 0)
+-		i += 2;
+-	if (i >= *lenp) {
+-		printf("gunzip: ran out of data in header\n\r");
+-		exit();
+-	}
+-
+-	if (zlib_inflate_workspacesize() > sizeof(scratch)) {
+-		printf("gunzip needs more mem\n");
+-		exit();
+-	}
+-	memset(&s, 0, sizeof(s));
+-	s.workspace = scratch;
+-	r = zlib_inflateInit2(&s, -MAX_WBITS);
+-	if (r != Z_OK) {
+-		printf("inflateInit2 returned %d\n\r", r);
+-		exit();
+-	}
+-	s.next_in = src + i;
+-	s.avail_in = *lenp - i;
+-	s.next_out = dst;
+-	s.avail_out = dstlen;
+-	r = zlib_inflate(&s, Z_FULL_FLUSH);
+-	if (r != Z_OK && r != Z_STREAM_END) {
+-		printf("inflate returned %d msg: %s\n\r", r, s.msg);
+-		exit();
+-	}
+-	*lenp = s.next_out - (unsigned char *) dst;
+-	zlib_inflateEnd(&s);
+-}
+-
+ static int is_elf64(void *hdr)
+ {
+ 	Elf64_Ehdr *elf64 = hdr;
+@@ -132,8 +75,8 @@ static int is_elf64(void *hdr)
+ 		return 0;
+ 
+ 	elfoffset = (unsigned long)elf64ph->p_offset;
+-	vmlinux.size = (unsigned long)elf64ph->p_filesz + elfoffset;
+-	vmlinux.memsize = (unsigned long)elf64ph->p_memsz + elfoffset;
++	vmlinux.size = (unsigned long)elf64ph->p_filesz;
++	vmlinux.memsize = (unsigned long)elf64ph->p_memsz;
+ 
+ 	is_64bit = 1;
+ 	return 1;
+@@ -164,8 +107,8 @@ static int is_elf32(void *hdr)
+ 		return 0;
+ 
+ 	elfoffset = elf32ph->p_offset;
+-	vmlinux.size = elf32ph->p_filesz + elf32ph->p_offset;
+-	vmlinux.memsize = elf32ph->p_memsz + elf32ph->p_offset;
++	vmlinux.size = elf32ph->p_filesz;
++	vmlinux.memsize = elf32ph->p_memsz;
+ 	return 1;
+ }
+ 
+@@ -177,13 +120,8 @@ static void prep_kernel(unsigned long a1
+ 	vmlinuz.size = (unsigned long)(_vmlinux_end - _vmlinux_start);
+ 
+ 	/* gunzip the ELF header of the kernel */
+-	if (*(unsigned short *)vmlinuz.addr == 0x1f8b) {
+-		len = vmlinuz.size;
+-		gunzip(elfheader, sizeof(elfheader),
+-				(unsigned char *)vmlinuz.addr, &len);
+-	} else
+-		memcpy(elfheader, (const void *)vmlinuz.addr,
+-		       sizeof(elfheader));
++	gunzip_start(&gzstate, (void *)vmlinuz.addr, vmlinuz.size);
++	gunzip_exactly(&gzstate, elfheader, sizeof(elfheader));
+ 
+ 	if (!is_elf64(elfheader) && !is_elf32(elfheader)) {
+ 		printf("Error: not a valid PPC32 or PPC64 ELF file!\n\r");
+@@ -192,10 +130,10 @@ static void prep_kernel(unsigned long a1
+ 	if (platform_ops.image_hdr)
+ 		platform_ops.image_hdr(elfheader);
+ 
+-	/* We need to alloc the memsize plus the file offset since gzip
+-	 * will expand the header (file offset), then the kernel, then
+-	 * possible rubbish we don't care about. But the kernel bss must
+-	 * be claimed (it will be zero'd by the kernel itself)
++	/* We need to alloc the memsize: gzip will expand the kernel
++	 * text/data, then possible rubbish we don't care about. But
++	 * the kernel bss must be claimed (it will be zero'd by the
++	 * kernel itself)
+ 	 */
+ 	printf("Allocating 0x%lx bytes for kernel ...\n\r", vmlinux.memsize);
+ 	vmlinux.addr = (unsigned long)malloc(vmlinux.memsize);
+@@ -237,24 +175,13 @@ static void prep_kernel(unsigned long a1
+ 	}
+ 
+ 	/* Eventually gunzip the kernel */
+-	if (*(unsigned short *)vmlinuz.addr == 0x1f8b) {
+-		printf("gunzipping (0x%lx <- 0x%lx:0x%0lx)...",
+-		       vmlinux.addr, vmlinuz.addr, vmlinuz.addr+vmlinuz.size);
+-		len = vmlinuz.size;
+-		gunzip((void *)vmlinux.addr, vmlinux.memsize,
+-			(unsigned char *)vmlinuz.addr, &len);
+-		printf("done 0x%lx bytes\n\r", len);
+-	} else {
+-		memmove((void *)vmlinux.addr,(void *)vmlinuz.addr,
+-			vmlinuz.size);
+-	}
+-
+-	/* Skip over the ELF header */
+-#ifdef DEBUG
+-	printf("... skipping 0x%lx bytes of ELF header\n\r",
+-			elfoffset);
+-#endif
+-	vmlinux.addr += elfoffset;
++	printf("gunzipping (0x%lx <- 0x%lx:0x%0lx)...",
++	       vmlinux.addr, vmlinuz.addr, vmlinuz.addr+vmlinuz.size);
++	/* discard up to the actual load data */
++	gunzip_discard(&gzstate, elfoffset - sizeof(elfheader));
++	len = gunzip_finish(&gzstate, (void *)vmlinux.addr,
++			    vmlinux.memsize);
++	printf("done 0x%lx bytes\n\r", len);
+ 
+ 	flush_cache((void *)vmlinux.addr, vmlinux.size);
+ }
+Index: linux-2.6.18/mvl_patches/pro50-0264.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0264.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(264);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

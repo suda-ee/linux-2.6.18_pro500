@@ -1,0 +1,408 @@
+#! /usr/bin/env bash
+# Patch: -pro_POWERPC_iSeries_Clean_up_and_simplify_vdpinfo.c
+# Date: Wed Mar  5 11:42:22 2008
+# MR: 26747
+# Disposition: backport from
+# git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# 
+# From 1be9ad650986a87c25686abda97bdea330359708 Mon Sep 17 00:00:00 2001
+# From: Stephen Rothwell <sfr@canb.auug.org.au>
+# Date: Fri, 7 Dec 2007 16:09:18 +1100
+# Subject: [PATCH] [POWERPC] iSeries: Clean up and simplify vdpinfo.c
+# 
+# Signed-off-by: Stephen Rothwell <sfr@canb.auug.org.au>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=834
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26747
+Disposition: backport from
+git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+
+From 1be9ad650986a87c25686abda97bdea330359708 Mon Sep 17 00:00:00 2001
+From: Stephen Rothwell <sfr@canb.auug.org.au>
+Date: Fri, 7 Dec 2007 16:09:18 +1100
+Subject: [PATCH] [POWERPC] iSeries: Clean up and simplify vdpinfo.c
+
+Signed-off-by: Stephen Rothwell <sfr@canb.auug.org.au>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/platforms/iseries/vpdinfo.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/iseries/vpdinfo.c
++++ linux-2.6.18/arch/powerpc/platforms/iseries/vpdinfo.c
+@@ -82,62 +82,56 @@ struct slot_map {
+ static void __init iseries_parse_slot_area(struct slot_map *map, int len,
+ 		HvAgentId agent, u8 *phb, char card[4])
+ {
+-	int slot_map_len = len;
+-	struct slot_map *slot_map = map;
+-
+ 	/*
+ 	 * Parse Slot label until we find the one requested
+ 	 */
+-	while (slot_map_len > 0) {
+-		if (slot_map->agent == agent) {
++	while (len > 0) {
++		if (map->agent == agent) {
+ 			/*
+ 			 * If Phb wasn't found, grab the entry first one found.
+ 			 */
+ 			if (*phb == 0xff)
+-				*phb = slot_map->phb;
++				*phb = map->phb;
+ 			/* Found it, extract the data. */
+-			if (slot_map->phb == *phb) {
+-				memcpy(card, &slot_map->card_location, 3);
++			if (map->phb == *phb) {
++				memcpy(card, &map->card_location, 3);
+ 				card[3]  = 0;
+ 				break;
+ 			}
+ 		}
+ 		/* Point to the next Slot */
+-		slot_map = (struct slot_map *)((char *)slot_map + SLOT_ENTRY_SIZE);
+-		slot_map_len -= SLOT_ENTRY_SIZE;
++		map = (struct slot_map *)((char *)map + SLOT_ENTRY_SIZE);
++		len -= SLOT_ENTRY_SIZE;
+ 	}
+ }
+ 
+ /*
+  * Parse the Mfg Area
+  */
+-static void __init iseries_parse_mfg_area(u8 *area, int len,
+-		HvAgentId agent, u8 *phb,
+-		u8 *frame, char card[4])
++static void __init iseries_parse_mfg_area(struct mfg_vpd_area *area, int len,
++		HvAgentId agent, u8 *phb, u8 *frame, char card[4])
+ {
+-	struct mfg_vpd_area *mfg_area = (struct mfg_vpd_area *)area;
+-	int mfg_area_len = len;
+ 	u16 slot_map_fmt = 0;
+ 
+ 	/* Parse Mfg Data */
+-	while (mfg_area_len > 0) {
+-		int mfg_tag_len = mfg_area->length;
++	while (len > 0) {
++		int mfg_tag_len = area->length;
+ 		/* Frame ID         (FI 4649020310 ) */
+-		if (mfg_area->tag == VPD_FRU_FRAME_ID)
+-			*frame = mfg_area->data1;
++		if (area->tag == VPD_FRU_FRAME_ID)
++			*frame = area->data1;
+ 		/* Slot Map Format  (MF 4D46020004 ) */
+-		else if (mfg_area->tag == VPD_SLOT_MAP_FORMAT)
+-			slot_map_fmt = (mfg_area->data1 * 256)
+-				+ mfg_area->data2;
++		else if (area->tag == VPD_SLOT_MAP_FORMAT)
++			slot_map_fmt = (area->data1 * 256)
++				+ area->data2;
+ 		/* Slot Map         (SM 534D90 */
+-		else if (mfg_area->tag == VPD_SLOT_MAP) {
++		else if (area->tag == VPD_SLOT_MAP) {
+ 			struct slot_map *slot_map;
+ 
+ 			if (slot_map_fmt == 0x1004)
+-				slot_map = (struct slot_map *)((char *)mfg_area
++				slot_map = (struct slot_map *)((char *)area
+ 						+ MFG_ENTRY_SIZE + 1);
+ 			else
+-				slot_map = (struct slot_map *)((char *)mfg_area
++				slot_map = (struct slot_map *)((char *)area
+ 						+ MFG_ENTRY_SIZE);
+ 			iseries_parse_slot_area(slot_map, mfg_tag_len,
+ 					agent, phb, card);
+@@ -146,9 +140,9 @@ static void __init iseries_parse_mfg_are
+ 		 * Point to the next Mfg Area
+ 		 * Use defined size, sizeof give wrong answer
+ 		 */
+-		mfg_area = (struct mfg_vpd_area *)((char *)mfg_area + mfg_tag_len
++		area = (struct mfg_vpd_area *)((char *)area + mfg_tag_len
+ 				+ MFG_ENTRY_SIZE);
+-		mfg_area_len -= (mfg_tag_len + MFG_ENTRY_SIZE);
++		len -= (mfg_tag_len + MFG_ENTRY_SIZE);
+ 	}
+ }
+ 
+@@ -156,48 +150,46 @@ static void __init iseries_parse_mfg_are
+  * Look for "BUS".. Data is not Null terminated.
+  * PHBID of 0xFF indicates PHB was not found in VPD Data.
+  */
+-static int __init iseries_parse_phbid(u8 *area, int len)
++static u8 __init iseries_parse_phbid(u8 *area, int len)
+ {
+-	u8 *phb_ptr = area;
+-	int data_len = len;
+-	char phb = 0xFF;
+-
+-	while (data_len > 0) {
+-		if ((*phb_ptr == 'B') && (*(phb_ptr + 1) == 'U')
+-				&& (*(phb_ptr + 2) == 'S')) {
+-			phb_ptr += 3;
+-			while (*phb_ptr == ' ')
+-				++phb_ptr;
+-			phb = (*phb_ptr & 0x0F);
+-			break;
++	while (len > 0) {
++		if ((*area == 'B') && (*(area + 1) == 'U')
++				&& (*(area + 2) == 'S')) {
++			area += 3;
++			while (*area == ' ')
++				area++;
++			return *area & 0x0F;
+ 		}
+-		++phb_ptr;
+-		--data_len;
++		area++;
++		len--;
+ 	}
+-	return phb;
++	return 0xff;
+ }
+ 
+ /*
+  * Parse out the VPD Areas
+  */
+-static void __init iseries_parse_vpd(u8 *data, int vpd_data_len,
++static void __init iseries_parse_vpd(u8 *data, int data_len,
+ 		HvAgentId agent, u8 *frame, char card[4])
+ {
+-	u8 *tag_ptr = data;
+-	int data_len = vpd_data_len - 3;
+ 	u8 phb = 0xff;
+ 
+-	while ((*tag_ptr != VPD_END_OF_AREA) && (data_len > 0)) {
+-		int len = *(tag_ptr + 1) + (*(tag_ptr + 2) * 256);
+-		u8 *area  = tag_ptr + 3;
+-
+-		if (*tag_ptr == VPD_ID_STRING)
+-			phb = iseries_parse_phbid(area, len);
+-		else if (*tag_ptr == VPD_VENDOR_AREA)
+-			iseries_parse_mfg_area(area, len,
++	while (data_len > 0) {
++		int len;
++		u8 tag = *data;
++
++		if (tag == VPD_END_OF_AREA)
++			break;
++		len = *(data + 1) + (*(data + 2) * 256);
++		data += 3;
++		data_len -= 3;
++		if (tag == VPD_ID_STRING)
++			phb = iseries_parse_phbid(data, len);
++		else if (tag == VPD_VENDOR_AREA)
++			iseries_parse_mfg_area((struct mfg_vpd_area *)data, len,
+ 					agent, &phb, frame, card);
+ 		/* Point to next Area. */
+-		tag_ptr  = area + len;
++		data += len;
+ 		data_len -= len;
+ 	}
+ }
+Index: linux-2.6.18/mvl_patches/pro50-0834.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0834.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(834);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

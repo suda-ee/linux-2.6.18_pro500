@@ -1,0 +1,973 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_platforms_kconfig
+# Date: Wed Sep 26 11:14:38 2007
+# Source: PowerPC development tree
+# MR: 24856
+# Type: Enhancement
+# Disposition: merged from git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+# Description:
+# Based on the commit 4330f5da98eb91392c7a7b00c22a24c57079c0fc
+# 
+# Subject: [PATCH] [POWERPC] Created arch/powerpc/platforms/Kconfig for "Platform support"
+# 
+# Split "Platform support" menu out from arch/powerpc/Kconfig into
+# arch/powerpc/platforms/Kconfig in prep for allowing other sub-arches to
+# be configured via a single "Platform support" menu.
+# 
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+PATCHNUM=285
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: PowerPC development tree
+MR: 24856
+Type: Enhancement
+Disposition: merged from git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+Description:
+Based on the commit 4330f5da98eb91392c7a7b00c22a24c57079c0fc
+
+Subject: [PATCH] [POWERPC] Created arch/powerpc/platforms/Kconfig for "Platform support"
+
+Split "Platform support" menu out from arch/powerpc/Kconfig into
+arch/powerpc/platforms/Kconfig in prep for allowing other sub-arches to
+be configured via a single "Platform support" menu.
+
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+Index: linux-2.6.18/arch/powerpc/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/Kconfig
++++ linux-2.6.18/arch/powerpc/Kconfig
+@@ -170,7 +170,6 @@ config 44x
+ 	bool "AMCC 44x"
+ 	select PPC_DCR_NATIVE
+ 
+-
+ config E200
+ 	bool "Freescale e200"
+ 
+@@ -351,358 +350,7 @@ endmenu
+ 
+ source "init/Kconfig"
+ 
+-menu "Platform support"
+-	depends on PPC64 || CLASSIC32
+-
+-choice
+-	prompt "Machine type"
+-	default PPC_MULTIPLATFORM
+-
+-config PPC_MULTIPLATFORM
+-	bool "Generic desktop/server/laptop"
+-	help
+-	  Select this option if configuring for an IBM pSeries or
+-	  RS/6000 machine, an Apple machine, or a PReP, CHRP,
+-	  Maple or Cell-based machine.
+-
+-config EMBEDDED6xx
+-	bool "Embedded 6xx/7xx/7xxx-based board"
+-	depends on PPC32 && (BROKEN||BROKEN_ON_SMP)
+-
+-config APUS
+-	bool "Amiga-APUS"
+-	depends on PPC32 && BROKEN
+-	help
+-	  Select APUS if configuring for a PowerUP Amiga.
+-	  More information is available at:
+-	  <http://linux-apus.sourceforge.net/>.
+-endchoice
+-
+-config QUICC_ENGINE
+-	bool
+-	depends on PPC_MPC836x || PPC_MPC832x
+-	default y
+-	help
+-	  The QUICC Engine (QE) is a new generation of communications
+-	  coprocessors on Freescale embedded CPUs (akin to CPM in older chips).
+-	  Selecting this option means that you wish to build a kernel
+-	  for a machine with a QE coprocessor.
+-
+-config PPC_PSERIES
+-	depends on PPC_MULTIPLATFORM && PPC64
+-	bool "IBM pSeries & new (POWER5-based) iSeries"
+-	select MPIC
+-	select PPC_I8259
+-	select PPC_RTAS
+-	select RTAS_ERROR_LOGGING
+-	select PPC_UDBG_16550
+-	select PPC_NATIVE
+-	default y
+-
+-config PPC_ISERIES
+-	bool "IBM Legacy iSeries"
+-	depends on PPC_MULTIPLATFORM && PPC64
+-	select PPC_INDIRECT_IO
+-
+-config PPC_CHRP
+-	bool "Common Hardware Reference Platform (CHRP) based machines"
+-	depends on PPC_MULTIPLATFORM && PPC32
+-	select MPIC
+-	select PPC_I8259
+-	select PPC_INDIRECT_PCI
+-	select PPC_RTAS
+-	select PPC_MPC106
+-	select PPC_UDBG_16550
+-	select PPC_NATIVE
+-	default y
+-
+-config PPC_MPC52xx
+-	bool
+-	default n
+-
+-config PPC_EFIKA
+-	bool "bPlan Efika 5k2. MPC5200B based computer"
+-	depends on PPC_MULTIPLATFORM && PPC32
+-	select PPC_RTAS
+-	select RTAS_PROC
+-	select PPC_MPC52xx
+-	select PPC_NATIVE
+-	default y
+-
+-config PPC_LITE5200
+-	bool "Freescale Lite5200 Eval Board"
+-	depends on PPC_MULTIPLATFORM && PPC32
+-	select PPC_MPC52xx
+-	default n
+-
+-config PPC_PMAC
+-	bool "Apple PowerMac based machines"
+-	depends on PPC_MULTIPLATFORM
+-	select MPIC
+-	select PPC_INDIRECT_PCI if PPC32
+-	select PPC_MPC106 if PPC32
+-	select PPC_NATIVE
+-	default y
+-
+-config PPC_PMAC64
+-	bool
+-	depends on PPC_PMAC && POWER4
+-	select MPIC
+-	select U3_DART
+-	select MPIC_BROKEN_U3
+-	select GENERIC_TBSYNC
+-	select PPC_970_NAP
+-	default y
+-
+-config PPC_PREP
+-	bool "PowerPC Reference Platform (PReP) based machines"
+-	depends on PPC_MULTIPLATFORM && PPC32 && BROKEN
+-	select MPIC
+-	select PPC_I8259
+-	select PPC_INDIRECT_PCI
+-	select PPC_UDBG_16550
+-	select PPC_NATIVE
+-	default y
+-
+-config PPC_MAPLE
+-	depends on PPC_MULTIPLATFORM && PPC64
+-	bool "Maple 970FX Evaluation Board"
+-	select MPIC
+-	select U3_DART
+-	select MPIC_BROKEN_U3
+-	select GENERIC_TBSYNC
+-	select PPC_UDBG_16550
+-	select PPC_970_NAP
+-	select PPC_NATIVE
+-	select PPC_RTAS
+-	default n
+-	help
+-          This option enables support for the Maple 970FX Evaluation Board.
+-	  For more informations, refer to <http://www.970eval.com>
+-
+-config PPC_PASEMI
+-	depends on PPC_MULTIPLATFORM && PPC64
+-	bool "PA Semi SoC-based platforms"
+-	default n
+-	select MPIC
+-	select PPC_UDBG_16550
+-	select GENERIC_TBSYNC
+-	select PPC_NATIVE
+-	help
+-	  This option enables support for PA Semi's PWRficient line
+-	  of SoC processors, including PA6T-1682M
+-
+-config PPC_CELL
+-	bool
+-	default n
+-
+-config PPC_CELL_NATIVE
+-	bool
+-	select PPC_CELL
+-	select PPC_DCR_MMIO
+-	select PPC_OF_PLATFORM_PCI
+-	select PPC_NATIVE
+-	select MPIC
+-	default n
+-
+-config PPC_IBM_CELL_BLADE
+-	bool "IBM Cell Blade"
+-	depends on PPC_MULTIPLATFORM && PPC64
+-	select PPC_CELL_NATIVE
+-	select PPC_RTAS
+-	select MMIO_NVRAM
+-	select PPC_UDBG_16550
+-	select UDBG_RTAS_CONSOLE
+-
+-config PPC_PS3
+-	bool "Sony PS3"
+-	depends on PPC_MULTIPLATFORM && PPC64
+-	select PPC_CELL
+-	help
+-	  This option enables support for the Sony PS3 game console
+-	  and other platforms using the PS3 hypervisor.
+-
+-config PPC_CELLEB
+-	bool "Toshiba's Cell Reference Set 'Celleb' Architecture"
+-	depends on PPC_MULTIPLATFORM && PPC64
+-	select PPC_CELL
+-	select PPC_OF_PLATFORM_PCI
+-	select HAS_TXX9_SERIAL
+-	select PPC_UDBG_BEAT
+-	select USB_OHCI_BIG_ENDIAN_MMIO
+-	select USB_EHCI_BIG_ENDIAN_MMIO
+-
+-config PPC_NATIVE
+-	bool
+-	depends on PPC_MULTIPLATFORM
+-	help
+-	  Support for running natively on the hardware, i.e. without
+-	  a hypervisor. This option is not user-selectable but should
+-	  be selected by all platforms that need it.
+-
+-config UDBG_RTAS_CONSOLE
+-	bool "RTAS based debug console"
+-	depends on PPC_RTAS
+-	default n
+-
+-config PPC_UDBG_BEAT
+-	bool "BEAT based debug console"
+-	depends on PPC_CELLEB
+-	default n
+-
+-config XICS
+-	depends on PPC_PSERIES
+-	bool
+-	default y
+-
+-config U3_DART
+-	bool 
+-	depends on PPC_MULTIPLATFORM && PPC64
+-	default n
+-
+-config PPC_RTAS
+-	bool
+-	default n
+-
+-config RTAS_ERROR_LOGGING
+-	bool
+-	depends on PPC_RTAS
+-	default n
+-
+-config RTAS_PROC
+-	bool "Proc interface to RTAS"
+-	depends on PPC_RTAS
+-	default y
+-
+-config RTAS_FLASH
+-	tristate "Firmware flash interface"
+-	depends on PPC64 && RTAS_PROC
+-
+-config MMIO_NVRAM
+-	bool
+-	default n
+-
+-config MPIC_BROKEN_U3
+-	bool
+-	depends on PPC_MAPLE
+-	default y
+-
+-config IBMVIO
+-	depends on PPC_PSERIES || PPC_ISERIES
+-	bool
+-	default y
+-
+-config IBMEBUS
+-	depends on PPC_PSERIES
+-	bool "Support for GX bus based adapters"
+-	help
+-	  Bus device driver for GX bus based adapters.
+-
+-config PPC_MPC106
+-	bool
+-	default n
+-
+-config PPC_970_NAP
+-	bool
+-	default n
+-
+-config PPC_INDIRECT_IO
+-	bool
+-	select GENERIC_IOMAP
+-	default n
+-
+-config GENERIC_IOMAP
+-	bool
+-	default n
+-
+-source "drivers/cpufreq/Kconfig"
+-
+-config CPU_FREQ_PMAC
+-	bool "Support for Apple PowerBooks"
+-	depends on CPU_FREQ && ADB_PMU && PPC32
+-	select CPU_FREQ_TABLE
+-	help
+-	  This adds support for frequency switching on Apple PowerBooks,
+-	  this currently includes some models of iBook & Titanium
+-	  PowerBook.
+-
+-config CPU_FREQ_PMAC64
+-	bool "Support for some Apple G5s"
+-	depends on CPU_FREQ && PPC64
+-	select CPU_FREQ_TABLE
+-	help
+-	  This adds support for frequency switching on Apple iMac G5,
+-	  and some of the more recent desktop G5 machines as well.
+-
+-config PPC601_SYNC_FIX
+-	bool "Workarounds for PPC601 bugs"
+-	depends on 6xx && (PPC_PREP || PPC_PMAC)
+-	help
+-	  Some versions of the PPC601 (the first PowerPC chip) have bugs which
+-	  mean that extra synchronization instructions are required near
+-	  certain instructions, typically those that make major changes to the
+-	  CPU state.  These extra instructions reduce performance slightly.
+-	  If you say N here, these extra instructions will not be included,
+-	  resulting in a kernel which will run faster but may not run at all
+-	  on some systems with the PPC601 chip.
+-
+-	  If in doubt, say Y here.
+-
+-config TAU
+-	bool "On-chip CPU temperature sensor support"
+-	depends on 6xx
+-	help
+-	  G3 and G4 processors have an on-chip temperature sensor called the
+-	  'Thermal Assist Unit (TAU)', which, in theory, can measure the on-die
+-	  temperature within 2-4 degrees Celsius. This option shows the current
+-	  on-die temperature in /proc/cpuinfo if the cpu supports it.
+-
+-	  Unfortunately, on some chip revisions, this sensor is very inaccurate
+-	  and in many cases, does not work at all, so don't assume the cpu
+-	  temp is actually what /proc/cpuinfo says it is.
+-
+-config TAU_INT
+-	bool "Interrupt driven TAU driver (DANGEROUS)"
+-	depends on TAU
+-	---help---
+-	  The TAU supports an interrupt driven mode which causes an interrupt
+-	  whenever the temperature goes out of range. This is the fastest way
+-	  to get notified the temp has exceeded a range. With this option off,
+-	  a timer is used to re-check the temperature periodically.
+-
+-	  However, on some cpus it appears that the TAU interrupt hardware
+-	  is buggy and can cause a situation which would lead unexplained hard
+-	  lockups.
+-
+-	  Unless you are extending the TAU driver, or enjoy kernel/hardware
+-	  debugging, leave this option off.
+-
+-config TAU_AVERAGE
+-	bool "Average high and low temp"
+-	depends on TAU
+-	---help---
+-	  The TAU hardware can compare the temperature to an upper and lower
+-	  bound.  The default behavior is to show both the upper and lower
+-	  bound in /proc/cpuinfo. If the range is large, the temperature is
+-	  either changing a lot, or the TAU hardware is broken (likely on some
+-	  G4's). If the range is small (around 4 degrees), the temperature is
+-	  relatively stable.  If you say Y here, a single temperature value,
+-	  halfway between the upper and lower bounds, will be reported in
+-	  /proc/cpuinfo.
+-
+-	  If in doubt, say N here.
+-
+-endmenu
+-
+-source arch/powerpc/platforms/embedded6xx/Kconfig
+-source arch/powerpc/platforms/4xx/Kconfig
+-source arch/powerpc/platforms/82xx/Kconfig
+-source arch/powerpc/platforms/83xx/Kconfig
+-source arch/powerpc/platforms/85xx/Kconfig
+-source arch/powerpc/platforms/86xx/Kconfig
+-source arch/powerpc/platforms/8xx/Kconfig
+-source arch/powerpc/platforms/cell/Kconfig
+-source arch/powerpc/platforms/ps3/Kconfig
++source arch/powerpc/platforms/Kconfig
+ 
+ menu "Kernel options"
+ 
+Index: linux-2.6.18/arch/powerpc/platforms/Kconfig
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/Kconfig
+@@ -0,0 +1,353 @@
++menu "Platform support"
++
++choice
++	prompt "Machine type"
++	depends on PPC64 || 6xx
++	default PPC_MULTIPLATFORM
++
++config PPC_MULTIPLATFORM
++	bool "Generic desktop/server/laptop"
++	help
++	  Select this option if configuring for an IBM pSeries or
++	  RS/6000 machine, an Apple machine, or a PReP, CHRP,
++	  Maple or Cell-based machine.
++
++config EMBEDDED6xx
++	bool "Embedded 6xx/7xx/7xxx-based board"
++	depends on PPC32 && (BROKEN||BROKEN_ON_SMP)
++
++config APUS
++	bool "Amiga-APUS"
++	depends on PPC32 && BROKEN
++	help
++	  Select APUS if configuring for a PowerUP Amiga.
++	  More information is available at:
++	  <http://linux-apus.sourceforge.net/>.
++endchoice
++
++config QUICC_ENGINE
++	bool
++	depends on PPC_MPC836x || PPC_MPC832x
++	default y
++	help
++	  The QUICC Engine (QE) is a new generation of communications
++	  coprocessors on Freescale embedded CPUs (akin to CPM in older chips).
++	  Selecting this option means that you wish to build a kernel
++	  for a machine with a QE coprocessor.
++
++config PPC_PSERIES
++	depends on PPC_MULTIPLATFORM && PPC64
++	bool "IBM pSeries & new (POWER5-based) iSeries"
++	select MPIC
++	select PPC_I8259
++	select PPC_RTAS
++	select RTAS_ERROR_LOGGING
++	select PPC_UDBG_16550
++	select PPC_NATIVE
++	default y
++
++config PPC_ISERIES
++	bool "IBM Legacy iSeries"
++	depends on PPC_MULTIPLATFORM && PPC64
++	select PPC_INDIRECT_IO
++
++config PPC_CHRP
++	bool "Common Hardware Reference Platform (CHRP) based machines"
++	depends on PPC_MULTIPLATFORM && PPC32
++	select MPIC
++	select PPC_I8259
++	select PPC_INDIRECT_PCI
++	select PPC_RTAS
++	select PPC_MPC106
++	select PPC_UDBG_16550
++	select PPC_NATIVE
++	default y
++
++config PPC_MPC52xx
++	bool
++	default n
++
++config PPC_EFIKA
++	bool "bPlan Efika 5k2. MPC5200B based computer"
++	depends on PPC_MULTIPLATFORM && PPC32
++	select PPC_RTAS
++	select RTAS_PROC
++	select PPC_MPC52xx
++	select PPC_NATIVE
++	default y
++
++config PPC_LITE5200
++	bool "Freescale Lite5200 Eval Board"
++	depends on PPC_MULTIPLATFORM && PPC32
++	select PPC_MPC52xx
++	default n
++
++config PPC_PMAC
++	bool "Apple PowerMac based machines"
++	depends on PPC_MULTIPLATFORM
++	select MPIC
++	select PPC_INDIRECT_PCI if PPC32
++	select PPC_MPC106 if PPC32
++	select PPC_NATIVE
++	default y
++
++config PPC_PMAC64
++	bool
++	depends on PPC_PMAC && POWER4
++	select MPIC
++	select U3_DART
++	select MPIC_BROKEN_U3
++	select GENERIC_TBSYNC
++	select PPC_970_NAP
++	default y
++
++config PPC_PREP
++	bool "PowerPC Reference Platform (PReP) based machines"
++	depends on PPC_MULTIPLATFORM && PPC32 && BROKEN
++	select MPIC
++	select PPC_I8259
++	select PPC_INDIRECT_PCI
++	select PPC_UDBG_16550
++	select PPC_NATIVE
++	default y
++
++config PPC_MAPLE
++	depends on PPC_MULTIPLATFORM && PPC64
++	bool "Maple 970FX Evaluation Board"
++	select MPIC
++	select U3_DART
++	select MPIC_BROKEN_U3
++	select GENERIC_TBSYNC
++	select PPC_UDBG_16550
++	select PPC_970_NAP
++	select PPC_NATIVE
++	select PPC_RTAS
++	default n
++	help
++          This option enables support for the Maple 970FX Evaluation Board.
++	  For more informations, refer to <http://www.970eval.com>
++
++config PPC_PASEMI
++	depends on PPC_MULTIPLATFORM && PPC64
++	bool "PA Semi SoC-based platforms"
++	default n
++	select MPIC
++	select PPC_UDBG_16550
++	select GENERIC_TBSYNC
++	select PPC_NATIVE
++	help
++	  This option enables support for PA Semi's PWRficient line
++	  of SoC processors, including PA6T-1682M
++
++config PPC_CELL
++	bool
++	default n
++
++config PPC_CELL_NATIVE
++	bool
++	select PPC_CELL
++	select PPC_DCR_MMIO
++	select PPC_OF_PLATFORM_PCI
++	select PPC_NATIVE
++	select MPIC
++	default n
++
++config PPC_IBM_CELL_BLADE
++	bool "IBM Cell Blade"
++	depends on PPC_MULTIPLATFORM && PPC64
++	select PPC_CELL_NATIVE
++	select PPC_RTAS
++	select MMIO_NVRAM
++	select PPC_UDBG_16550
++	select UDBG_RTAS_CONSOLE
++
++config PPC_PS3
++	bool "Sony PS3"
++	depends on PPC_MULTIPLATFORM && PPC64
++	select PPC_CELL
++	help
++	  This option enables support for the Sony PS3 game console
++	  and other platforms using the PS3 hypervisor.
++
++config PPC_CELLEB
++	bool "Toshiba's Cell Reference Set 'Celleb' Architecture"
++	depends on PPC_MULTIPLATFORM && PPC64
++	select PPC_CELL
++	select PPC_OF_PLATFORM_PCI
++	select HAS_TXX9_SERIAL
++	select PPC_UDBG_BEAT
++	select USB_OHCI_BIG_ENDIAN_MMIO
++	select USB_EHCI_BIG_ENDIAN_MMIO
++
++source "arch/powerpc/platforms/ps3/Kconfig"
++source "arch/powerpc/platforms/cell/Kconfig"
++source "arch/powerpc/platforms/8xx/Kconfig"
++source "arch/powerpc/platforms/82xx/Kconfig"
++source "arch/powerpc/platforms/83xx/Kconfig"
++source "arch/powerpc/platforms/85xx/Kconfig"
++source "arch/powerpc/platforms/86xx/Kconfig"
++source "arch/powerpc/platforms/embedded6xx/Kconfig"
++#source "arch/powerpc/platforms/4xx/Kconfig"
++
++config PPC_NATIVE
++	bool
++	depends on PPC_MULTIPLATFORM
++	help
++	  Support for running natively on the hardware, i.e. without
++	  a hypervisor. This option is not user-selectable but should
++	  be selected by all platforms that need it.
++
++config UDBG_RTAS_CONSOLE
++	bool "RTAS based debug console"
++	depends on PPC_RTAS
++	default n
++
++config PPC_UDBG_BEAT
++	bool "BEAT based debug console"
++	depends on PPC_CELLEB
++	default n
++
++config XICS
++	depends on PPC_PSERIES
++	bool
++	default y
++
++config U3_DART
++	bool 
++	depends on PPC_MULTIPLATFORM && PPC64
++	default n
++
++config PPC_RTAS
++	bool
++	default n
++
++config RTAS_ERROR_LOGGING
++	bool
++	depends on PPC_RTAS
++	default n
++
++config RTAS_PROC
++	bool "Proc interface to RTAS"
++	depends on PPC_RTAS
++	default y
++
++config RTAS_FLASH
++	tristate "Firmware flash interface"
++	depends on PPC64 && RTAS_PROC
++
++config MMIO_NVRAM
++	bool
++	default n
++
++config MPIC_BROKEN_U3
++	bool
++	depends on PPC_MAPLE
++	default y
++
++config IBMVIO
++	depends on PPC_PSERIES || PPC_ISERIES
++	bool
++	default y
++
++config IBMEBUS
++	depends on PPC_PSERIES
++	bool "Support for GX bus based adapters"
++	help
++	  Bus device driver for GX bus based adapters.
++
++config PPC_MPC106
++	bool
++	default n
++
++config PPC_970_NAP
++	bool
++	default n
++
++config PPC_INDIRECT_IO
++	bool
++	select GENERIC_IOMAP
++	default n
++
++config GENERIC_IOMAP
++	bool
++	default n
++
++source "drivers/cpufreq/Kconfig"
++
++config CPU_FREQ_PMAC
++	bool "Support for Apple PowerBooks"
++	depends on CPU_FREQ && ADB_PMU && PPC32
++	select CPU_FREQ_TABLE
++	help
++	  This adds support for frequency switching on Apple PowerBooks,
++	  this currently includes some models of iBook & Titanium
++	  PowerBook.
++
++config CPU_FREQ_PMAC64
++	bool "Support for some Apple G5s"
++	depends on CPU_FREQ && PPC64
++	select CPU_FREQ_TABLE
++	help
++	  This adds support for frequency switching on Apple iMac G5,
++	  and some of the more recent desktop G5 machines as well.
++
++config PPC601_SYNC_FIX
++	bool "Workarounds for PPC601 bugs"
++	depends on 6xx && (PPC_PREP || PPC_PMAC)
++	help
++	  Some versions of the PPC601 (the first PowerPC chip) have bugs which
++	  mean that extra synchronization instructions are required near
++	  certain instructions, typically those that make major changes to the
++	  CPU state.  These extra instructions reduce performance slightly.
++	  If you say N here, these extra instructions will not be included,
++	  resulting in a kernel which will run faster but may not run at all
++	  on some systems with the PPC601 chip.
++
++	  If in doubt, say Y here.
++
++config TAU
++	bool "On-chip CPU temperature sensor support"
++	depends on 6xx
++	help
++	  G3 and G4 processors have an on-chip temperature sensor called the
++	  'Thermal Assist Unit (TAU)', which, in theory, can measure the on-die
++	  temperature within 2-4 degrees Celsius. This option shows the current
++	  on-die temperature in /proc/cpuinfo if the cpu supports it.
++
++	  Unfortunately, on some chip revisions, this sensor is very inaccurate
++	  and in many cases, does not work at all, so don't assume the cpu
++	  temp is actually what /proc/cpuinfo says it is.
++
++config TAU_INT
++	bool "Interrupt driven TAU driver (DANGEROUS)"
++	depends on TAU
++	---help---
++	  The TAU supports an interrupt driven mode which causes an interrupt
++	  whenever the temperature goes out of range. This is the fastest way
++	  to get notified the temp has exceeded a range. With this option off,
++	  a timer is used to re-check the temperature periodically.
++
++	  However, on some cpus it appears that the TAU interrupt hardware
++	  is buggy and can cause a situation which would lead unexplained hard
++	  lockups.
++
++	  Unless you are extending the TAU driver, or enjoy kernel/hardware
++	  debugging, leave this option off.
++
++config TAU_AVERAGE
++	bool "Average high and low temp"
++	depends on TAU
++	---help---
++	  The TAU hardware can compare the temperature to an upper and lower
++	  bound.  The default behavior is to show both the upper and lower
++	  bound in /proc/cpuinfo. If the range is large, the temperature is
++	  either changing a lot, or the TAU hardware is broken (likely on some
++	  G4's). If the range is small (around 4 degrees), the temperature is
++	  relatively stable.  If you say Y here, a single temperature value,
++	  halfway between the upper and lower bounds, will be reported in
++	  /proc/cpuinfo.
++
++	  If in doubt, say N here.
++
++endmenu
++
+Index: linux-2.6.18/mvl_patches/pro50-0285.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0285.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(285);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

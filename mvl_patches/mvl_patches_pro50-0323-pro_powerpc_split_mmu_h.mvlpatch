@@ -1,0 +1,1092 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_split_mmu_h
+# Date: Wed Sep 26 11:16:49 2007
+# Source: PowerPC development tree
+# MR: 24856
+# Type: Enhancement
+# Disposition: merged from git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+# Description:
+# Based on the commit 8d2169e8d6b8a91413df33bc402e0f602ceaabcc
+# 
+# Subject: [PATCH] [POWERPC] Prepare for splitting up mmu.h by MMU type
+# 
+# Currently asm-powerpc/mmu.h has definitions for the 64-bit hash based
+# MMU.  If CONFIG_PPC64 is not set, it instead includes asm-ppc/mmu.h
+# which contains a particularly horrible mess of #ifdefs giving the
+# definitions for all the various 32-bit MMUs.
+# 
+# It would be nice to have the low level definitions for each MMU type
+# neatly in their own separate files.  It would also be good to wean
+# arch/powerpc off dependence on the old asm-ppc/mmu.h.
+# 
+# This patch makes a start on such a cleanup by moving the definitions
+# for the 64-bit hash MMU to their own file, asm-powerpc/mmu_hash64.h.
+# Definitions for the other MMUs still all come from asm-ppc/mmu.h,
+# however each MMU type can now be one-by-one moved over to their own
+# file, in the process cleaning them up stripping them of cruft no
+# longer necessary in arch/powerpc.
+# 
+# Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=323
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: PowerPC development tree
+MR: 24856
+Type: Enhancement
+Disposition: merged from git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+Description:
+Based on the commit 8d2169e8d6b8a91413df33bc402e0f602ceaabcc
+
+Subject: [PATCH] [POWERPC] Prepare for splitting up mmu.h by MMU type
+
+Currently asm-powerpc/mmu.h has definitions for the 64-bit hash based
+MMU.  If CONFIG_PPC64 is not set, it instead includes asm-ppc/mmu.h
+which contains a particularly horrible mess of #ifdefs giving the
+definitions for all the various 32-bit MMUs.
+
+It would be nice to have the low level definitions for each MMU type
+neatly in their own separate files.  It would also be good to wean
+arch/powerpc off dependence on the old asm-ppc/mmu.h.
+
+This patch makes a start on such a cleanup by moving the definitions
+for the 64-bit hash MMU to their own file, asm-powerpc/mmu_hash64.h.
+Definitions for the other MMUs still all come from asm-ppc/mmu.h,
+however each MMU type can now be one-by-one moved over to their own
+file, in the process cleaning them up stripping them of cruft no
+longer necessary in arch/powerpc.
+
+Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/include/asm-powerpc/mmu.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/mmu.h
++++ linux-2.6.18/include/asm-powerpc/mmu.h
+@@ -2,407 +2,14 @@
+ #define _ASM_POWERPC_MMU_H_
+ #ifdef __KERNEL__
+ 
+-#ifndef CONFIG_PPC64
+-#include <asm-ppc/mmu.h>
++#ifdef CONFIG_PPC64
++/* 64-bit classic hash table MMU */
++#  include <asm/mmu-hash64.h>
+ #else
+-
+-/*
+- * PowerPC memory management structures
+- *
+- * Dave Engebretsen & Mike Corrigan <{engebret|mikejc}@us.ibm.com>
+- *   PPC64 rework.
+- *
+- * This program is free software; you can redistribute it and/or
+- * modify it under the terms of the GNU General Public License
+- * as published by the Free Software Foundation; either version
+- * 2 of the License, or (at your option) any later version.
+- */
+-
+-#include <asm/asm-compat.h>
+-#include <asm/page.h>
+-
+-/*
+- * Segment table
+- */
+-
+-#define STE_ESID_V	0x80
+-#define STE_ESID_KS	0x20
+-#define STE_ESID_KP	0x10
+-#define STE_ESID_N	0x08
+-
+-#define STE_VSID_SHIFT	12
+-
+-/* Location of cpu0's segment table */
+-#define STAB0_PAGE	0x6
+-#define STAB0_OFFSET	(STAB0_PAGE << 12)
+-#define STAB0_PHYS_ADDR	(STAB0_OFFSET + PHYSICAL_START)
+-
+-#ifndef __ASSEMBLY__
+-extern char initial_stab[];
+-#endif /* ! __ASSEMBLY */
+-
+-/*
+- * SLB
+- */
+-
+-#define SLB_NUM_BOLTED		3
+-#define SLB_CACHE_ENTRIES	8
+-
+-/* Bits in the SLB ESID word */
+-#define SLB_ESID_V		ASM_CONST(0x0000000008000000) /* valid */
+-
+-/* Bits in the SLB VSID word */
+-#define SLB_VSID_SHIFT		12
+-#define SLB_VSID_B		ASM_CONST(0xc000000000000000)
+-#define SLB_VSID_B_256M		ASM_CONST(0x0000000000000000)
+-#define SLB_VSID_B_1T		ASM_CONST(0x4000000000000000)
+-#define SLB_VSID_KS		ASM_CONST(0x0000000000000800)
+-#define SLB_VSID_KP		ASM_CONST(0x0000000000000400)
+-#define SLB_VSID_N		ASM_CONST(0x0000000000000200) /* no-execute */
+-#define SLB_VSID_L		ASM_CONST(0x0000000000000100)
+-#define SLB_VSID_C		ASM_CONST(0x0000000000000080) /* class */
+-#define SLB_VSID_LP		ASM_CONST(0x0000000000000030)
+-#define SLB_VSID_LP_00		ASM_CONST(0x0000000000000000)
+-#define SLB_VSID_LP_01		ASM_CONST(0x0000000000000010)
+-#define SLB_VSID_LP_10		ASM_CONST(0x0000000000000020)
+-#define SLB_VSID_LP_11		ASM_CONST(0x0000000000000030)
+-#define SLB_VSID_LLP		(SLB_VSID_L|SLB_VSID_LP)
+-
+-#define SLB_VSID_KERNEL		(SLB_VSID_KP)
+-#define SLB_VSID_USER		(SLB_VSID_KP|SLB_VSID_KS|SLB_VSID_C)
+-
+-#define SLBIE_C			(0x08000000)
+-
+-/*
+- * Hash table
+- */
+-
+-#define HPTES_PER_GROUP 8
+-
+-#define HPTE_V_AVPN_SHIFT	7
+-#define HPTE_V_AVPN		ASM_CONST(0xffffffffffffff80)
+-#define HPTE_V_AVPN_VAL(x)	(((x) & HPTE_V_AVPN) >> HPTE_V_AVPN_SHIFT)
+-#define HPTE_V_COMPARE(x,y)	(!(((x) ^ (y)) & HPTE_V_AVPN))
+-#define HPTE_V_BOLTED		ASM_CONST(0x0000000000000010)
+-#define HPTE_V_LOCK		ASM_CONST(0x0000000000000008)
+-#define HPTE_V_LARGE		ASM_CONST(0x0000000000000004)
+-#define HPTE_V_SECONDARY	ASM_CONST(0x0000000000000002)
+-#define HPTE_V_VALID		ASM_CONST(0x0000000000000001)
+-
+-#define HPTE_R_PP0		ASM_CONST(0x8000000000000000)
+-#define HPTE_R_TS		ASM_CONST(0x4000000000000000)
+-#define HPTE_R_RPN_SHIFT	12
+-#define HPTE_R_RPN		ASM_CONST(0x3ffffffffffff000)
+-#define HPTE_R_FLAGS		ASM_CONST(0x00000000000003ff)
+-#define HPTE_R_PP		ASM_CONST(0x0000000000000003)
+-#define HPTE_R_N		ASM_CONST(0x0000000000000004)
+-#define HPTE_R_C		ASM_CONST(0x0000000000000080)
+-#define HPTE_R_R		ASM_CONST(0x0000000000000100)
+-
+-/* Values for PP (assumes Ks=0, Kp=1) */
+-/* pp0 will always be 0 for linux     */
+-#define PP_RWXX	0	/* Supervisor read/write, User none */
+-#define PP_RWRX 1	/* Supervisor read/write, User read */
+-#define PP_RWRW 2	/* Supervisor read/write, User read/write */
+-#define PP_RXRX 3	/* Supervisor read,       User read */
+-
+-#ifndef __ASSEMBLY__
+-
+-typedef struct {
+-	unsigned long v;
+-	unsigned long r;
+-} hpte_t;
+-
+-extern hpte_t *htab_address;
+-extern unsigned long htab_size_bytes;
+-extern unsigned long htab_hash_mask;
+-
+-/*
+- * Page size definition
+- *
+- *    shift : is the "PAGE_SHIFT" value for that page size
+- *    sllp  : is a bit mask with the value of SLB L || LP to be or'ed
+- *            directly to a slbmte "vsid" value
+- *    penc  : is the HPTE encoding mask for the "LP" field:
+- *
+- */
+-struct mmu_psize_def
+-{
+-	unsigned int	shift;	/* number of bits */
+-	unsigned int	penc;	/* HPTE encoding */
+-	unsigned int	tlbiel;	/* tlbiel supported for that page size */
+-	unsigned long	avpnm;	/* bits to mask out in AVPN in the HPTE */
+-	unsigned long	sllp;	/* SLB L||LP (exact mask to use in slbmte) */
+-};
+-
+-#endif /* __ASSEMBLY__ */
+-
+-/*
+- * The kernel use the constants below to index in the page sizes array.
+- * The use of fixed constants for this purpose is better for performances
+- * of the low level hash refill handlers.
+- *
+- * A non supported page size has a "shift" field set to 0
+- *
+- * Any new page size being implemented can get a new entry in here. Whether
+- * the kernel will use it or not is a different matter though. The actual page
+- * size used by hugetlbfs is not defined here and may be made variable
+- */
+-
+-#define MMU_PAGE_4K		0	/* 4K */
+-#define MMU_PAGE_64K		1	/* 64K */
+-#define MMU_PAGE_64K_AP		2	/* 64K Admixed (in a 4K segment) */
+-#define MMU_PAGE_1M		3	/* 1M */
+-#define MMU_PAGE_16M		4	/* 16M */
+-#define MMU_PAGE_16G		5	/* 16G */
+-#define MMU_PAGE_COUNT		6
+-
+-#ifndef __ASSEMBLY__
+-
+-/*
+- * The current system page sizes
+- */
+-extern struct mmu_psize_def mmu_psize_defs[MMU_PAGE_COUNT];
+-extern int mmu_linear_psize;
+-extern int mmu_virtual_psize;
+-extern int mmu_vmalloc_psize;
+-extern int mmu_io_psize;
+-
+-/*
+- * If the processor supports 64k normal pages but not 64k cache
+- * inhibited pages, we have to be prepared to switch processes
+- * to use 4k pages when they create cache-inhibited mappings.
+- * If this is the case, mmu_ci_restrictions will be set to 1.
+- */
+-extern int mmu_ci_restrictions;
+-
+-#ifdef CONFIG_HUGETLB_PAGE
+-/*
+- * The page size index of the huge pages for use by hugetlbfs
+- */
+-extern int mmu_huge_psize;
+-
+-#endif /* CONFIG_HUGETLB_PAGE */
+-
+-/*
+- * This function sets the AVPN and L fields of the HPTE  appropriately
+- * for the page size
+- */
+-static inline unsigned long hpte_encode_v(unsigned long va, int psize)
+-{
+-	unsigned long v =
+-	v = (va >> 23) & ~(mmu_psize_defs[psize].avpnm);
+-	v <<= HPTE_V_AVPN_SHIFT;
+-	if (psize != MMU_PAGE_4K)
+-		v |= HPTE_V_LARGE;
+-	return v;
+-}
+-
+-/*
+- * This function sets the ARPN, and LP fields of the HPTE appropriately
+- * for the page size. We assume the pa is already "clean" that is properly
+- * aligned for the requested page size
+- */
+-static inline unsigned long hpte_encode_r(unsigned long pa, int psize)
+-{
+-	unsigned long r;
+-
+-	/* A 4K page needs no special encoding */
+-	if (psize == MMU_PAGE_4K)
+-		return pa & HPTE_R_RPN;
+-	else {
+-		unsigned int penc = mmu_psize_defs[psize].penc;
+-		unsigned int shift = mmu_psize_defs[psize].shift;
+-		return (pa & ~((1ul << shift) - 1)) | (penc << 12);
+-	}
+-	return r;
+-}
+-
+-/*
+- * This hashes a virtual address for a 256Mb segment only for now
+- */
+-
+-static inline unsigned long hpt_hash(unsigned long va, unsigned int shift)
+-{
+-	return ((va >> 28) & 0x7fffffffffUL) ^ ((va & 0x0fffffffUL) >> shift);
+-}
+-
+-extern int __hash_page_4K(unsigned long ea, unsigned long access,
+-			  unsigned long vsid, pte_t *ptep, unsigned long trap,
+-			  unsigned int local);
+-extern int __hash_page_64K(unsigned long ea, unsigned long access,
+-			   unsigned long vsid, pte_t *ptep, unsigned long trap,
+-			   unsigned int local);
+-struct mm_struct;
+-extern int hash_huge_page(struct mm_struct *mm, unsigned long access,
+-			  unsigned long ea, unsigned long vsid, int local,
+-			  unsigned long trap);
+-
+-extern int htab_bolt_mapping(unsigned long vstart, unsigned long vend,
+-			     unsigned long pstart, unsigned long mode,
+-			     int psize);
+-
+-extern void htab_initialize(void);
+-extern void htab_initialize_secondary(void);
+-extern void hpte_init_native(void);
+-extern void hpte_init_lpar(void);
+-extern void hpte_init_iSeries(void);
+-extern void hpte_init_beat(void);
+-
+-extern void stabs_alloc(void);
+-extern void slb_initialize(void);
+-extern void slb_flush_and_rebolt(void);
+-extern void stab_initialize(unsigned long stab);
+-
+-#endif /* __ASSEMBLY__ */
+-
+-/*
+- * VSID allocation
+- *
+- * We first generate a 36-bit "proto-VSID".  For kernel addresses this
+- * is equal to the ESID, for user addresses it is:
+- *	(context << 15) | (esid & 0x7fff)
+- *
+- * The two forms are distinguishable because the top bit is 0 for user
+- * addresses, whereas the top two bits are 1 for kernel addresses.
+- * Proto-VSIDs with the top two bits equal to 0b10 are reserved for
+- * now.
+- *
+- * The proto-VSIDs are then scrambled into real VSIDs with the
+- * multiplicative hash:
+- *
+- *	VSID = (proto-VSID * VSID_MULTIPLIER) % VSID_MODULUS
+- *	where	VSID_MULTIPLIER = 268435399 = 0xFFFFFC7
+- *		VSID_MODULUS = 2^36-1 = 0xFFFFFFFFF
+- *
+- * This scramble is only well defined for proto-VSIDs below
+- * 0xFFFFFFFFF, so both proto-VSID and actual VSID 0xFFFFFFFFF are
+- * reserved.  VSID_MULTIPLIER is prime, so in particular it is
+- * co-prime to VSID_MODULUS, making this a 1:1 scrambling function.
+- * Because the modulus is 2^n-1 we can compute it efficiently without
+- * a divide or extra multiply (see below).
+- *
+- * This scheme has several advantages over older methods:
+- *
+- * 	- We have VSIDs allocated for every kernel address
+- * (i.e. everything above 0xC000000000000000), except the very top
+- * segment, which simplifies several things.
+- *
+- * 	- We allow for 15 significant bits of ESID and 20 bits of
+- * context for user addresses.  i.e. 8T (43 bits) of address space for
+- * up to 1M contexts (although the page table structure and context
+- * allocation will need changes to take advantage of this).
+- *
+- * 	- The scramble function gives robust scattering in the hash
+- * table (at least based on some initial results).  The previous
+- * method was more susceptible to pathological cases giving excessive
+- * hash collisions.
+- */
+-/*
+- * WARNING - If you change these you must make sure the asm
+- * implementations in slb_allocate (slb_low.S), do_stab_bolted
+- * (head.S) and ASM_VSID_SCRAMBLE (below) are changed accordingly.
+- *
+- * You'll also need to change the precomputed VSID values in head.S
+- * which are used by the iSeries firmware.
+- */
+-
+-#define VSID_MULTIPLIER	ASM_CONST(200730139)	/* 28-bit prime */
+-#define VSID_BITS	36
+-#define VSID_MODULUS	((1UL<<VSID_BITS)-1)
+-
+-#define CONTEXT_BITS	19
+-#define USER_ESID_BITS	16
+-
+-#define USER_VSID_RANGE	(1UL << (USER_ESID_BITS + SID_SHIFT))
+-
+-/*
+- * This macro generates asm code to compute the VSID scramble
+- * function.  Used in slb_allocate() and do_stab_bolted.  The function
+- * computed is: (protovsid*VSID_MULTIPLIER) % VSID_MODULUS
+- *
+- *	rt = register continaing the proto-VSID and into which the
+- *		VSID will be stored
+- *	rx = scratch register (clobbered)
+- *
+- * 	- rt and rx must be different registers
+- * 	- The answer will end up in the low 36 bits of rt.  The higher
+- * 	  bits may contain other garbage, so you may need to mask the
+- * 	  result.
+- */
+-#define ASM_VSID_SCRAMBLE(rt, rx)	\
+-	lis	rx,VSID_MULTIPLIER@h;					\
+-	ori	rx,rx,VSID_MULTIPLIER@l;				\
+-	mulld	rt,rt,rx;		/* rt = rt * MULTIPLIER */	\
+-									\
+-	srdi	rx,rt,VSID_BITS;					\
+-	clrldi	rt,rt,(64-VSID_BITS);					\
+-	add	rt,rt,rx;		/* add high and low bits */	\
+-	/* Now, r3 == VSID (mod 2^36-1), and lies between 0 and		\
+-	 * 2^36-1+2^28-1.  That in particular means that if r3 >=	\
+-	 * 2^36-1, then r3+1 has the 2^36 bit set.  So, if r3+1 has	\
+-	 * the bit clear, r3 already has the answer we want, if it	\
+-	 * doesn't, the answer is the low 36 bits of r3+1.  So in all	\
+-	 * cases the answer is the low 36 bits of (r3 + ((r3+1) >> 36))*/\
+-	addi	rx,rt,1;						\
+-	srdi	rx,rx,VSID_BITS;	/* extract 2^36 bit */		\
+-	add	rt,rt,rx
+-
+-
+-#ifndef __ASSEMBLY__
+-
+-typedef unsigned long mm_context_id_t;
+-
+-typedef struct {
+-	mm_context_id_t id;
+-	u16 user_psize;			/* page size index */
+-	u16 sllp;			/* SLB entry page size encoding */
+-#ifdef CONFIG_HUGETLB_PAGE
+-	u16 low_htlb_areas, high_htlb_areas;
++/* 32-bit.  FIXME: split up the 32-bit MMU types, and revise for
++ * arch/powerpc */
++#  include <asm-ppc/mmu.h>
+ #endif
+-	unsigned long vdso_base;
+-} mm_context_t;
+-
+-
+-static inline unsigned long vsid_scramble(unsigned long protovsid)
+-{
+-#if 0
+-	/* The code below is equivalent to this function for arguments
+-	 * < 2^VSID_BITS, which is all this should ever be called
+-	 * with.  However gcc is not clever enough to compute the
+-	 * modulus (2^n-1) without a second multiply. */
+-	return ((protovsid * VSID_MULTIPLIER) % VSID_MODULUS);
+-#else /* 1 */
+-	unsigned long x;
+-
+-	x = protovsid * VSID_MULTIPLIER;
+-	x = (x >> VSID_BITS) + (x & VSID_MODULUS);
+-	return (x + ((x+1) >> VSID_BITS)) & VSID_MODULUS;
+-#endif /* 1 */
+-}
+-
+-/* This is only valid for addresses >= KERNELBASE */
+-static inline unsigned long get_kernel_vsid(unsigned long ea)
+-{
+-	return vsid_scramble(ea >> SID_SHIFT);
+-}
+-
+-/* This is only valid for user addresses (which are below 2^41) */
+-static inline unsigned long get_vsid(unsigned long context, unsigned long ea)
+-{
+-	return vsid_scramble((context << USER_ESID_BITS)
+-			     | (ea >> SID_SHIFT));
+-}
+-
+-#define VSID_SCRAMBLE(pvsid)	(((pvsid) * VSID_MULTIPLIER) % VSID_MODULUS)
+-#define KERNEL_VSID(ea)		VSID_SCRAMBLE(GET_ESID(ea))
+-
+-/* Physical address used by some IO functions */
+-typedef unsigned long phys_addr_t;
+-
+-
+-#endif /* __ASSEMBLY */
+ 
+-#endif /* CONFIG_PPC64 */
+ #endif /* __KERNEL__ */
+ #endif /* _ASM_POWERPC_MMU_H_ */
+Index: linux-2.6.18/include/asm-powerpc/mmu-hash64.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-powerpc/mmu-hash64.h
+@@ -0,0 +1,400 @@
++#ifndef _ASM_POWERPC_MMU_HASH64_H_
++#define _ASM_POWERPC_MMU_HASH64_H_
++/*
++ * PowerPC64 memory management structures
++ *
++ * Dave Engebretsen & Mike Corrigan <{engebret|mikejc}@us.ibm.com>
++ *   PPC64 rework.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */
++
++#include <asm/asm-compat.h>
++#include <asm/page.h>
++
++/*
++ * Segment table
++ */
++
++#define STE_ESID_V	0x80
++#define STE_ESID_KS	0x20
++#define STE_ESID_KP	0x10
++#define STE_ESID_N	0x08
++
++#define STE_VSID_SHIFT	12
++
++/* Location of cpu0's segment table */
++#define STAB0_PAGE	0x6
++#define STAB0_OFFSET	(STAB0_PAGE << 12)
++#define STAB0_PHYS_ADDR	(STAB0_OFFSET + PHYSICAL_START)
++
++#ifndef __ASSEMBLY__
++extern char initial_stab[];
++#endif /* ! __ASSEMBLY */
++
++/*
++ * SLB
++ */
++
++#define SLB_NUM_BOLTED		3
++#define SLB_CACHE_ENTRIES	8
++
++/* Bits in the SLB ESID word */
++#define SLB_ESID_V		ASM_CONST(0x0000000008000000) /* valid */
++
++/* Bits in the SLB VSID word */
++#define SLB_VSID_SHIFT		12
++#define SLB_VSID_B		ASM_CONST(0xc000000000000000)
++#define SLB_VSID_B_256M		ASM_CONST(0x0000000000000000)
++#define SLB_VSID_B_1T		ASM_CONST(0x4000000000000000)
++#define SLB_VSID_KS		ASM_CONST(0x0000000000000800)
++#define SLB_VSID_KP		ASM_CONST(0x0000000000000400)
++#define SLB_VSID_N		ASM_CONST(0x0000000000000200) /* no-execute */
++#define SLB_VSID_L		ASM_CONST(0x0000000000000100)
++#define SLB_VSID_C		ASM_CONST(0x0000000000000080) /* class */
++#define SLB_VSID_LP		ASM_CONST(0x0000000000000030)
++#define SLB_VSID_LP_00		ASM_CONST(0x0000000000000000)
++#define SLB_VSID_LP_01		ASM_CONST(0x0000000000000010)
++#define SLB_VSID_LP_10		ASM_CONST(0x0000000000000020)
++#define SLB_VSID_LP_11		ASM_CONST(0x0000000000000030)
++#define SLB_VSID_LLP		(SLB_VSID_L|SLB_VSID_LP)
++
++#define SLB_VSID_KERNEL		(SLB_VSID_KP)
++#define SLB_VSID_USER		(SLB_VSID_KP|SLB_VSID_KS|SLB_VSID_C)
++
++#define SLBIE_C			(0x08000000)
++
++/*
++ * Hash table
++ */
++
++#define HPTES_PER_GROUP 8
++
++#define HPTE_V_AVPN_SHIFT	7
++#define HPTE_V_AVPN		ASM_CONST(0xffffffffffffff80)
++#define HPTE_V_AVPN_VAL(x)	(((x) & HPTE_V_AVPN) >> HPTE_V_AVPN_SHIFT)
++#define HPTE_V_COMPARE(x,y)	(!(((x) ^ (y)) & HPTE_V_AVPN))
++#define HPTE_V_BOLTED		ASM_CONST(0x0000000000000010)
++#define HPTE_V_LOCK		ASM_CONST(0x0000000000000008)
++#define HPTE_V_LARGE		ASM_CONST(0x0000000000000004)
++#define HPTE_V_SECONDARY	ASM_CONST(0x0000000000000002)
++#define HPTE_V_VALID		ASM_CONST(0x0000000000000001)
++
++#define HPTE_R_PP0		ASM_CONST(0x8000000000000000)
++#define HPTE_R_TS		ASM_CONST(0x4000000000000000)
++#define HPTE_R_RPN_SHIFT	12
++#define HPTE_R_RPN		ASM_CONST(0x3ffffffffffff000)
++#define HPTE_R_FLAGS		ASM_CONST(0x00000000000003ff)
++#define HPTE_R_PP		ASM_CONST(0x0000000000000003)
++#define HPTE_R_N		ASM_CONST(0x0000000000000004)
++#define HPTE_R_C		ASM_CONST(0x0000000000000080)
++#define HPTE_R_R		ASM_CONST(0x0000000000000100)
++
++/* Values for PP (assumes Ks=0, Kp=1) */
++/* pp0 will always be 0 for linux     */
++#define PP_RWXX	0	/* Supervisor read/write, User none */
++#define PP_RWRX 1	/* Supervisor read/write, User read */
++#define PP_RWRW 2	/* Supervisor read/write, User read/write */
++#define PP_RXRX 3	/* Supervisor read,       User read */
++
++#ifndef __ASSEMBLY__
++
++typedef struct {
++	unsigned long v;
++	unsigned long r;
++} hpte_t;
++
++extern hpte_t *htab_address;
++extern unsigned long htab_size_bytes;
++extern unsigned long htab_hash_mask;
++
++/*
++ * Page size definition
++ *
++ *    shift : is the "PAGE_SHIFT" value for that page size
++ *    sllp  : is a bit mask with the value of SLB L || LP to be or'ed
++ *            directly to a slbmte "vsid" value
++ *    penc  : is the HPTE encoding mask for the "LP" field:
++ *
++ */
++struct mmu_psize_def
++{
++	unsigned int	shift;	/* number of bits */
++	unsigned int	penc;	/* HPTE encoding */
++	unsigned int	tlbiel;	/* tlbiel supported for that page size */
++	unsigned long	avpnm;	/* bits to mask out in AVPN in the HPTE */
++	unsigned long	sllp;	/* SLB L||LP (exact mask to use in slbmte) */
++};
++
++#endif /* __ASSEMBLY__ */
++
++/*
++ * The kernel use the constants below to index in the page sizes array.
++ * The use of fixed constants for this purpose is better for performances
++ * of the low level hash refill handlers.
++ *
++ * A non supported page size has a "shift" field set to 0
++ *
++ * Any new page size being implemented can get a new entry in here. Whether
++ * the kernel will use it or not is a different matter though. The actual page
++ * size used by hugetlbfs is not defined here and may be made variable
++ */
++
++#define MMU_PAGE_4K		0	/* 4K */
++#define MMU_PAGE_64K		1	/* 64K */
++#define MMU_PAGE_64K_AP		2	/* 64K Admixed (in a 4K segment) */
++#define MMU_PAGE_1M		3	/* 1M */
++#define MMU_PAGE_16M		4	/* 16M */
++#define MMU_PAGE_16G		5	/* 16G */
++#define MMU_PAGE_COUNT		6
++
++#ifndef __ASSEMBLY__
++
++/*
++ * The current system page sizes
++ */
++extern struct mmu_psize_def mmu_psize_defs[MMU_PAGE_COUNT];
++extern int mmu_linear_psize;
++extern int mmu_virtual_psize;
++extern int mmu_vmalloc_psize;
++extern int mmu_io_psize;
++
++/*
++ * If the processor supports 64k normal pages but not 64k cache
++ * inhibited pages, we have to be prepared to switch processes
++ * to use 4k pages when they create cache-inhibited mappings.
++ * If this is the case, mmu_ci_restrictions will be set to 1.
++ */
++extern int mmu_ci_restrictions;
++
++#ifdef CONFIG_HUGETLB_PAGE
++/*
++ * The page size index of the huge pages for use by hugetlbfs
++ */
++extern int mmu_huge_psize;
++
++#endif /* CONFIG_HUGETLB_PAGE */
++
++/*
++ * This function sets the AVPN and L fields of the HPTE  appropriately
++ * for the page size
++ */
++static inline unsigned long hpte_encode_v(unsigned long va, int psize)
++{
++	unsigned long v =
++	v = (va >> 23) & ~(mmu_psize_defs[psize].avpnm);
++	v <<= HPTE_V_AVPN_SHIFT;
++	if (psize != MMU_PAGE_4K)
++		v |= HPTE_V_LARGE;
++	return v;
++}
++
++/*
++ * This function sets the ARPN, and LP fields of the HPTE appropriately
++ * for the page size. We assume the pa is already "clean" that is properly
++ * aligned for the requested page size
++ */
++static inline unsigned long hpte_encode_r(unsigned long pa, int psize)
++{
++	unsigned long r;
++
++	/* A 4K page needs no special encoding */
++	if (psize == MMU_PAGE_4K)
++		return pa & HPTE_R_RPN;
++	else {
++		unsigned int penc = mmu_psize_defs[psize].penc;
++		unsigned int shift = mmu_psize_defs[psize].shift;
++		return (pa & ~((1ul << shift) - 1)) | (penc << 12);
++	}
++	return r;
++}
++
++/*
++ * This hashes a virtual address for a 256Mb segment only for now
++ */
++
++static inline unsigned long hpt_hash(unsigned long va, unsigned int shift)
++{
++	return ((va >> 28) & 0x7fffffffffUL) ^ ((va & 0x0fffffffUL) >> shift);
++}
++
++extern int __hash_page_4K(unsigned long ea, unsigned long access,
++			  unsigned long vsid, pte_t *ptep, unsigned long trap,
++			  unsigned int local);
++extern int __hash_page_64K(unsigned long ea, unsigned long access,
++			   unsigned long vsid, pte_t *ptep, unsigned long trap,
++			   unsigned int local);
++struct mm_struct;
++extern int hash_page(unsigned long ea, unsigned long access, unsigned long trap);
++extern int hash_huge_page(struct mm_struct *mm, unsigned long access,
++			  unsigned long ea, unsigned long vsid, int local,
++			  unsigned long trap);
++
++extern int htab_bolt_mapping(unsigned long vstart, unsigned long vend,
++			     unsigned long pstart, unsigned long mode,
++			     int psize);
++
++extern void htab_initialize(void);
++extern void htab_initialize_secondary(void);
++extern void hpte_init_native(void);
++extern void hpte_init_lpar(void);
++extern void hpte_init_iSeries(void);
++extern void hpte_init_beat(void);
++
++extern void stabs_alloc(void);
++extern void slb_initialize(void);
++extern void slb_flush_and_rebolt(void);
++extern void stab_initialize(unsigned long stab);
++
++#endif /* __ASSEMBLY__ */
++
++/*
++ * VSID allocation
++ *
++ * We first generate a 36-bit "proto-VSID".  For kernel addresses this
++ * is equal to the ESID, for user addresses it is:
++ *	(context << 15) | (esid & 0x7fff)
++ *
++ * The two forms are distinguishable because the top bit is 0 for user
++ * addresses, whereas the top two bits are 1 for kernel addresses.
++ * Proto-VSIDs with the top two bits equal to 0b10 are reserved for
++ * now.
++ *
++ * The proto-VSIDs are then scrambled into real VSIDs with the
++ * multiplicative hash:
++ *
++ *	VSID = (proto-VSID * VSID_MULTIPLIER) % VSID_MODULUS
++ *	where	VSID_MULTIPLIER = 268435399 = 0xFFFFFC7
++ *		VSID_MODULUS = 2^36-1 = 0xFFFFFFFFF
++ *
++ * This scramble is only well defined for proto-VSIDs below
++ * 0xFFFFFFFFF, so both proto-VSID and actual VSID 0xFFFFFFFFF are
++ * reserved.  VSID_MULTIPLIER is prime, so in particular it is
++ * co-prime to VSID_MODULUS, making this a 1:1 scrambling function.
++ * Because the modulus is 2^n-1 we can compute it efficiently without
++ * a divide or extra multiply (see below).
++ *
++ * This scheme has several advantages over older methods:
++ *
++ * 	- We have VSIDs allocated for every kernel address
++ * (i.e. everything above 0xC000000000000000), except the very top
++ * segment, which simplifies several things.
++ *
++ * 	- We allow for 15 significant bits of ESID and 20 bits of
++ * context for user addresses.  i.e. 8T (43 bits) of address space for
++ * up to 1M contexts (although the page table structure and context
++ * allocation will need changes to take advantage of this).
++ *
++ * 	- The scramble function gives robust scattering in the hash
++ * table (at least based on some initial results).  The previous
++ * method was more susceptible to pathological cases giving excessive
++ * hash collisions.
++ */
++/*
++ * WARNING - If you change these you must make sure the asm
++ * implementations in slb_allocate (slb_low.S), do_stab_bolted
++ * (head.S) and ASM_VSID_SCRAMBLE (below) are changed accordingly.
++ *
++ * You'll also need to change the precomputed VSID values in head.S
++ * which are used by the iSeries firmware.
++ */
++
++#define VSID_MULTIPLIER	ASM_CONST(200730139)	/* 28-bit prime */
++#define VSID_BITS	36
++#define VSID_MODULUS	((1UL<<VSID_BITS)-1)
++
++#define CONTEXT_BITS	19
++#define USER_ESID_BITS	16
++
++#define USER_VSID_RANGE	(1UL << (USER_ESID_BITS + SID_SHIFT))
++
++/*
++ * This macro generates asm code to compute the VSID scramble
++ * function.  Used in slb_allocate() and do_stab_bolted.  The function
++ * computed is: (protovsid*VSID_MULTIPLIER) % VSID_MODULUS
++ *
++ *	rt = register continaing the proto-VSID and into which the
++ *		VSID will be stored
++ *	rx = scratch register (clobbered)
++ *
++ * 	- rt and rx must be different registers
++ * 	- The answer will end up in the low 36 bits of rt.  The higher
++ * 	  bits may contain other garbage, so you may need to mask the
++ * 	  result.
++ */
++#define ASM_VSID_SCRAMBLE(rt, rx)	\
++	lis	rx,VSID_MULTIPLIER@h;					\
++	ori	rx,rx,VSID_MULTIPLIER@l;				\
++	mulld	rt,rt,rx;		/* rt = rt * MULTIPLIER */	\
++									\
++	srdi	rx,rt,VSID_BITS;					\
++	clrldi	rt,rt,(64-VSID_BITS);					\
++	add	rt,rt,rx;		/* add high and low bits */	\
++	/* Now, r3 == VSID (mod 2^36-1), and lies between 0 and		\
++	 * 2^36-1+2^28-1.  That in particular means that if r3 >=	\
++	 * 2^36-1, then r3+1 has the 2^36 bit set.  So, if r3+1 has	\
++	 * the bit clear, r3 already has the answer we want, if it	\
++	 * doesn't, the answer is the low 36 bits of r3+1.  So in all	\
++	 * cases the answer is the low 36 bits of (r3 + ((r3+1) >> 36))*/\
++	addi	rx,rt,1;						\
++	srdi	rx,rx,VSID_BITS;	/* extract 2^36 bit */		\
++	add	rt,rt,rx
++
++
++#ifndef __ASSEMBLY__
++
++typedef unsigned long mm_context_id_t;
++
++typedef struct {
++	mm_context_id_t id;
++	u16 user_psize;			/* page size index */
++	u16 sllp;			/* SLB entry page size encoding */
++#ifdef CONFIG_HUGETLB_PAGE
++	u16 low_htlb_areas, high_htlb_areas;
++#endif
++	unsigned long vdso_base;
++} mm_context_t;
++
++
++static inline unsigned long vsid_scramble(unsigned long protovsid)
++{
++#if 0
++	/* The code below is equivalent to this function for arguments
++	 * < 2^VSID_BITS, which is all this should ever be called
++	 * with.  However gcc is not clever enough to compute the
++	 * modulus (2^n-1) without a second multiply. */
++	return ((protovsid * VSID_MULTIPLIER) % VSID_MODULUS);
++#else /* 1 */
++	unsigned long x;
++
++	x = protovsid * VSID_MULTIPLIER;
++	x = (x >> VSID_BITS) + (x & VSID_MODULUS);
++	return (x + ((x+1) >> VSID_BITS)) & VSID_MODULUS;
++#endif /* 1 */
++}
++
++/* This is only valid for addresses >= KERNELBASE */
++static inline unsigned long get_kernel_vsid(unsigned long ea)
++{
++	return vsid_scramble(ea >> SID_SHIFT);
++}
++
++/* This is only valid for user addresses (which are below 2^41) */
++static inline unsigned long get_vsid(unsigned long context, unsigned long ea)
++{
++	return vsid_scramble((context << USER_ESID_BITS)
++			     | (ea >> SID_SHIFT));
++}
++
++#define VSID_SCRAMBLE(pvsid)	(((pvsid) * VSID_MULTIPLIER) % VSID_MODULUS)
++#define KERNEL_VSID(ea)		VSID_SCRAMBLE(GET_ESID(ea))
++
++/* Physical address used by some IO functions */
++typedef unsigned long phys_addr_t;
++
++#endif /* __ASSEMBLY__ */
++
++#endif /* _ASM_POWERPC_MMU_HASH64_H_ */
+Index: linux-2.6.18/mvl_patches/pro50-0323.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0323.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(323);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

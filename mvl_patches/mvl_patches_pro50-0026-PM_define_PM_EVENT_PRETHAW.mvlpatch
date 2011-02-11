@@ -1,0 +1,359 @@
+#! /usr/bin/env bash
+# Patch: -PM_define_PM_EVENT_PRETHAW
+# Date: Fri Jun 15 10:08:50 2007
+# MR: 23304
+# Type: Enhancement
+# Disposition: Backport from 2.6.19-rc1
+# Description:
+#     
+# 
+# From 82bb67f2c1f9ef438c56ac24e7dca027fe7289b5 Mon Sep 17 00:00:00 2001
+# From: David Brownell <david-b@pacbell.net>
+# Date: Mon, 14 Aug 2006 23:11:04 -0700
+# Subject: [PATCH] PM: define PM_EVENT_PRETHAW
+# 
+# This adds a new pm_message_t event type to use when preparing to restore a
+# swsusp snapshot.  Devices that have been initialized by Linux after resume
+# (rather than left in power-up-reset state) may need to be reset; this new
+# event type give drivers the chance to do that.
+# 
+# The drivers that will care about this are those which understand more hardware
+# states than just "on" and "reset", relying on hardware state during resume()
+# methods to be either the state left by the preceding suspend(), or a
+# power-lost reset.  The best current example of this class of drivers are USB
+# host controller drivers, which currently do not work through swsusp when
+# they're statically linked.
+# 
+# When the swsusp freeze/thaw mechanism kicks in, a troublesome third state
+# could exist: one state set up by a different kernel instance, before a
+# snapshot image is resumed.  This mechanism lets drivers prevent that state.
+# 
+# Signed-off-by: David Brownell <dbrownell@users.sourceforge.net>
+# Cc: "Rafael J. Wysocki" <rjw@sisk.pl>
+# Cc: Pavel Machek <pavel@ucw.cz>
+# Signed-off-by: Andrew Morton <akpm@osdl.org>
+# Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+
+PATCHNUM=26
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 23304
+Type: Enhancement
+Disposition: Backport from 2.6.19-rc1
+Description:
+    
+
+From 82bb67f2c1f9ef438c56ac24e7dca027fe7289b5 Mon Sep 17 00:00:00 2001
+From: David Brownell <david-b@pacbell.net>
+Date: Mon, 14 Aug 2006 23:11:04 -0700
+Subject: [PATCH] PM: define PM_EVENT_PRETHAW
+
+This adds a new pm_message_t event type to use when preparing to restore a
+swsusp snapshot.  Devices that have been initialized by Linux after resume
+(rather than left in power-up-reset state) may need to be reset; this new
+event type give drivers the chance to do that.
+
+The drivers that will care about this are those which understand more hardware
+states than just "on" and "reset", relying on hardware state during resume()
+methods to be either the state left by the preceding suspend(), or a
+power-lost reset.  The best current example of this class of drivers are USB
+host controller drivers, which currently do not work through swsusp when
+they're statically linked.
+
+When the swsusp freeze/thaw mechanism kicks in, a troublesome third state
+could exist: one state set up by a different kernel instance, before a
+snapshot image is resumed.  This mechanism lets drivers prevent that state.
+
+Signed-off-by: David Brownell <dbrownell@users.sourceforge.net>
+Cc: "Rafael J. Wysocki" <rjw@sisk.pl>
+Cc: Pavel Machek <pavel@ucw.cz>
+Signed-off-by: Andrew Morton <akpm@osdl.org>
+Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+Index: linux-2.6.18/include/linux/pm.h
+===================================================================
+--- linux-2.6.18.orig/include/linux/pm.h
++++ linux-2.6.18/include/linux/pm.h
+@@ -142,29 +142,61 @@ typedef struct pm_message {
+ } pm_message_t;
+ 
+ /*
+- * There are 4 important states driver can be in:
+- * ON     -- driver is working
+- * FREEZE -- stop operations and apply whatever policy is applicable to a
+- *           suspended driver of that class, freeze queues for block like IDE
+- *           does, drop packets for ethernet, etc... stop DMA engine too etc...
+- *           so a consistent image can be saved; but do not power any hardware
+- *           down.
+- * SUSPEND - like FREEZE, but hardware is doing as much powersaving as
+- *           possible. Roughly pci D3.
+- *
+- * Unfortunately, current drivers only recognize numeric values 0 (ON) and 3
+- * (SUSPEND).  We'll need to fix the drivers. So yes, putting 3 to all different
+- * defines is intentional, and will go away as soon as drivers are fixed.  Also
+- * note that typedef is neccessary, we'll probably want to switch to
+- *   typedef struct pm_message_t { int event; int flags; } pm_message_t
+- * or something similar soon.
++ * Several driver power state transitions are externally visible, affecting
++ * the state of pending I/O queues and (for drivers that touch hardware)
++ * interrupts, wakeups, DMA, and other hardware state.  There may also be
++ * internal transitions to various low power modes, which are transparent
++ * to the rest of the driver stack (such as a driver that's ON gating off
++ * clocks which are not in active use).
++ *
++ * One transition is triggered by resume(), after a suspend() call; the
++ * message is implicit:
++ *
++ * ON		Driver starts working again, responding to hardware events
++ * 		and software requests.  The hardware may have gone through
++ * 		a power-off reset, or it may have maintained state from the
++ * 		previous suspend() which the driver will rely on while
++ * 		resuming.  On most platforms, there are no restrictions on
++ * 		availability of resources like clocks during resume().
++ *
++ * Other transitions are triggered by messages sent using suspend().  All
++ * these transitions quiesce the driver, so that I/O queues are inactive.
++ * That commonly entails turning off IRQs and DMA; there may be rules
++ * about how to quiesce that are specific to the bus or the device's type.
++ * (For example, network drivers mark the link state.)  Other details may
++ * differ according to the message:
++ *
++ * SUSPEND	Quiesce, enter a low power device state appropriate for
++ * 		the upcoming system state (such as PCI_D3hot), and enable
++ * 		wakeup events as appropriate.
++ *
++ * FREEZE	Quiesce operations so that a consistent image can be saved;
++ * 		but do NOT otherwise enter a low power device state, and do
++ * 		NOT emit system wakeup events.
++ *
++ * PRETHAW	Quiesce as if for FREEZE; additionally, prepare for restoring
++ * 		the system from a snapshot taken after an earlier FREEZE.
++ * 		Some drivers will need to reset their hardware state instead
++ * 		of preserving it, to ensure that it's never mistaken for the
++ * 		state which that earlier snapshot had set up.
++ *
++ * A minimally power-aware driver treats all messages as SUSPEND, fully
++ * reinitializes its device during resume() -- whether or not it was reset
++ * during the suspend/resume cycle -- and can't issue wakeup events.
++ *
++ * More power-aware drivers may also use low power states at runtime as
++ * well as during system sleep states like PM_SUSPEND_STANDBY.  They may
++ * be able to use wakeup events to exit from runtime low-power states,
++ * or from system low-power states such as standby or suspend-to-RAM.
+  */
+ 
+ #define PM_EVENT_ON 0
+ #define PM_EVENT_FREEZE 1
+ #define PM_EVENT_SUSPEND 2
++#define PM_EVENT_PRETHAW 3
+ 
+ #define PMSG_FREEZE	((struct pm_message){ .event = PM_EVENT_FREEZE, })
++#define PMSG_PRETHAW	((struct pm_message){ .event = PM_EVENT_PRETHAW, })
+ #define PMSG_SUSPEND	((struct pm_message){ .event = PM_EVENT_SUSPEND, })
+ #define PMSG_ON		((struct pm_message){ .event = PM_EVENT_ON, })
+ 
+Index: linux-2.6.18/mvl_patches/pro50-0026.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0026.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(26);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

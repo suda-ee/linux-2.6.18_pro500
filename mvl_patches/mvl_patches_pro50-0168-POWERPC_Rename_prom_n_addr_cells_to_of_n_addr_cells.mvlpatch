@@ -1,0 +1,443 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Rename_prom_n_addr_cells_to_of_n_addr_cells
+# Date: Thu Sep  6 08:27:35 2007
+# MR: 23896
+# 
+# From a8bda5dd4f99d6469f3c0dc362db3cce8a4d6416 Mon Sep 17 00:00:00 2001
+# From: Stephen Rothwell <sfr@canb.auug.org.au>
+# Date: Tue, 3 Apr 2007 10:56:50 +1000
+# Subject: [PATCH] [POWERPC] Rename prom_n_addr_cells to of_n_addr_cells
+# 
+# This is more consistent and gets us closer to the Sparc code.
+# 
+# Signed-off-by: Stephen Rothwell <sfr@canb.auug.org.au>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+# 
+
+PATCHNUM=168
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 23896
+
+From a8bda5dd4f99d6469f3c0dc362db3cce8a4d6416 Mon Sep 17 00:00:00 2001
+From: Stephen Rothwell <sfr@canb.auug.org.au>
+Date: Tue, 3 Apr 2007 10:56:50 +1000
+Subject: [PATCH] [POWERPC] Rename prom_n_addr_cells to of_n_addr_cells
+
+This is more consistent and gets us closer to the Sparc code.
+
+Signed-off-by: Stephen Rothwell <sfr@canb.auug.org.au>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+Index: linux-2.6.18/arch/powerpc/kernel/pci_32.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_32.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_32.c
+@@ -915,7 +915,7 @@ pci_process_bridge_OF_ranges(struct pci_
+ 	int rlen = 0, orig_rlen;
+ 	int memno = 0;
+ 	struct resource *res;
+-	int np, na = prom_n_addr_cells(dev);
++	int np, na = of_n_addr_cells(dev);
+ 	np = na + 5;
+ 
+ 	/* First we try to merge ranges to fix a problem with some pmacs
+Index: linux-2.6.18/arch/powerpc/kernel/pci_64.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_64.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_64.c
+@@ -949,7 +949,7 @@ void __devinit pci_process_bridge_OF_ran
+ 	int rlen = 0;
+ 	int memno = 0;
+ 	struct resource *res;
+-	int np, na = prom_n_addr_cells(dev);
++	int np, na = of_n_addr_cells(dev);
+ 	unsigned long pci_addr, cpu_phys_addr;
+ 
+ 	np = na + 5;
+Index: linux-2.6.18/arch/powerpc/kernel/prom.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/prom.c
++++ linux-2.6.18/arch/powerpc/kernel/prom.c
+@@ -1021,8 +1021,7 @@ void __init early_init_devtree(void *par
+ 
+ #undef printk
+ 
+-int
+-prom_n_addr_cells(struct device_node* np)
++int of_n_addr_cells(struct device_node* np)
+ {
+ 	const int *ip;
+ 	do {
+@@ -1035,7 +1034,7 @@ prom_n_addr_cells(struct device_node* np
+ 	/* No #address-cells property for the root node, default to 1 */
+ 	return 1;
+ }
+-EXPORT_SYMBOL(prom_n_addr_cells);
++EXPORT_SYMBOL(of_n_addr_cells);
+ 
+ int
+ prom_n_size_cells(struct device_node* np)
+Index: linux-2.6.18/arch/powerpc/kernel/prom_parse.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/prom_parse.c
++++ linux-2.6.18/arch/powerpc/kernel/prom_parse.c
+@@ -68,7 +68,7 @@ static void of_bus_default_count_cells(s
+ 				       int *addrc, int *sizec)
+ {
+ 	if (addrc)
+-		*addrc = prom_n_addr_cells(dev);
++		*addrc = of_n_addr_cells(dev);
+ 	if (sizec)
+ 		*sizec = prom_n_size_cells(dev);
+ }
+@@ -654,7 +654,7 @@ void of_parse_dma_window(struct device_n
+ 	if (!prop)
+ 		prop = get_property(dn, "#address-cells", NULL);
+ 
+-	cells = prop ? *(u32 *)prop : prom_n_addr_cells(dn);
++	cells = prop ? *(u32 *)prop : of_n_addr_cells(dn);
+ 	*phys = of_read_number(dma_window, cells);
+ 
+ 	dma_window += cells;
+Index: linux-2.6.18/arch/powerpc/kernel/setup-common.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/setup-common.c
++++ linux-2.6.18/arch/powerpc/kernel/setup-common.c
+@@ -398,7 +398,7 @@ void __init smp_setup_cpu_maps(void)
+ 		int num_addr_cell, num_size_cell, maxcpus;
+ 		const unsigned int *ireg;
+ 
+-		num_addr_cell = prom_n_addr_cells(dn);
++		num_addr_cell = of_n_addr_cells(dn);
+ 		num_size_cell = prom_n_size_cells(dn);
+ 
+ 		ireg = get_property(dn, "ibm,lrdr-capacity", NULL);
+Index: linux-2.6.18/arch/powerpc/mm/numa.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/numa.c
++++ linux-2.6.18/arch/powerpc/mm/numa.c
+@@ -291,7 +291,7 @@ static void __init get_n_mem_cells(int *
+ 	if (!memory)
+ 		panic("numa.c: No memory nodes found!");
+ 
+-	*n_addr_cells = prom_n_addr_cells(memory);
++	*n_addr_cells = of_n_addr_cells(memory);
+ 	*n_size_cells = prom_n_size_cells(memory);
+ 	of_node_put(memory);
+ }
+Index: linux-2.6.18/arch/powerpc/platforms/chrp/setup.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/chrp/setup.c
++++ linux-2.6.18/arch/powerpc/platforms/chrp/setup.c
+@@ -363,7 +363,7 @@ static void __init chrp_find_openpic(voi
+ 	root = of_find_node_by_path("/");
+ 	if (root) {
+ 		opprop = get_property(root, "platform-open-pic", &oplen);
+-		na = prom_n_addr_cells(root);
++		na = of_n_addr_cells(root);
+ 	}
+ 	if (opprop && oplen >= na * sizeof(unsigned int)) {
+ 		opaddr = opprop[na-1];	/* assume 32-bit */
+@@ -470,7 +470,7 @@ static void __init chrp_find_8259(void)
+ 
+ 		if (addrp == NULL)
+ 			continue;
+-		chrp_int_ack = addrp[prom_n_addr_cells(np)-1];
++		chrp_int_ack = addrp[of_n_addr_cells(np)-1];
+ 		break;
+ 	}
+ 	if (np == NULL)
+Index: linux-2.6.18/arch/powerpc/platforms/maple/setup.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/maple/setup.c
++++ linux-2.6.18/arch/powerpc/platforms/maple/setup.c
+@@ -246,7 +246,7 @@ static void __init maple_init_IRQ(void)
+ 
+ 	/* Find address list in /platform-open-pic */
+ 	root = of_find_node_by_path("/");
+-	naddr = prom_n_addr_cells(root);
++	naddr = of_n_addr_cells(root);
+ 	opprop = get_property(root, "platform-open-pic", &opplen);
+ 	if (opprop != 0) {
+ 		openpic_addr = of_read_number(opprop, naddr);
+Index: linux-2.6.18/arch/powerpc/platforms/pasemi/setup.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/pasemi/setup.c
++++ linux-2.6.18/arch/powerpc/platforms/pasemi/setup.c
+@@ -128,7 +128,7 @@ static __init void pas_init_IRQ(void)
+ 
+ 	/* Find address list in /platform-open-pic */
+ 	root = of_find_node_by_path("/");
+-	naddr = prom_n_addr_cells(root);
++	naddr = of_n_addr_cells(root);
+ 	opprop = get_property(root, "platform-open-pic", &opplen);
+ 	if (!opprop) {
+ 		printk(KERN_ERR "No platform-open-pic property.\n");
+Index: linux-2.6.18/arch/powerpc/platforms/pseries/setup.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/pseries/setup.c
++++ linux-2.6.18/arch/powerpc/platforms/pseries/setup.c
+@@ -142,7 +142,7 @@ static void __init pseries_mpic_init_IRQ
+ 	struct mpic *mpic;
+ 
+ 	np = of_find_node_by_path("/");
+-	naddr = prom_n_addr_cells(np);
++	naddr = of_n_addr_cells(np);
+ 	opprop = get_property(np, "platform-open-pic", &opplen);
+ 	if (opprop != 0) {
+ 		openpic_addr = of_read_number(opprop, naddr);
+@@ -196,7 +196,7 @@ static void __init pseries_mpic_init_IRQ
+ 					    NULL);
+ 		if (addrp == NULL)
+ 			continue;
+-		naddr = prom_n_addr_cells(np);
++		naddr = of_n_addr_cells(np);
+ 		intack = addrp[naddr-1];
+ 		if (naddr > 1)
+ 			intack |= ((unsigned long)addrp[naddr-2]) << 32;
+Index: linux-2.6.18/arch/powerpc/platforms/pseries/xics.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/pseries/xics.c
++++ linux-2.6.18/arch/powerpc/platforms/pseries/xics.c
+@@ -644,7 +644,7 @@ static void __init xics_setup_8259_casca
+ 		addrp = get_property(np, "8259-interrupt-acknowledge", NULL);
+ 		if (addrp == NULL)
+ 			continue;
+-		naddr = prom_n_addr_cells(np);
++		naddr = of_n_addr_cells(np);
+ 		intack = addrp[naddr-1];
+ 		if (naddr > 1)
+ 			intack |= ((unsigned long)addrp[naddr-2]) << 32;
+Index: linux-2.6.18/drivers/char/tpm/tpm_atmel.h
+===================================================================
+--- linux-2.6.18.orig/drivers/char/tpm/tpm_atmel.h
++++ linux-2.6.18/drivers/char/tpm/tpm_atmel.h
+@@ -53,7 +53,7 @@ static void __iomem * atmel_get_base_add
+ 	}
+ 
+ 	reg = get_property(dn, "reg", &reglen);
+-	naddrc = prom_n_addr_cells(dn);
++	naddrc = of_n_addr_cells(dn);
+ 	nsizec = prom_n_size_cells(dn);
+ 
+ 	of_node_put(dn);
+Index: linux-2.6.18/include/asm-powerpc/prom.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/prom.h
++++ linux-2.6.18/include/asm-powerpc/prom.h
+@@ -168,7 +168,7 @@ extern const void *of_get_property(const
+ 				int *lenp);
+ #define get_property(a, b, c)	of_get_property((a), (b), (c))
+ extern void print_properties(struct device_node *node);
+-extern int prom_n_addr_cells(struct device_node* np);
++extern int of_n_addr_cells(struct device_node* np);
+ extern int prom_n_size_cells(struct device_node* np);
+ extern int prom_n_intr_cells(struct device_node* np);
+ extern void prom_get_irq_senses(unsigned char *senses, int off, int max);
+Index: linux-2.6.18/mvl_patches/pro50-0168.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0168.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(168);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

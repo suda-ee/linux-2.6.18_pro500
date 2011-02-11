@@ -1,0 +1,797 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_FSL_enet_device_tree_cleanups
+# Date: Wed Jun 11 14:48:14 2008
+# Source: kernel.org
+# MR: 27349
+# Type: Enhancement
+# Disposition: backported from kernel.org
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# 
+# NOTE: Another version of this patch exists in our tree. However, that
+# version does not contain the DTS changes that were in the original patch.
+# This version of the patch has just the DTS changes.
+# 
+# The original version of this patch contained changes for DTS files
+# not in our internal tree. It also contained changes to DTS files that
+# post-date the versions in our tree. In those cases, the changes were
+# made to the equivalent file in our tree. The original patch also
+# contained deletions of the mac-address and address fields in the DTS files.
+# These deletions are not implemented by this patch due to the various
+# ages of the U-Boot images used by the boards in our tree.
+# 
+# From e77b28eb199a8d637a00128b86baf515d4eba5fd Mon Sep 17 00:00:00 2001
+# From: Kumar Gala <galak@kernel.crashing.org>
+# Date: Wed, 12 Dec 2007 00:28:35 -0600
+# Subject: [PATCH] [POWERPC] FSL: enet device tree cleanups
+# 
+# * Removed address fields in ethernet nodes
+# * Removed #address-cells, #size-cells from gianfar nodes
+# * Added cell-index to gianfar and ucc ethernet nodes
+# * Added enet[0..3] labels
+# * Renamed compatible node for gianfar mdio to "fsl,gianfar-mdio"
+# * Removed device_type = "mdio"
+# 
+# The matching for gianfar mdio still supports the old "mdio"/"gianfar" combo
+# but it is now considered deprecated.
+# 
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+
+PATCHNUM=1152
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: kernel.org
+MR: 27349
+Type: Enhancement
+Disposition: backported from kernel.org
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+
+NOTE: Another version of this patch exists in our tree. However, that
+version does not contain the DTS changes that were in the original patch.
+This version of the patch has just the DTS changes.
+
+The original version of this patch contained changes for DTS files
+not in our internal tree. It also contained changes to DTS files that
+post-date the versions in our tree. In those cases, the changes were
+made to the equivalent file in our tree. The original patch also
+contained deletions of the mac-address and address fields in the DTS files.
+These deletions are not implemented by this patch due to the various
+ages of the U-Boot images used by the boards in our tree.
+
+From e77b28eb199a8d637a00128b86baf515d4eba5fd Mon Sep 17 00:00:00 2001
+From: Kumar Gala <galak@kernel.crashing.org>
+Date: Wed, 12 Dec 2007 00:28:35 -0600
+Subject: [PATCH] [POWERPC] FSL: enet device tree cleanups
+
+* Removed address fields in ethernet nodes
+* Removed #address-cells, #size-cells from gianfar nodes
+* Added cell-index to gianfar and ucc ethernet nodes
+* Added enet[0..3] labels
+* Renamed compatible node for gianfar mdio to "fsl,gianfar-mdio"
+* Removed device_type = "mdio"
+
+The matching for gianfar mdio still supports the old "mdio"/"gianfar" combo
+but it is now considered deprecated.
+
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8313erdb.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8313erdb.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8313erdb.dts
+@@ -142,7 +142,8 @@
+ 			};
+ 		};
+ 
+-		ethernet@24000 {
++		enet0: ethernet@24000 {
++			cell-index = <0>;
+ 			device_type = "network";
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+@@ -153,7 +154,8 @@
+ 			fixed_speed = <1 1000>;
+ 		};
+ 
+-		ethernet@25000 {
++		enet1: ethernet@25000 {
++			cell-index = <1>;
+ 			device_type = "network";
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc832x_rdb.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc832x_rdb.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc832x_rdb.dts
+@@ -226,10 +226,11 @@
+ 			mode = "cpu";
+ 		};
+ 
+-		ucc@3000 {
++		enet0: ucc@3000 {
+ 			device_type = "network";
+ 			compatible = "ucc_geth";
+ 			model = "UCC";
++			cell-index = <2>;
+ 			device-id = <2>;
+ 			reg = <3000 200>;
+ 			interrupts = <21>;
+@@ -247,10 +248,11 @@
+ 			pio-handle = <&ucc2pio>;
+ 		};
+ 
+-		ucc@2200 {
++		enet1: ucc@2200 {
+ 			device_type = "network";
+ 			compatible = "ucc_geth";
+ 			model = "UCC";
++			cell-index = <3>;
+ 			device-id = <3>;
+ 			reg = <2200 200>;
+ 			interrupts = <22>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8540ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8540ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8540ads.dts
+@@ -99,9 +99,8 @@
+ 			};
+ 		};
+ 
+-		ethernet@24000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet0: ethernet@24000 {
++			cell-index = <0>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+@@ -118,9 +117,8 @@
+ 			phy-handle = <&phy0>;
+ 		};
+ 
+-		ethernet@25000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet1: ethernet@25000 {
++			cell-index = <1>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+@@ -137,9 +135,8 @@
+ 			phy-handle = <&phy1>;
+ 		};
+ 
+-		ethernet@26000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet2: ethernet@26000 {
++			cell-index = <2>;
+ 			device_type = "network";
+ 			model = "FEC";
+ 			compatible = "gianfar";
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8541cds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8541cds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8541cds.dts
+@@ -93,9 +93,8 @@
+ 			};
+ 		};
+ 
+-		ethernet@24000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet0: ethernet@24000 {
++			cell-index = <0>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+@@ -106,9 +105,8 @@
+ 			phy-handle = <&phy0>;
+ 		};
+ 
+-		ethernet@25000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet1: ethernet@25000 {
++			cell-index = <1>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8544ds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8544ds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8544ds.dts
+@@ -94,9 +94,8 @@
+ 			};
+ 		};
+ 
+-		ethernet@24000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet0: ethernet@24000 {
++			cell-index = <0>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+@@ -107,9 +106,8 @@
+ 			phy-handle = <&phy0>;
+ 		};
+ 
+-		ethernet@26000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet1: ethernet@26000 {
++			cell-index = <1>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8548cds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8548cds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8548cds.dts
+@@ -135,9 +135,8 @@
+ 			};
+ 		};
+ 
+-		ethernet@24000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet0: ethernet@24000 {
++			cell-index = <0>;
+ 			device_type = "network";
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+@@ -148,9 +147,8 @@
+ 			phy-handle = <&phy0>;
+ 		};
+ 
+-		ethernet@25000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet1: ethernet@25000 {
++			cell-index = <1>;
+ 			device_type = "network";
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+@@ -162,9 +160,8 @@
+ 		};
+ 
+ /* eTSEC 3/4 are currently broken
+-		ethernet@26000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet2: ethernet@26000 {
++			cell-index = <2>;
+ 			device_type = "network";
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+@@ -175,9 +172,8 @@
+ 			phy-handle = <&phy2>;
+ 		};
+ 
+-		ethernet@27000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet3: ethernet@27000 {
++			cell-index = <3>;
+ 			device_type = "network";
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8555cds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8555cds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8555cds.dts
+@@ -93,9 +93,8 @@
+ 			};
+ 		};
+ 
+-		ethernet@24000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet0: ethernet@24000 {
++			cell-index = <0>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+@@ -106,9 +105,8 @@
+ 			phy-handle = <&phy0>;
+ 		};
+ 
+-		ethernet@25000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet1: ethernet@25000 {
++			cell-index = <1>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8560ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8560ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8560ads.dts
+@@ -97,7 +97,8 @@
+ 			};
+ 		};
+ 
+-		ethernet@24000 {
++		enet0: ethernet@24000 {
++			cell-index = <0>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+@@ -114,9 +115,8 @@
+ 			phy-handle = <&phy0>;
+ 		};
+ 
+-		ethernet@25000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet1: ethernet@25000 {
++			cell-index = <1>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+@@ -192,7 +192,7 @@
+ 				interrupt-parent = <&cpmpic>;
+ 			};
+ 
+-			fcc@91320 {
++			enet2: fcc@91320 {
+ 				device_type = "network";
+ 				compatible = "fs_enet";
+ 				model = "FCC";
+@@ -213,7 +213,7 @@
+ 				phy-handle = <&phy2>;
+ 			};
+ 
+-			fcc@91340 {
++			enet3: fcc@91340 {
+ 				device_type = "network";
+ 				compatible = "fs_enet";
+ 				model = "FCC";
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8568mds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8568mds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8568mds.dts
+@@ -140,9 +140,8 @@
+ 			};
+ 		};
+ 
+-		ethernet@24000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet0: ethernet@24000 {
++			cell-index = <0>;
+ 			device_type = "network";
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+@@ -159,9 +158,8 @@
+ 			phy-handle = <&phy2>;
+ 		};
+ 
+-		ethernet@25000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet1: ethernet@25000 {
++			cell-index = <1>;
+ 			device_type = "network";
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+@@ -329,10 +327,11 @@
+ 			mode = "cpu";
+ 		};
+ 
+-		ucc@2000 {
++		enet2: ucc@2000 {
+ 			device_type = "network";
+ 			compatible = "ucc_geth";
+ 			model = "UCC";
++			cell-index = <1>;
+ 			device-id = <1>;
+ 			reg = <2000 200>;
+ 			interrupts = <20>;
+@@ -351,10 +350,11 @@
+ 			phy-connection-type = "rgmii-id";
+ 		};
+ 
+-		ucc@3000 {
++		enet3: ucc@3000 {
+ 			device_type = "network";
+ 			compatible = "ucc_geth";
+ 			model = "UCC";
++			cell-index = <2>;
+ 			device-id = <2>;
+ 			reg = <3000 200>;
+ 			interrupts = <21>;
+@@ -377,7 +377,6 @@
+ 			#address-cells = <1>;
+ 			#size-cells = <0>;
+ 			reg = <2120 18>;
+-			device_type = "mdio";
+ 			compatible = "ucc_geth_phy";
+ 
+ 			/* These are the same PHYs as on
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8572ds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8572ds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8572ds.dts
+@@ -183,9 +183,8 @@
+ 			};
+ 		};
+ 
+-		ethernet@24000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet0: ethernet@24000 {
++			cell-index = <0>;
+ 			device_type = "network";
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+@@ -197,9 +196,8 @@
+ 			phy-connection-type = "rgmii-id";
+ 		};
+ 
+-		ethernet@25000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet1: ethernet@25000 {
++			cell-index = <1>;
+ 			device_type = "network";
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+@@ -211,9 +209,8 @@
+ 			phy-connection-type = "rgmii-id";
+ 		};
+ 
+-		ethernet@26000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet2: ethernet@26000 {
++			cell-index = <2>;
+ 			device_type = "network";
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+@@ -225,9 +222,8 @@
+ 			phy-connection-type = "rgmii-id";
+ 		};
+ 
+-		ethernet@27000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet3: ethernet@27000 {
++			cell-index = <3>;
+ 			device_type = "network";
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8641_hpcn.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8641_hpcn.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8641_hpcn.dts
+@@ -123,8 +123,7 @@
+ 		};
+ 
+ 		enet0: ethernet@24000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++			cell-index = <0>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+@@ -142,8 +141,7 @@
+ 		};
+ 
+ 		enet1: ethernet@25000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++			cell-index = <1>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+@@ -161,8 +159,7 @@
+ 		};
+ 		
+ 		enet2: ethernet@26000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++			cell-index = <2>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+@@ -180,8 +177,7 @@
+ 		};
+ 
+ 		enet3: ethernet@27000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++ 			cell-index = <3>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8349emitx.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8349emitx.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8349emitx.dts
+@@ -168,7 +168,8 @@
+ 			};
+ 		};
+ 
+-		ethernet@24000 {
++		enet0: ethernet@24000 {
++			cell-index = <0>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+@@ -185,7 +186,8 @@
+ 			phy-handle = <245201c>;
+ 		};
+ 
+-		ethernet@25000 {
++		enet1: ethernet@25000 {
++			cell-index = <1>;
+ 			#address-cells = <1>;
+ 			#size-cells = <0>;
+ 			device_type = "network";
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8349emds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8349emds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8349emds.dts
+@@ -128,7 +128,8 @@
+ 			};
+ 		};
+ 
+-		ethernet@24000 {
++		enet0: ethernet@24000 {
++			cell-index = <0>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+@@ -140,9 +141,8 @@
+ 			phy-handle = <2452000>;
+ 		};
+ 
+-		ethernet@25000 {
+-			#address-cells = <1>;
+-			#size-cells = <0>;
++		enet1: ethernet@25000 {
++			cell-index = <1>;
+ 			device_type = "network";
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8360emds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8360emds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8360emds.dts
+@@ -302,10 +302,11 @@
+ 			mode = "slave";
+ 		};
+ 
+-		ucc@2000 {
++		enet0: ucc@2000 {
+ 			device_type = "network";
+ 			compatible = "ucc_geth";
+ 			model = "UCC";
++			cell-index = <1>;
+ 			device-id = <1>;
+ 			reg = <2000 200>;
+ 			interrupts = <20>;
+@@ -318,10 +319,11 @@
+ 			pio-handle = <140001>;
+ 		};
+ 
+-		ucc@3000 {
++		enet1: ucc@3000 {
+ 			device_type = "network";
+ 			compatible = "ucc_geth";
+ 			model = "UCC";
++			cell-index = <2>;
+ 			device-id = <2>;
+ 			reg = <3000 200>;
+ 			interrupts = <21>;
+Index: linux-2.6.18/mvl_patches/pro50-1152.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1152.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1152);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

@@ -1,0 +1,2527 @@
+#! /usr/bin/env bash
+# Patch: -MVL_POWERPC_Remove_arch_powerpc_s_dependence_on_asm_pp
+# Date: Wed Sep 26 11:16:59 2007
+# MR: 24856
+# Adjustments:
+#     We still have kmem_cache_t typedef which is deprecated in 2.6.22.
+#     Some other stuff has been slightly adjusted to aplly cleanly.
+# From f88df14b1f15cdeffa060580a40c1ce3e13bb79e Mon Sep 17 00:00:00 2001
+# From: David Gibson <david@gibson.dropbear.id.au>
+# Date: Mon, 30 Apr 2007 16:30:56 +1000
+# Subject: [PATCH] [POWERPC] Remove arch/powerpc's dependence on asm-ppc/pg{alloc,table}.h
+# 
+# Currently, all 32-bit powerpc platforms use asm-ppc/pgtable.h and
+# asm-ppc/pgalloc.h, even when otherwise compiled with ARCH=powerpc.
+# Those asm-ppc files are a fairly nasty tangle of #ifdefs including a
+# bunch of things which shouldn't be necessary any more in arch/powerpc.
+# 
+# Cleaning up that mess is going to take a while, but this patch is a
+# first step.  It separates the asm-powerpc/pg{alloc,table}.h into 64
+# bit and 32 bit versions in asm-powerpc, which the basic .h files in
+# asm-powerpc select based on config.  We make a few tiny tweaks to the
+# innards of the files along the way, making the outermost ifdefs
+# (double-inclusion protection and __KERNEL__) a little cleaner, and
+# #including asm-generic/pgtable.h from the top-level
+# asm-powerpc/pgtable.h (since both the old 32-bit and 64-bit versions
+# ended with such an #include).
+# 
+# Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=328
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+Adjustments:
+    We still have kmem_cache_t typedef which is deprecated in 2.6.22.
+    Some other stuff has been slightly adjusted to aplly cleanly.
+From f88df14b1f15cdeffa060580a40c1ce3e13bb79e Mon Sep 17 00:00:00 2001
+From: David Gibson <david@gibson.dropbear.id.au>
+Date: Mon, 30 Apr 2007 16:30:56 +1000
+Subject: [PATCH] [POWERPC] Remove arch/powerpc's dependence on asm-ppc/pg{alloc,table}.h
+
+Currently, all 32-bit powerpc platforms use asm-ppc/pgtable.h and
+asm-ppc/pgalloc.h, even when otherwise compiled with ARCH=powerpc.
+Those asm-ppc files are a fairly nasty tangle of #ifdefs including a
+bunch of things which shouldn't be necessary any more in arch/powerpc.
+
+Cleaning up that mess is going to take a while, but this patch is a
+first step.  It separates the asm-powerpc/pg{alloc,table}.h into 64
+bit and 32 bit versions in asm-powerpc, which the basic .h files in
+asm-powerpc select based on config.  We make a few tiny tweaks to the
+innards of the files along the way, making the outermost ifdefs
+(double-inclusion protection and __KERNEL__) a little cleaner, and
+#including asm-generic/pgtable.h from the top-level
+asm-powerpc/pgtable.h (since both the old 32-bit and 64-bit versions
+ended with such an #include).
+
+Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/include/asm-powerpc/pgalloc-32.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-powerpc/pgalloc-32.h
+@@ -0,0 +1,41 @@
++#ifndef _ASM_POWERPC_PGALLOC_32_H
++#define _ASM_POWERPC_PGALLOC_32_H
++
++#include <linux/threads.h>
++
++extern void __bad_pte(pmd_t *pmd);
++
++extern pgd_t *pgd_alloc(struct mm_struct *mm);
++extern void pgd_free(pgd_t *pgd);
++
++/*
++ * We don't have any real pmd's, and this code never triggers because
++ * the pgd will always be present..
++ */
++#define pmd_alloc_one(mm,address)       ({ BUG(); ((pmd_t *)2); })
++#define pmd_free(x)                     do { } while (0)
++#define __pmd_free_tlb(tlb,x)		do { } while (0)
++#define pgd_populate(mm, pmd, pte)      BUG()
++
++#ifndef CONFIG_BOOKE
++#define pmd_populate_kernel(mm, pmd, pte)	\
++		(pmd_val(*(pmd)) = __pa(pte) | _PMD_PRESENT)
++#define pmd_populate(mm, pmd, pte)	\
++		(pmd_val(*(pmd)) = (page_to_pfn(pte) << PAGE_SHIFT) | _PMD_PRESENT)
++#else
++#define pmd_populate_kernel(mm, pmd, pte)	\
++		(pmd_val(*(pmd)) = (unsigned long)pte | _PMD_PRESENT)
++#define pmd_populate(mm, pmd, pte)	\
++		(pmd_val(*(pmd)) = (unsigned long)lowmem_page_address(pte) | _PMD_PRESENT)
++#endif
++
++extern pte_t *pte_alloc_one_kernel(struct mm_struct *mm, unsigned long addr);
++extern struct page *pte_alloc_one(struct mm_struct *mm, unsigned long addr);
++extern void pte_free_kernel(pte_t *pte);
++extern void pte_free(struct page *pte);
++
++#define __pte_free_tlb(tlb, pte)	pte_free((pte))
++
++#define check_pgt_cache()	do { } while (0)
++
++#endif /* _ASM_POWERPC_PGALLOC_32_H */
+Index: linux-2.6.18/include/asm-powerpc/pgalloc-64.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-powerpc/pgalloc-64.h
+@@ -0,0 +1,152 @@
++#ifndef _ASM_POWERPC_PGALLOC_64_H
++#define _ASM_POWERPC_PGALLOC_64_H
++/*
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */
++
++#include <linux/mm.h>
++#include <linux/slab.h>
++#include <linux/cpumask.h>
++#include <linux/percpu.h>
++
++extern kmem_cache_t *pgtable_cache[];
++
++#ifdef CONFIG_PPC_64K_PAGES
++#define PTE_CACHE_NUM	0
++#define PMD_CACHE_NUM	1
++#define PGD_CACHE_NUM	2
++#define HUGEPTE_CACHE_NUM 3
++#else
++#define PTE_CACHE_NUM	0
++#define PMD_CACHE_NUM	1
++#define PUD_CACHE_NUM	1
++#define PGD_CACHE_NUM	0
++#define HUGEPTE_CACHE_NUM 2
++#endif
++
++static inline pgd_t *pgd_alloc(struct mm_struct *mm)
++{
++	return kmem_cache_alloc(pgtable_cache[PGD_CACHE_NUM], GFP_KERNEL);
++}
++
++static inline void pgd_free(pgd_t *pgd)
++{
++	kmem_cache_free(pgtable_cache[PGD_CACHE_NUM], pgd);
++}
++
++#ifndef CONFIG_PPC_64K_PAGES
++
++#define pgd_populate(MM, PGD, PUD)	pgd_set(PGD, PUD)
++
++static inline pud_t *pud_alloc_one(struct mm_struct *mm, unsigned long addr)
++{
++	return kmem_cache_alloc(pgtable_cache[PUD_CACHE_NUM],
++				GFP_KERNEL|__GFP_REPEAT);
++}
++
++static inline void pud_free(pud_t *pud)
++{
++	kmem_cache_free(pgtable_cache[PUD_CACHE_NUM], pud);
++}
++
++static inline void pud_populate(struct mm_struct *mm, pud_t *pud, pmd_t *pmd)
++{
++	pud_set(pud, (unsigned long)pmd);
++}
++
++#define pmd_populate(mm, pmd, pte_page) \
++	pmd_populate_kernel(mm, pmd, page_address(pte_page))
++#define pmd_populate_kernel(mm, pmd, pte) pmd_set(pmd, (unsigned long)(pte))
++
++
++#else /* CONFIG_PPC_64K_PAGES */
++
++#define pud_populate(mm, pud, pmd)	pud_set(pud, (unsigned long)pmd)
++
++static inline void pmd_populate_kernel(struct mm_struct *mm, pmd_t *pmd,
++				       pte_t *pte)
++{
++	pmd_set(pmd, (unsigned long)pte);
++}
++
++#define pmd_populate(mm, pmd, pte_page) \
++	pmd_populate_kernel(mm, pmd, page_address(pte_page))
++
++#endif /* CONFIG_PPC_64K_PAGES */
++
++static inline pmd_t *pmd_alloc_one(struct mm_struct *mm, unsigned long addr)
++{
++	return kmem_cache_alloc(pgtable_cache[PMD_CACHE_NUM],
++				GFP_KERNEL|__GFP_REPEAT);
++}
++
++static inline void pmd_free(pmd_t *pmd)
++{
++	kmem_cache_free(pgtable_cache[PMD_CACHE_NUM], pmd);
++}
++
++static inline pte_t *pte_alloc_one_kernel(struct mm_struct *mm,
++					  unsigned long address)
++{
++	return kmem_cache_alloc(pgtable_cache[PTE_CACHE_NUM],
++				GFP_KERNEL|__GFP_REPEAT);
++}
++
++static inline struct page *pte_alloc_one(struct mm_struct *mm,
++					 unsigned long address)
++{
++	return virt_to_page(pte_alloc_one_kernel(mm, address));
++}
++
++static inline void pte_free_kernel(pte_t *pte)
++{
++	kmem_cache_free(pgtable_cache[PTE_CACHE_NUM], pte);
++}
++
++static inline void pte_free(struct page *ptepage)
++{
++	pte_free_kernel(page_address(ptepage));
++}
++
++#define PGF_CACHENUM_MASK	0x3
++
++typedef struct pgtable_free {
++	unsigned long val;
++} pgtable_free_t;
++
++static inline pgtable_free_t pgtable_free_cache(void *p, int cachenum,
++						unsigned long mask)
++{
++	BUG_ON(cachenum > PGF_CACHENUM_MASK);
++
++	return (pgtable_free_t){.val = ((unsigned long) p & ~mask) | cachenum};
++}
++
++static inline void pgtable_free(pgtable_free_t pgf)
++{
++	void *p = (void *)(pgf.val & ~PGF_CACHENUM_MASK);
++	int cachenum = pgf.val & PGF_CACHENUM_MASK;
++
++	kmem_cache_free(pgtable_cache[cachenum], p);
++}
++
++extern void pgtable_free_tlb(struct mmu_gather *tlb, pgtable_free_t pgf);
++
++#define __pte_free_tlb(tlb, ptepage)	\
++	pgtable_free_tlb(tlb, pgtable_free_cache(page_address(ptepage), \
++		PTE_CACHE_NUM, PTE_TABLE_SIZE-1))
++#define __pmd_free_tlb(tlb, pmd) 	\
++	pgtable_free_tlb(tlb, pgtable_free_cache(pmd, \
++		PMD_CACHE_NUM, PMD_TABLE_SIZE-1))
++#ifndef CONFIG_PPC_64K_PAGES
++#define __pud_free_tlb(tlb, pud)	\
++	pgtable_free_tlb(tlb, pgtable_free_cache(pud, \
++		PUD_CACHE_NUM, PUD_TABLE_SIZE-1))
++#endif /* CONFIG_PPC_64K_PAGES */
++
++#define check_pgt_cache()	do { } while (0)
++
++#endif /* _ASM_POWERPC_PGALLOC_64_H */
+Index: linux-2.6.18/include/asm-powerpc/pgalloc.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pgalloc.h
++++ linux-2.6.18/include/asm-powerpc/pgalloc.h
+@@ -2,159 +2,11 @@
+ #define _ASM_POWERPC_PGALLOC_H
+ #ifdef __KERNEL__
+ 
+-#ifndef CONFIG_PPC64
+-#include <asm-ppc/pgalloc.h>
++#ifdef CONFIG_PPC64
++#include <asm/pgalloc-64.h>
+ #else
+-
+-#include <linux/mm.h>
+-#include <linux/slab.h>
+-#include <linux/cpumask.h>
+-#include <linux/percpu.h>
+-
+-extern kmem_cache_t *pgtable_cache[];
+-
+-#ifdef CONFIG_PPC_64K_PAGES
+-#define PTE_CACHE_NUM	0
+-#define PMD_CACHE_NUM	1
+-#define PGD_CACHE_NUM	2
+-#define HUGEPTE_CACHE_NUM 3
+-#else
+-#define PTE_CACHE_NUM	0
+-#define PMD_CACHE_NUM	1
+-#define PUD_CACHE_NUM	1
+-#define PGD_CACHE_NUM	0
+-#define HUGEPTE_CACHE_NUM 2
++#include <asm/pgalloc-32.h>
+ #endif
+ 
+-/*
+- * This program is free software; you can redistribute it and/or
+- * modify it under the terms of the GNU General Public License
+- * as published by the Free Software Foundation; either version
+- * 2 of the License, or (at your option) any later version.
+- */
+-
+-static inline pgd_t *pgd_alloc(struct mm_struct *mm)
+-{
+-	return kmem_cache_alloc(pgtable_cache[PGD_CACHE_NUM], GFP_KERNEL);
+-}
+-
+-static inline void pgd_free(pgd_t *pgd)
+-{
+-	kmem_cache_free(pgtable_cache[PGD_CACHE_NUM], pgd);
+-}
+-
+-#ifndef CONFIG_PPC_64K_PAGES
+-
+-#define pgd_populate(MM, PGD, PUD)	pgd_set(PGD, PUD)
+-
+-static inline pud_t *pud_alloc_one(struct mm_struct *mm, unsigned long addr)
+-{
+-	return kmem_cache_alloc(pgtable_cache[PUD_CACHE_NUM],
+-				GFP_KERNEL|__GFP_REPEAT);
+-}
+-
+-static inline void pud_free(pud_t *pud)
+-{
+-	kmem_cache_free(pgtable_cache[PUD_CACHE_NUM], pud);
+-}
+-
+-static inline void pud_populate(struct mm_struct *mm, pud_t *pud, pmd_t *pmd)
+-{
+-	pud_set(pud, (unsigned long)pmd);
+-}
+-
+-#define pmd_populate(mm, pmd, pte_page) \
+-	pmd_populate_kernel(mm, pmd, page_address(pte_page))
+-#define pmd_populate_kernel(mm, pmd, pte) pmd_set(pmd, (unsigned long)(pte))
+-
+-
+-#else /* CONFIG_PPC_64K_PAGES */
+-
+-#define pud_populate(mm, pud, pmd)	pud_set(pud, (unsigned long)pmd)
+-
+-static inline void pmd_populate_kernel(struct mm_struct *mm, pmd_t *pmd,
+-				       pte_t *pte)
+-{
+-	pmd_set(pmd, (unsigned long)pte);
+-}
+-
+-#define pmd_populate(mm, pmd, pte_page) \
+-	pmd_populate_kernel(mm, pmd, page_address(pte_page))
+-
+-#endif /* CONFIG_PPC_64K_PAGES */
+-
+-static inline pmd_t *pmd_alloc_one(struct mm_struct *mm, unsigned long addr)
+-{
+-	return kmem_cache_alloc(pgtable_cache[PMD_CACHE_NUM],
+-				GFP_KERNEL|__GFP_REPEAT);
+-}
+-
+-static inline void pmd_free(pmd_t *pmd)
+-{
+-	kmem_cache_free(pgtable_cache[PMD_CACHE_NUM], pmd);
+-}
+-
+-static inline pte_t *pte_alloc_one_kernel(struct mm_struct *mm,
+-					  unsigned long address)
+-{
+-	return kmem_cache_alloc(pgtable_cache[PTE_CACHE_NUM],
+-				GFP_KERNEL|__GFP_REPEAT);
+-}
+-
+-static inline struct page *pte_alloc_one(struct mm_struct *mm,
+-					 unsigned long address)
+-{
+-	return virt_to_page(pte_alloc_one_kernel(mm, address));
+-}
+-		
+-static inline void pte_free_kernel(pte_t *pte)
+-{
+-	kmem_cache_free(pgtable_cache[PTE_CACHE_NUM], pte);
+-}
+-
+-static inline void pte_free(struct page *ptepage)
+-{
+-	pte_free_kernel(page_address(ptepage));
+-}
+-
+-#define PGF_CACHENUM_MASK	0x3
+-
+-typedef struct pgtable_free {
+-	unsigned long val;
+-} pgtable_free_t;
+-
+-static inline pgtable_free_t pgtable_free_cache(void *p, int cachenum,
+-						unsigned long mask)
+-{
+-	BUG_ON(cachenum > PGF_CACHENUM_MASK);
+-
+-	return (pgtable_free_t){.val = ((unsigned long) p & ~mask) | cachenum};
+-}
+-
+-static inline void pgtable_free(pgtable_free_t pgf)
+-{
+-	void *p = (void *)(pgf.val & ~PGF_CACHENUM_MASK);
+-	int cachenum = pgf.val & PGF_CACHENUM_MASK;
+-
+-	kmem_cache_free(pgtable_cache[cachenum], p);
+-}
+-
+-extern void pgtable_free_tlb(struct mmu_gather *tlb, pgtable_free_t pgf);
+-
+-#define __pte_free_tlb(tlb, ptepage)	\
+-	pgtable_free_tlb(tlb, pgtable_free_cache(page_address(ptepage), \
+-		PTE_CACHE_NUM, PTE_TABLE_SIZE-1))
+-#define __pmd_free_tlb(tlb, pmd) 	\
+-	pgtable_free_tlb(tlb, pgtable_free_cache(pmd, \
+-		PMD_CACHE_NUM, PMD_TABLE_SIZE-1))
+-#ifndef CONFIG_PPC_64K_PAGES
+-#define __pud_free_tlb(tlb, pud)	\
+-	pgtable_free_tlb(tlb, pgtable_free_cache(pud, \
+-		PUD_CACHE_NUM, PUD_TABLE_SIZE-1))
+-#endif /* CONFIG_PPC_64K_PAGES */
+-
+-#define check_pgt_cache()	do { } while (0)
+-
+-#endif /* CONFIG_PPC64 */
+ #endif /* __KERNEL__ */
+ #endif /* _ASM_POWERPC_PGALLOC_H */
+Index: linux-2.6.18/include/asm-powerpc/pgtable-4k.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pgtable-4k.h
++++ linux-2.6.18/include/asm-powerpc/pgtable-4k.h
+@@ -1,3 +1,5 @@
++#ifndef _ASM_POWERPC_PGTABLE_4K_H
++#define _ASM_POWERPC_PGTABLE_4K_H
+ /*
+  * Entries per page directory level.  The PTE level must use a 64b record
+  * for each page table entry.  The PMD and PGD level use a 32b record for
+@@ -97,3 +99,4 @@
+ 
+ #define pud_ERROR(e) \
+ 	printk("%s:%d: bad pud %08lx.\n", __FILE__, __LINE__, pud_val(e))
++#endif /* _ASM_POWERPC_PGTABLE_4K_H */
+Index: linux-2.6.18/include/asm-powerpc/pgtable-64k.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pgtable-64k.h
++++ linux-2.6.18/include/asm-powerpc/pgtable-64k.h
+@@ -1,6 +1,5 @@
+ #ifndef _ASM_POWERPC_PGTABLE_64K_H
+ #define _ASM_POWERPC_PGTABLE_64K_H
+-#ifdef __KERNEL__
+ 
+ #include <asm-generic/pgtable-nopud.h>
+ 
+@@ -64,8 +63,6 @@
+ /* Bits to mask out from a PGD/PUD to get to the PMD page */
+ #define PUD_MASKED_BITS		0x1ff
+ 
+-#ifndef __ASSEMBLY__
+-
+ /* Manipulate "rpte" values */
+ #define __real_pte(e,p) 	((real_pte_t) { \
+ 	(e), pte_val(*((p) + PTRS_PER_PTE)) })
+@@ -93,6 +90,4 @@
+ #define pte_pagesize_index(pte)	\
+ 	(((pte) & _PAGE_COMBO)? MMU_PAGE_4K: MMU_PAGE_64K)
+ 
+-#endif /*  __ASSEMBLY__ */
+-#endif /* __KERNEL__ */
+ #endif /* _ASM_POWERPC_PGTABLE_64K_H */
+Index: linux-2.6.18/include/asm-powerpc/pgtable-ppc32.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-powerpc/pgtable-ppc32.h
+@@ -0,0 +1,838 @@
++#ifndef _ASM_POWERPC_PGTABLE_PPC32_H
++#define _ASM_POWERPC_PGTABLE_PPC32_H
++
++#include <asm-generic/4level-fixup.h>
++
++#ifndef __ASSEMBLY__
++#include <linux/sched.h>
++#include <linux/threads.h>
++#include <asm/processor.h>		/* For TASK_SIZE */
++#include <asm/mmu.h>
++#include <asm/page.h>
++#include <asm/io.h>			/* For sub-arch specific PPC_PIN_SIZE */
++struct mm_struct;
++
++extern unsigned long va_to_phys(unsigned long address);
++extern pte_t *va_to_pte(unsigned long address);
++extern unsigned long ioremap_bot, ioremap_base;
++#endif /* __ASSEMBLY__ */
++
++/*
++ * The PowerPC MMU uses a hash table containing PTEs, together with
++ * a set of 16 segment registers (on 32-bit implementations), to define
++ * the virtual to physical address mapping.
++ *
++ * We use the hash table as an extended TLB, i.e. a cache of currently
++ * active mappings.  We maintain a two-level page table tree, much
++ * like that used by the i386, for the sake of the Linux memory
++ * management code.  Low-level assembler code in hashtable.S
++ * (procedure hash_page) is responsible for extracting ptes from the
++ * tree and putting them into the hash table when necessary, and
++ * updating the accessed and modified bits in the page table tree.
++ */
++
++/*
++ * The PowerPC MPC8xx uses a TLB with hardware assisted, software tablewalk.
++ * We also use the two level tables, but we can put the real bits in them
++ * needed for the TLB and tablewalk.  These definitions require Mx_CTR.PPM = 0,
++ * Mx_CTR.PPCS = 0, and MD_CTR.TWAM = 1.  The level 2 descriptor has
++ * additional page protection (when Mx_CTR.PPCS = 1) that allows TLB hit
++ * based upon user/super access.  The TLB does not have accessed nor write
++ * protect.  We assume that if the TLB get loaded with an entry it is
++ * accessed, and overload the changed bit for write protect.  We use
++ * two bits in the software pte that are supposed to be set to zero in
++ * the TLB entry (24 and 25) for these indicators.  Although the level 1
++ * descriptor contains the guarded and writethrough/copyback bits, we can
++ * set these at the page level since they get copied from the Mx_TWC
++ * register when the TLB entry is loaded.  We will use bit 27 for guard, since
++ * that is where it exists in the MD_TWC, and bit 26 for writethrough.
++ * These will get masked from the level 2 descriptor at TLB load time, and
++ * copied to the MD_TWC before it gets loaded.
++ * Large page sizes added.  We currently support two sizes, 4K and 8M.
++ * This also allows a TLB hander optimization because we can directly
++ * load the PMD into MD_TWC.  The 8M pages are only used for kernel
++ * mapping of well known areas.  The PMD (PGD) entries contain control
++ * flags in addition to the address, so care must be taken that the
++ * software no longer assumes these are only pointers.
++ */
++
++/*
++ * At present, all PowerPC 400-class processors share a similar TLB
++ * architecture. The instruction and data sides share a unified,
++ * 64-entry, fully-associative TLB which is maintained totally under
++ * software control. In addition, the instruction side has a
++ * hardware-managed, 4-entry, fully-associative TLB which serves as a
++ * first level to the shared TLB. These two TLBs are known as the UTLB
++ * and ITLB, respectively (see "mmu.h" for definitions).
++ */
++
++/*
++ * The normal case is that PTEs are 32-bits and we have a 1-page
++ * 1024-entry pgdir pointing to 1-page 1024-entry PTE pages.  -- paulus
++ *
++ * For any >32-bit physical address platform, we can use the following
++ * two level page table layout where the pgdir is 8KB and the MS 13 bits
++ * are an index to the second level table.  The combined pgdir/pmd first
++ * level has 2048 entries and the second level has 512 64-bit PTE entries.
++ * -Matt
++ */
++/* PMD_SHIFT determines the size of the area mapped by the PTE pages */
++#define PMD_SHIFT	(PAGE_SHIFT + PTE_SHIFT)
++#define PMD_SIZE	(1UL << PMD_SHIFT)
++#define PMD_MASK	(~(PMD_SIZE-1))
++
++/* PGDIR_SHIFT determines what a top-level page table entry can map */
++#define PGDIR_SHIFT	PMD_SHIFT
++#define PGDIR_SIZE	(1UL << PGDIR_SHIFT)
++#define PGDIR_MASK	(~(PGDIR_SIZE-1))
++
++/*
++ * entries per page directory level: our page-table tree is two-level, so
++ * we don't really have any PMD directory.
++ */
++#define PTRS_PER_PTE	(1 << PTE_SHIFT)
++#define PTRS_PER_PMD	1
++#define PTRS_PER_PGD	(1 << (32 - PGDIR_SHIFT))
++
++#define USER_PTRS_PER_PGD	(TASK_SIZE / PGDIR_SIZE)
++#define FIRST_USER_ADDRESS	0
++
++#define USER_PGD_PTRS (PAGE_OFFSET >> PGDIR_SHIFT)
++#define KERNEL_PGD_PTRS (PTRS_PER_PGD-USER_PGD_PTRS)
++
++#define pte_ERROR(e) \
++	printk("%s:%d: bad pte "PTE_FMT".\n", __FILE__, __LINE__, pte_val(e))
++#define pmd_ERROR(e) \
++	printk("%s:%d: bad pmd %08lx.\n", __FILE__, __LINE__, pmd_val(e))
++#define pgd_ERROR(e) \
++	printk("%s:%d: bad pgd %08lx.\n", __FILE__, __LINE__, pgd_val(e))
++
++/*
++ * Just any arbitrary offset to the start of the vmalloc VM area: the
++ * current 64MB value just means that there will be a 64MB "hole" after the
++ * physical memory until the kernel virtual memory starts.  That means that
++ * any out-of-bounds memory accesses will hopefully be caught.
++ * The vmalloc() routines leaves a hole of 4kB between each vmalloced
++ * area for the same reason. ;)
++ *
++ * We no longer map larger than phys RAM with the BATs so we don't have
++ * to worry about the VMALLOC_OFFSET causing problems.  We do have to worry
++ * about clashes between our early calls to ioremap() that start growing down
++ * from ioremap_base being run into the VM area allocations (growing upwards
++ * from VMALLOC_START).  For this reason we have ioremap_bot to check when
++ * we actually run into our mappings setup in the early boot with the VM
++ * system.  This really does become a problem for machines with good amounts
++ * of RAM.  -- Cort
++ */
++#define VMALLOC_OFFSET (0x1000000) /* 16M */
++#ifdef PPC_PIN_SIZE
++#define VMALLOC_START (((_ALIGN((long)high_memory, PPC_PIN_SIZE) + VMALLOC_OFFSET) & ~(VMALLOC_OFFSET-1)))
++#else
++#define VMALLOC_START ((((long)high_memory + VMALLOC_OFFSET) & ~(VMALLOC_OFFSET-1)))
++#endif
++#define VMALLOC_END	ioremap_bot
++
++/*
++ * Bits in a linux-style PTE.  These match the bits in the
++ * (hardware-defined) PowerPC PTE as closely as possible.
++ */
++
++#if defined(CONFIG_40x)
++
++/* There are several potential gotchas here.  The 40x hardware TLBLO
++   field looks like this:
++
++   0  1  2  3  4  ... 18 19 20 21 22 23 24 25 26 27 28 29 30 31
++   RPN.....................  0  0 EX WR ZSEL.......  W  I  M  G
++
++   Where possible we make the Linux PTE bits match up with this
++
++   - bits 20 and 21 must be cleared, because we use 4k pages (40x can
++     support down to 1k pages), this is done in the TLBMiss exception
++     handler.
++   - We use only zones 0 (for kernel pages) and 1 (for user pages)
++     of the 16 available.  Bit 24-26 of the TLB are cleared in the TLB
++     miss handler.  Bit 27 is PAGE_USER, thus selecting the correct
++     zone.
++   - PRESENT *must* be in the bottom two bits because swap cache
++     entries use the top 30 bits.  Because 40x doesn't support SMP
++     anyway, M is irrelevant so we borrow it for PAGE_PRESENT.  Bit 30
++     is cleared in the TLB miss handler before the TLB entry is loaded.
++   - All other bits of the PTE are loaded into TLBLO without
++     modification, leaving us only the bits 20, 21, 24, 25, 26, 30 for
++     software PTE bits.  We actually use use bits 21, 24, 25, and
++     30 respectively for the software bits: ACCESSED, DIRTY, RW, and
++     PRESENT.
++*/
++
++/* Definitions for 40x embedded chips. */
++#define	_PAGE_GUARDED	0x001	/* G: page is guarded from prefetch */
++#define _PAGE_FILE	0x001	/* when !present: nonlinear file mapping */
++#define _PAGE_PRESENT	0x002	/* software: PTE contains a translation */
++#define	_PAGE_NO_CACHE	0x004	/* I: caching is inhibited */
++#define	_PAGE_WRITETHRU	0x008	/* W: caching is write-through */
++#define	_PAGE_USER	0x010	/* matches one of the zone permission bits */
++#define	_PAGE_RW	0x040	/* software: Writes permitted */
++#define	_PAGE_DIRTY	0x080	/* software: dirty page */
++#define _PAGE_HWWRITE	0x100	/* hardware: Dirty & RW, set in exception */
++#define _PAGE_HWEXEC	0x200	/* hardware: EX permission */
++#define _PAGE_ACCESSED	0x400	/* software: R: page referenced */
++
++#define _PMD_PRESENT	0x400	/* PMD points to page of PTEs */
++#define _PMD_BAD	0x802
++#define _PMD_SIZE	0x0e0	/* size field, != 0 for large-page PMD entry */
++#define _PMD_SIZE_4M	0x0c0
++#define _PMD_SIZE_16M	0x0e0
++#define PMD_PAGE_SIZE(pmdval)	(1024 << (((pmdval) & _PMD_SIZE) >> 4))
++
++#elif defined(CONFIG_44x)
++/*
++ * Definitions for PPC440
++ *
++ * Because of the 3 word TLB entries to support 36-bit addressing,
++ * the attribute are difficult to map in such a fashion that they
++ * are easily loaded during exception processing.  I decided to
++ * organize the entry so the ERPN is the only portion in the
++ * upper word of the PTE and the attribute bits below are packed
++ * in as sensibly as they can be in the area below a 4KB page size
++ * oriented RPN.  This at least makes it easy to load the RPN and
++ * ERPN fields in the TLB. -Matt
++ *
++ * Note that these bits preclude future use of a page size
++ * less than 4KB.
++ *
++ *
++ * PPC 440 core has following TLB attribute fields;
++ *
++ *   TLB1:
++ *   0  1  2  3  4  ... 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
++ *   RPN.................................  -  -  -  -  -  - ERPN.......
++ *
++ *   TLB2:
++ *   0  1  2  3  4  ... 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
++ *   -  -  -  -  -    - U0 U1 U2 U3 W  I  M  G  E   - UX UW UR SX SW SR
++ *
++ * There are some constrains and options, to decide mapping software bits
++ * into TLB entry.
++ *
++ *   - PRESENT *must* be in the bottom three bits because swap cache
++ *     entries use the top 29 bits for TLB2.
++ *
++ *   - FILE *must* be in the bottom three bits because swap cache
++ *     entries use the top 29 bits for TLB2.
++ *
++ *   - CACHE COHERENT bit (M) has no effect on PPC440 core, because it
++ *     doesn't support SMP. So we can use this as software bit, like
++ *     DIRTY.
++ *
++ * With the PPC 44x Linux implementation, the 0-11th LSBs of the PTE are used
++ * for memory protection related functions (see PTE structure in
++ * include/asm-ppc/mmu.h).  The _PAGE_XXX definitions in this file map to the
++ * above bits.  Note that the bit values are CPU specific, not architecture
++ * specific.
++ *
++ * The kernel PTE entry holds an arch-dependent swp_entry structure under
++ * certain situations. In other words, in such situations some portion of
++ * the PTE bits are used as a swp_entry. In the PPC implementation, the
++ * 3-24th LSB are shared with swp_entry, however the 0-2nd three LSB still
++ * hold protection values. That means the three protection bits are
++ * reserved for both PTE and SWAP entry at the most significant three
++ * LSBs.
++ *
++ * There are three protection bits available for SWAP entry:
++ *	_PAGE_PRESENT
++ *	_PAGE_FILE
++ *	_PAGE_HASHPTE (if HW has)
++ *
++ * So those three bits have to be inside of 0-2nd LSB of PTE.
++ *
++ */
++
++#define _PAGE_PRESENT	0x00000001		/* S: PTE valid */
++#define	_PAGE_RW	0x00000002		/* S: Write permission */
++#define _PAGE_FILE	0x00000004		/* S: nonlinear file mapping */
++#define _PAGE_ACCESSED	0x00000008		/* S: Page referenced */
++#define _PAGE_HWWRITE	0x00000010		/* H: Dirty & RW */
++#define _PAGE_HWEXEC	0x00000020		/* H: Execute permission */
++#define	_PAGE_USER	0x00000040		/* S: User page */
++#define	_PAGE_ENDIAN	0x00000080		/* H: E bit */
++#define	_PAGE_GUARDED	0x00000100		/* H: G bit */
++#define	_PAGE_DIRTY	0x00000200		/* S: Page dirty */
++#define	_PAGE_NO_CACHE	0x00000400		/* H: I bit */
++#define	_PAGE_WRITETHRU	0x00000800		/* H: W bit */
++
++/* TODO: Add large page lowmem mapping support */
++#define _PMD_PRESENT	0
++#define _PMD_PRESENT_MASK (PAGE_MASK)
++#define _PMD_BAD	(~PAGE_MASK)
++
++/* ERPN in a PTE never gets cleared, ignore it */
++#define _PTE_NONE_MASK	0xffffffff00000000ULL
++
++#elif defined(CONFIG_FSL_BOOKE)
++/*
++   MMU Assist Register 3:
++
++   32 33 34 35 36  ... 50 51 52 53 54 55 56 57 58 59 60 61 62 63
++   RPN......................  0  0 U0 U1 U2 U3 UX SX UW SW UR SR
++
++   - PRESENT *must* be in the bottom three bits because swap cache
++     entries use the top 29 bits.
++
++   - FILE *must* be in the bottom three bits because swap cache
++     entries use the top 29 bits.
++*/
++
++/* Definitions for FSL Book-E Cores */
++#define _PAGE_PRESENT	0x00001	/* S: PTE contains a translation */
++#define _PAGE_USER	0x00002	/* S: User page (maps to UR) */
++#define _PAGE_FILE	0x00002	/* S: when !present: nonlinear file mapping */
++#define _PAGE_ACCESSED	0x00004	/* S: Page referenced */
++#define _PAGE_HWWRITE	0x00008	/* H: Dirty & RW, set in exception */
++#define _PAGE_RW	0x00010	/* S: Write permission */
++#define _PAGE_HWEXEC	0x00020	/* H: UX permission */
++
++#define _PAGE_ENDIAN	0x00040	/* H: E bit */
++#define _PAGE_GUARDED	0x00080	/* H: G bit */
++#define _PAGE_COHERENT	0x00100	/* H: M bit */
++#define _PAGE_NO_CACHE	0x00200	/* H: I bit */
++#define _PAGE_WRITETHRU	0x00400	/* H: W bit */
++
++#ifdef CONFIG_PTE_64BIT
++#define _PAGE_DIRTY	0x08000	/* S: Page dirty */
++
++/* ERPN in a PTE never gets cleared, ignore it */
++#define _PTE_NONE_MASK	0xffffffffffff0000ULL
++#else
++#define _PAGE_DIRTY	0x00800	/* S: Page dirty */
++#endif
++
++#define _PMD_PRESENT	0
++#define _PMD_PRESENT_MASK (PAGE_MASK)
++#define _PMD_BAD	(~PAGE_MASK)
++
++#elif defined(CONFIG_8xx)
++/* Definitions for 8xx embedded chips. */
++#define _PAGE_PRESENT	0x0001	/* Page is valid */
++#define _PAGE_FILE	0x0002	/* when !present: nonlinear file mapping */
++#define _PAGE_NO_CACHE	0x0002	/* I: cache inhibit */
++#define _PAGE_SHARED	0x0004	/* No ASID (context) compare */
++
++/* These five software bits must be masked out when the entry is loaded
++ * into the TLB.
++ */
++#define _PAGE_EXEC	0x0008	/* software: i-cache coherency required */
++#define _PAGE_GUARDED	0x0010	/* software: guarded access */
++#define _PAGE_DIRTY	0x0020	/* software: page changed */
++#define _PAGE_RW	0x0040	/* software: user write access allowed */
++#define _PAGE_ACCESSED	0x0080	/* software: page referenced */
++
++/* Setting any bits in the nibble with the follow two controls will
++ * require a TLB exception handler change.  It is assumed unused bits
++ * are always zero.
++ */
++#define _PAGE_HWWRITE	0x0100	/* h/w write enable: never set in Linux PTE */
++#define _PAGE_USER	0x0800	/* One of the PP bits, the other is USER&~RW */
++
++#define _PMD_PRESENT	0x0001
++#define _PMD_BAD	0x0ff0
++#define _PMD_PAGE_MASK	0x000c
++#define _PMD_PAGE_8M	0x000c
++
++/*
++ * The 8xx TLB miss handler allegedly sets _PAGE_ACCESSED in the PTE
++ * for an address even if _PAGE_PRESENT is not set, as a performance
++ * optimization.  This is a bug if you ever want to use swap unless
++ * _PAGE_ACCESSED is 2, which it isn't, or unless you have 8xx-specific
++ * definitions for __swp_entry etc. below, which would be gross.
++ *  -- paulus
++ */
++#define _PTE_NONE_MASK _PAGE_ACCESSED
++
++#else /* CONFIG_6xx */
++/* Definitions for 60x, 740/750, etc. */
++#define _PAGE_PRESENT	0x001	/* software: pte contains a translation */
++#define _PAGE_HASHPTE	0x002	/* hash_page has made an HPTE for this pte */
++#define _PAGE_FILE	0x004	/* when !present: nonlinear file mapping */
++#define _PAGE_USER	0x004	/* usermode access allowed */
++#define _PAGE_GUARDED	0x008	/* G: prohibit speculative access */
++#define _PAGE_COHERENT	0x010	/* M: enforce memory coherence (SMP systems) */
++#define _PAGE_NO_CACHE	0x020	/* I: cache inhibit */
++#define _PAGE_WRITETHRU	0x040	/* W: cache write-through */
++#define _PAGE_DIRTY	0x080	/* C: page changed */
++#define _PAGE_ACCESSED	0x100	/* R: page referenced */
++#define _PAGE_EXEC	0x200	/* software: i-cache coherency required */
++#define _PAGE_RW	0x400	/* software: user write access allowed */
++
++#define _PTE_NONE_MASK	_PAGE_HASHPTE
++
++#define _PMD_PRESENT	0
++#define _PMD_PRESENT_MASK (PAGE_MASK)
++#define _PMD_BAD	(~PAGE_MASK)
++#endif
++
++/*
++ * Some bits are only used on some cpu families...
++ */
++#ifndef _PAGE_HASHPTE
++#define _PAGE_HASHPTE	0
++#endif
++#ifndef _PTE_NONE_MASK
++#define _PTE_NONE_MASK 0
++#endif
++#ifndef _PAGE_SHARED
++#define _PAGE_SHARED	0
++#endif
++#ifndef _PAGE_HWWRITE
++#define _PAGE_HWWRITE	0
++#endif
++#ifndef _PAGE_HWEXEC
++#define _PAGE_HWEXEC	0
++#endif
++#ifndef _PAGE_EXEC
++#define _PAGE_EXEC	0
++#endif
++#ifndef _PMD_PRESENT_MASK
++#define _PMD_PRESENT_MASK	_PMD_PRESENT
++#endif
++#ifndef _PMD_SIZE
++#define _PMD_SIZE	0
++#define PMD_PAGE_SIZE(pmd)	bad_call_to_PMD_PAGE_SIZE()
++#endif
++
++#define _PAGE_CHG_MASK	(PAGE_MASK | _PAGE_ACCESSED | _PAGE_DIRTY)
++
++/*
++ * Note: the _PAGE_COHERENT bit automatically gets set in the hardware
++ * PTE if CONFIG_SMP is defined (hash_page does this); there is no need
++ * to have it in the Linux PTE, and in fact the bit could be reused for
++ * another purpose.  -- paulus.
++ */
++
++#ifdef CONFIG_44x
++#define _PAGE_BASE	(_PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_GUARDED)
++#else
++#define _PAGE_BASE	(_PAGE_PRESENT | _PAGE_ACCESSED)
++#endif
++#define _PAGE_WRENABLE	(_PAGE_RW | _PAGE_DIRTY | _PAGE_HWWRITE)
++#define _PAGE_KERNEL	(_PAGE_BASE | _PAGE_SHARED | _PAGE_WRENABLE)
++
++#ifdef CONFIG_PPC_STD_MMU
++/* On standard PPC MMU, no user access implies kernel read/write access,
++ * so to write-protect kernel memory we must turn on user access */
++#define _PAGE_KERNEL_RO	(_PAGE_BASE | _PAGE_SHARED | _PAGE_USER)
++#else
++#define _PAGE_KERNEL_RO	(_PAGE_BASE | _PAGE_SHARED)
++#endif
++
++#define _PAGE_IO	(_PAGE_KERNEL | _PAGE_NO_CACHE | _PAGE_GUARDED)
++#define _PAGE_RAM	(_PAGE_KERNEL | _PAGE_HWEXEC)
++
++#if defined(CONFIG_KGDB) || defined(CONFIG_XMON) || defined(CONFIG_BDI_SWITCH)
++/* We want the debuggers to be able to set breakpoints anywhere, so
++ * don't write protect the kernel text */
++#define _PAGE_RAM_TEXT	_PAGE_RAM
++#else
++#define _PAGE_RAM_TEXT	(_PAGE_KERNEL_RO | _PAGE_HWEXEC)
++#endif
++
++#define PAGE_NONE	__pgprot(_PAGE_BASE)
++#define PAGE_READONLY	__pgprot(_PAGE_BASE | _PAGE_USER)
++#define PAGE_READONLY_X	__pgprot(_PAGE_BASE | _PAGE_USER | _PAGE_EXEC)
++#define PAGE_SHARED	__pgprot(_PAGE_BASE | _PAGE_USER | _PAGE_RW)
++#define PAGE_SHARED_X	__pgprot(_PAGE_BASE | _PAGE_USER | _PAGE_RW | _PAGE_EXEC)
++#define PAGE_COPY	__pgprot(_PAGE_BASE | _PAGE_USER)
++#define PAGE_COPY_X	__pgprot(_PAGE_BASE | _PAGE_USER | _PAGE_EXEC)
++
++#define PAGE_KERNEL		__pgprot(_PAGE_RAM)
++#define PAGE_KERNEL_NOCACHE	__pgprot(_PAGE_IO)
++
++/*
++ * The PowerPC can only do execute protection on a segment (256MB) basis,
++ * not on a page basis.  So we consider execute permission the same as read.
++ * Also, write permissions imply read permissions.
++ * This is the closest we can get..
++ */
++#define __P000	PAGE_NONE
++#define __P001	PAGE_READONLY_X
++#define __P010	PAGE_COPY
++#define __P011	PAGE_COPY_X
++#define __P100	PAGE_READONLY
++#define __P101	PAGE_READONLY_X
++#define __P110	PAGE_COPY
++#define __P111	PAGE_COPY_X
++
++#define __S000	PAGE_NONE
++#define __S001	PAGE_READONLY_X
++#define __S010	PAGE_SHARED
++#define __S011	PAGE_SHARED_X
++#define __S100	PAGE_READONLY
++#define __S101	PAGE_READONLY_X
++#define __S110	PAGE_SHARED
++#define __S111	PAGE_SHARED_X
++
++#ifndef __ASSEMBLY__
++/* Make sure we get a link error if PMD_PAGE_SIZE is ever called on a
++ * kernel without large page PMD support */
++extern unsigned long bad_call_to_PMD_PAGE_SIZE(void);
++
++/*
++ * Conversions between PTE values and page frame numbers.
++ */
++
++/* in some case we want to additionaly adjust where the pfn is in the pte to
++ * allow room for more flags */
++#if defined(CONFIG_FSL_BOOKE) && defined(CONFIG_PTE_64BIT)
++#define PFN_SHIFT_OFFSET	(PAGE_SHIFT + 8)
++#else
++#define PFN_SHIFT_OFFSET	(PAGE_SHIFT)
++#endif
++
++#define pte_pfn(x)		(pte_val(x) >> PFN_SHIFT_OFFSET)
++#define pte_page(x)		pfn_to_page(pte_pfn(x))
++
++#define pfn_pte(pfn, prot)	__pte(((pte_basic_t)(pfn) << PFN_SHIFT_OFFSET) |\
++					pgprot_val(prot))
++#define mk_pte(page, prot)	pfn_pte(page_to_pfn(page), prot)
++
++/*
++ * ZERO_PAGE is a global shared page that is always zero: used
++ * for zero-mapped memory areas etc..
++ */
++extern unsigned long empty_zero_page[1024];
++#define ZERO_PAGE(vaddr) (virt_to_page(empty_zero_page))
++
++#endif /* __ASSEMBLY__ */
++
++#define pte_none(pte)		((pte_val(pte) & ~_PTE_NONE_MASK) == 0)
++#define pte_present(pte)	(pte_val(pte) & _PAGE_PRESENT)
++#define pte_clear(mm,addr,ptep)	do { set_pte_at((mm), (addr), (ptep), __pte(0)); } while (0)
++
++#define pmd_none(pmd)		(!pmd_val(pmd))
++#define	pmd_bad(pmd)		(pmd_val(pmd) & _PMD_BAD)
++#define	pmd_present(pmd)	(pmd_val(pmd) & _PMD_PRESENT_MASK)
++#define	pmd_clear(pmdp)		do { pmd_val(*(pmdp)) = 0; } while (0)
++
++#ifndef __ASSEMBLY__
++/*
++ * The "pgd_xxx()" functions here are trivial for a folded two-level
++ * setup: the pgd is never bad, and a pmd always exists (as it's folded
++ * into the pgd entry)
++ */
++static inline int pgd_none(pgd_t pgd)		{ return 0; }
++static inline int pgd_bad(pgd_t pgd)		{ return 0; }
++static inline int pgd_present(pgd_t pgd)	{ return 1; }
++#define pgd_clear(xp)				do { } while (0)
++
++#define pgd_page_vaddr(pgd) \
++	((unsigned long) __va(pgd_val(pgd) & PAGE_MASK))
++
++/*
++ * The following only work if pte_present() is true.
++ * Undefined behaviour if not..
++ */
++static inline int pte_read(pte_t pte)		{ return pte_val(pte) & _PAGE_USER; }
++static inline int pte_write(pte_t pte)		{ return pte_val(pte) & _PAGE_RW; }
++static inline int pte_exec(pte_t pte)		{ return pte_val(pte) & _PAGE_EXEC; }
++static inline int pte_dirty(pte_t pte)		{ return pte_val(pte) & _PAGE_DIRTY; }
++static inline int pte_young(pte_t pte)		{ return pte_val(pte) & _PAGE_ACCESSED; }
++static inline int pte_file(pte_t pte)		{ return pte_val(pte) & _PAGE_FILE; }
++
++static inline void pte_uncache(pte_t pte)       { pte_val(pte) |= _PAGE_NO_CACHE; }
++static inline void pte_cache(pte_t pte)         { pte_val(pte) &= ~_PAGE_NO_CACHE; }
++
++static inline pte_t pte_rdprotect(pte_t pte) {
++	pte_val(pte) &= ~_PAGE_USER; return pte; }
++static inline pte_t pte_wrprotect(pte_t pte) {
++	pte_val(pte) &= ~(_PAGE_RW | _PAGE_HWWRITE); return pte; }
++static inline pte_t pte_exprotect(pte_t pte) {
++	pte_val(pte) &= ~_PAGE_EXEC; return pte; }
++static inline pte_t pte_mkclean(pte_t pte) {
++	pte_val(pte) &= ~(_PAGE_DIRTY | _PAGE_HWWRITE); return pte; }
++static inline pte_t pte_mkold(pte_t pte) {
++	pte_val(pte) &= ~_PAGE_ACCESSED; return pte; }
++
++static inline pte_t pte_mkread(pte_t pte) {
++	pte_val(pte) |= _PAGE_USER; return pte; }
++static inline pte_t pte_mkexec(pte_t pte) {
++	pte_val(pte) |= _PAGE_USER | _PAGE_EXEC; return pte; }
++static inline pte_t pte_mkwrite(pte_t pte) {
++	pte_val(pte) |= _PAGE_RW; return pte; }
++static inline pte_t pte_mkdirty(pte_t pte) {
++	pte_val(pte) |= _PAGE_DIRTY; return pte; }
++static inline pte_t pte_mkyoung(pte_t pte) {
++	pte_val(pte) |= _PAGE_ACCESSED; return pte; }
++
++static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
++{
++	pte_val(pte) = (pte_val(pte) & _PAGE_CHG_MASK) | pgprot_val(newprot);
++	return pte;
++}
++
++/*
++ * When flushing the tlb entry for a page, we also need to flush the hash
++ * table entry.  flush_hash_pages is assembler (for speed) in hashtable.S.
++ */
++extern int flush_hash_pages(unsigned context, unsigned long va,
++			    unsigned long pmdval, int count);
++
++/* Add an HPTE to the hash table */
++extern void add_hash_page(unsigned context, unsigned long va,
++			  unsigned long pmdval);
++
++/*
++ * Atomic PTE updates.
++ *
++ * pte_update clears and sets bit atomically, and returns
++ * the old pte value.  In the 64-bit PTE case we lock around the
++ * low PTE word since we expect ALL flag bits to be there
++ */
++#ifndef CONFIG_PTE_64BIT
++static inline unsigned long pte_update(pte_t *p, unsigned long clr,
++				       unsigned long set)
++{
++	unsigned long old, tmp;
++
++	__asm__ __volatile__("\
++1:	lwarx	%0,0,%3\n\
++	andc	%1,%0,%4\n\
++	or	%1,%1,%5\n"
++	PPC405_ERR77(0,%3)
++"	stwcx.	%1,0,%3\n\
++	bne-	1b"
++	: "=&r" (old), "=&r" (tmp), "=m" (*p)
++	: "r" (p), "r" (clr), "r" (set), "m" (*p)
++	: "cc" );
++	return old;
++}
++#else
++static inline unsigned long long pte_update(pte_t *p, unsigned long clr,
++				       unsigned long set)
++{
++	unsigned long long old;
++	unsigned long tmp;
++
++	__asm__ __volatile__("\
++1:	lwarx	%L0,0,%4\n\
++	lwzx	%0,0,%3\n\
++	andc	%1,%L0,%5\n\
++	or	%1,%1,%6\n"
++	PPC405_ERR77(0,%3)
++"	stwcx.	%1,0,%4\n\
++	bne-	1b"
++	: "=&r" (old), "=&r" (tmp), "=m" (*p)
++	: "r" (p), "r" ((unsigned long)(p) + 4), "r" (clr), "r" (set), "m" (*p)
++	: "cc" );
++	return old;
++}
++#endif
++
++/*
++ * set_pte stores a linux PTE into the linux page table.
++ * On machines which use an MMU hash table we avoid changing the
++ * _PAGE_HASHPTE bit.
++ */
++static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
++			      pte_t *ptep, pte_t pte)
++{
++#if _PAGE_HASHPTE != 0
++	pte_update(ptep, ~_PAGE_HASHPTE, pte_val(pte) & ~_PAGE_HASHPTE);
++#else
++	*ptep = pte;
++#endif
++}
++
++/*
++ * 2.6 calles this without flushing the TLB entry, this is wrong
++ * for our hash-based implementation, we fix that up here
++ */
++#define __HAVE_ARCH_PTEP_TEST_AND_CLEAR_YOUNG
++static inline int __ptep_test_and_clear_young(unsigned int context, unsigned long addr, pte_t *ptep)
++{
++	unsigned long old;
++	old = pte_update(ptep, _PAGE_ACCESSED, 0);
++#if _PAGE_HASHPTE != 0
++	if (old & _PAGE_HASHPTE) {
++		unsigned long ptephys = __pa(ptep) & PAGE_MASK;
++		flush_hash_pages(context, addr, ptephys, 1);
++	}
++#endif
++	return (old & _PAGE_ACCESSED) != 0;
++}
++#define ptep_test_and_clear_young(__vma, __addr, __ptep) \
++	__ptep_test_and_clear_young((__vma)->vm_mm->context.id, __addr, __ptep)
++
++#define __HAVE_ARCH_PTEP_TEST_AND_CLEAR_DIRTY
++static inline int ptep_test_and_clear_dirty(struct vm_area_struct *vma,
++					    unsigned long addr, pte_t *ptep)
++{
++	return (pte_update(ptep, (_PAGE_DIRTY | _PAGE_HWWRITE), 0) & _PAGE_DIRTY) != 0;
++}
++
++#define __HAVE_ARCH_PTEP_GET_AND_CLEAR
++static inline pte_t ptep_get_and_clear(struct mm_struct *mm, unsigned long addr,
++				       pte_t *ptep)
++{
++	return __pte(pte_update(ptep, ~_PAGE_HASHPTE, 0));
++}
++
++#define __HAVE_ARCH_PTEP_SET_WRPROTECT
++static inline void ptep_set_wrprotect(struct mm_struct *mm, unsigned long addr,
++				      pte_t *ptep)
++{
++	pte_update(ptep, (_PAGE_RW | _PAGE_HWWRITE), 0);
++}
++
++#define __HAVE_ARCH_PTEP_SET_ACCESS_FLAGS
++static inline void __ptep_set_access_flags(pte_t *ptep, pte_t entry, int dirty)
++{
++	unsigned long bits = pte_val(entry) &
++		(_PAGE_DIRTY | _PAGE_ACCESSED | _PAGE_RW);
++	pte_update(ptep, 0, bits);
++}
++
++#define  ptep_set_access_flags(__vma, __address, __ptep, __entry, __dirty) \
++	do {								   \
++		__ptep_set_access_flags(__ptep, __entry, __dirty);	   \
++		flush_tlb_page_nohash(__vma, __address);	       	   \
++	} while(0)
++
++/*
++ * Macro to mark a page protection value as "uncacheable".
++ */
++#define pgprot_noncached(prot)	(__pgprot(pgprot_val(prot) | _PAGE_NO_CACHE | _PAGE_GUARDED))
++
++struct file;
++extern pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
++				     unsigned long size, pgprot_t vma_prot);
++#define __HAVE_PHYS_MEM_ACCESS_PROT
++
++#define __HAVE_ARCH_PTE_SAME
++#define pte_same(A,B)	(((pte_val(A) ^ pte_val(B)) & ~_PAGE_HASHPTE) == 0)
++
++/*
++ * Note that on Book E processors, the pmd contains the kernel virtual
++ * (lowmem) address of the pte page.  The physical address is less useful
++ * because everything runs with translation enabled (even the TLB miss
++ * handler).  On everything else the pmd contains the physical address
++ * of the pte page.  -- paulus
++ */
++#ifndef CONFIG_BOOKE
++#define pmd_page_vaddr(pmd)	\
++	((unsigned long) __va(pmd_val(pmd) & PAGE_MASK))
++#define pmd_page(pmd)		\
++	(mem_map + (pmd_val(pmd) >> PAGE_SHIFT))
++#else
++#define pmd_page_vaddr(pmd)	\
++	((unsigned long) (pmd_val(pmd) & PAGE_MASK))
++#define pmd_page(pmd)		\
++	(mem_map + (__pa(pmd_val(pmd)) >> PAGE_SHIFT))
++#endif
++
++/* to find an entry in a kernel page-table-directory */
++#define pgd_offset_k(address) pgd_offset(&init_mm, address)
++
++/* to find an entry in a page-table-directory */
++#define pgd_index(address)	 ((address) >> PGDIR_SHIFT)
++#define pgd_offset(mm, address)	 ((mm)->pgd + pgd_index(address))
++
++/* Find an entry in the second-level page table.. */
++static inline pmd_t * pmd_offset(pgd_t * dir, unsigned long address)
++{
++	return (pmd_t *) dir;
++}
++
++/* Find an entry in the third-level page table.. */
++#define pte_index(address)		\
++	(((address) >> PAGE_SHIFT) & (PTRS_PER_PTE - 1))
++#define pte_offset_kernel(dir, addr)	\
++	((pte_t *) pmd_page_vaddr(*(dir)) + pte_index(addr))
++#define pte_offset_map(dir, addr)		\
++	((pte_t *) kmap_atomic(pmd_page(*(dir)), KM_PTE0) + pte_index(addr))
++#define pte_offset_map_nested(dir, addr)	\
++	((pte_t *) kmap_atomic(pmd_page(*(dir)), KM_PTE1) + pte_index(addr))
++
++#define pte_unmap(pte)		kunmap_atomic(pte, KM_PTE0)
++#define pte_unmap_nested(pte)	kunmap_atomic(pte, KM_PTE1)
++
++extern pgd_t swapper_pg_dir[PTRS_PER_PGD];
++
++extern void paging_init(void);
++
++/*
++ * Encode and decode a swap entry.
++ * Note that the bits we use in a PTE for representing a swap entry
++ * must not include the _PAGE_PRESENT bit, the _PAGE_FILE bit, or the
++ *_PAGE_HASHPTE bit (if used).  -- paulus
++ */
++#define __swp_type(entry)		((entry).val & 0x1f)
++#define __swp_offset(entry)		((entry).val >> 5)
++#define __swp_entry(type, offset)	((swp_entry_t) { (type) | ((offset) << 5) })
++#define __pte_to_swp_entry(pte)		((swp_entry_t) { pte_val(pte) >> 3 })
++#define __swp_entry_to_pte(x)		((pte_t) { (x).val << 3 })
++
++/* Encode and decode a nonlinear file mapping entry */
++#define PTE_FILE_MAX_BITS	29
++#define pte_to_pgoff(pte)	(pte_val(pte) >> 3)
++#define pgoff_to_pte(off)	((pte_t) { ((off) << 3) | _PAGE_FILE })
++
++/* CONFIG_APUS */
++/* For virtual address to physical address conversion */
++extern void cache_clear(__u32 addr, int length);
++extern void cache_push(__u32 addr, int length);
++extern int mm_end_of_chunk (unsigned long addr, int len);
++extern unsigned long iopa(unsigned long addr);
++extern unsigned long mm_ptov(unsigned long addr) __attribute_const__;
++
++/* Values for nocacheflag and cmode */
++/* These are not used by the APUS kernel_map, but prevents
++   compilation errors. */
++#define	KERNELMAP_FULL_CACHING		0
++#define	KERNELMAP_NOCACHE_SER		1
++#define	KERNELMAP_NOCACHE_NONSER	2
++#define	KERNELMAP_NO_COPYBACK		3
++
++/*
++ * Map some physical address range into the kernel address space.
++ */
++extern unsigned long kernel_map(unsigned long paddr, unsigned long size,
++				int nocacheflag, unsigned long *memavailp );
++
++/*
++ * Set cache mode of (kernel space) address range.
++ */
++extern void kernel_set_cachemode (unsigned long address, unsigned long size,
++                                 unsigned int cmode);
++
++/* Needs to be defined here and not in linux/mm.h, as it is arch dependent */
++#define kern_addr_valid(addr)	(1)
++
++#ifdef CONFIG_PHYS_64BIT
++extern int remap_pfn_range(struct vm_area_struct *vma, unsigned long from,
++			unsigned long paddr, unsigned long size, pgprot_t prot);
++
++static inline int io_remap_pfn_range(struct vm_area_struct *vma,
++					unsigned long vaddr,
++					unsigned long pfn,
++					unsigned long size,
++					pgprot_t prot)
++{
++	phys_addr_t paddr64 = fixup_bigphys_addr(pfn << PAGE_SHIFT, size);
++	return remap_pfn_range(vma, vaddr, paddr64 >> PAGE_SHIFT, size, prot);
++}
++#else
++#define io_remap_pfn_range(vma, vaddr, pfn, size, prot)		\
++		remap_pfn_range(vma, vaddr, pfn, size, prot)
++#endif
++
++/*
++ * No page table caches to initialise
++ */
++#define pgtable_cache_init()	do { } while (0)
++
++extern int get_pteptr(struct mm_struct *mm, unsigned long addr, pte_t **ptep,
++		      pmd_t **pmdp);
++
++#endif /* !__ASSEMBLY__ */
++
++#endif /* _ASM_POWERPC_PGTABLE_PPC32_H */
+Index: linux-2.6.18/include/asm-powerpc/pgtable-ppc64.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-powerpc/pgtable-ppc64.h
+@@ -0,0 +1,492 @@
++#ifndef _ASM_POWERPC_PGTABLE_PPC64_H_
++#define _ASM_POWERPC_PGTABLE_PPC64_H_
++/*
++ * This file contains the functions and defines necessary to modify and use
++ * the ppc64 hashed page table.
++ */
++
++#ifndef __ASSEMBLY__
++#include <linux/stddef.h>
++#include <asm/processor.h>		/* For TASK_SIZE */
++#include <asm/mmu.h>
++#include <asm/page.h>
++#include <asm/tlbflush.h>
++struct mm_struct;
++#endif /* __ASSEMBLY__ */
++
++#ifdef CONFIG_PPC_64K_PAGES
++#include <asm/pgtable-64k.h>
++#else
++#include <asm/pgtable-4k.h>
++#endif
++
++#define FIRST_USER_ADDRESS	0
++
++/*
++ * Size of EA range mapped by our pagetables.
++ */
++#define PGTABLE_EADDR_SIZE (PTE_INDEX_SIZE + PMD_INDEX_SIZE + \
++                	    PUD_INDEX_SIZE + PGD_INDEX_SIZE + PAGE_SHIFT)
++#define PGTABLE_RANGE (1UL << PGTABLE_EADDR_SIZE)
++
++#if TASK_SIZE_USER64 > PGTABLE_RANGE
++#error TASK_SIZE_USER64 exceeds pagetable range
++#endif
++
++#if TASK_SIZE_USER64 > (1UL << (USER_ESID_BITS + SID_SHIFT))
++#error TASK_SIZE_USER64 exceeds user VSID range
++#endif
++
++/*
++ * Define the address range of the vmalloc VM area.
++ */
++#define VMALLOC_START ASM_CONST(0xD000000000000000)
++#define VMALLOC_SIZE  ASM_CONST(0x80000000000)
++#define VMALLOC_END   (VMALLOC_START + VMALLOC_SIZE)
++
++/*
++ * Define the address range of the imalloc VM area.
++ */
++#define PHBS_IO_BASE	VMALLOC_END
++#define IMALLOC_BASE	(PHBS_IO_BASE + 0x80000000ul)	/* Reserve 2 gigs for PHBs */
++#define IMALLOC_END	(VMALLOC_START + PGTABLE_RANGE)
++
++/*
++ * Region IDs
++ */
++#define REGION_SHIFT		60UL
++#define REGION_MASK		(0xfUL << REGION_SHIFT)
++#define REGION_ID(ea)		(((unsigned long)(ea)) >> REGION_SHIFT)
++
++#define VMALLOC_REGION_ID	(REGION_ID(VMALLOC_START))
++#define KERNEL_REGION_ID	(REGION_ID(PAGE_OFFSET))
++#define USER_REGION_ID		(0UL)
++
++/*
++ * Common bits in a linux-style PTE.  These match the bits in the
++ * (hardware-defined) PowerPC PTE as closely as possible. Additional
++ * bits may be defined in pgtable-*.h
++ */
++#define _PAGE_PRESENT	0x0001 /* software: pte contains a translation */
++#define _PAGE_USER	0x0002 /* matches one of the PP bits */
++#define _PAGE_FILE	0x0002 /* (!present only) software: pte holds file offset */
++#define _PAGE_EXEC	0x0004 /* No execute on POWER4 and newer (we invert) */
++#define _PAGE_GUARDED	0x0008
++#define _PAGE_COHERENT	0x0010 /* M: enforce memory coherence (SMP systems) */
++#define _PAGE_NO_CACHE	0x0020 /* I: cache inhibit */
++#define _PAGE_WRITETHRU	0x0040 /* W: cache write-through */
++#define _PAGE_DIRTY	0x0080 /* C: page changed */
++#define _PAGE_ACCESSED	0x0100 /* R: page referenced */
++#define _PAGE_RW	0x0200 /* software: user write access allowed */
++#define _PAGE_HASHPTE	0x0400 /* software: pte has an associated HPTE */
++#define _PAGE_BUSY	0x0800 /* software: PTE & hash are busy */
++
++#define _PAGE_BASE	(_PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_COHERENT)
++
++#define _PAGE_WRENABLE	(_PAGE_RW | _PAGE_DIRTY)
++
++/* __pgprot defined in asm-powerpc/page.h */
++#define PAGE_NONE	__pgprot(_PAGE_PRESENT | _PAGE_ACCESSED)
++
++#define PAGE_SHARED	__pgprot(_PAGE_BASE | _PAGE_RW | _PAGE_USER)
++#define PAGE_SHARED_X	__pgprot(_PAGE_BASE | _PAGE_RW | _PAGE_USER | _PAGE_EXEC)
++#define PAGE_COPY	__pgprot(_PAGE_BASE | _PAGE_USER)
++#define PAGE_COPY_X	__pgprot(_PAGE_BASE | _PAGE_USER | _PAGE_EXEC)
++#define PAGE_READONLY	__pgprot(_PAGE_BASE | _PAGE_USER)
++#define PAGE_READONLY_X	__pgprot(_PAGE_BASE | _PAGE_USER | _PAGE_EXEC)
++#define PAGE_KERNEL	__pgprot(_PAGE_BASE | _PAGE_WRENABLE)
++#define PAGE_KERNEL_CI	__pgprot(_PAGE_PRESENT | _PAGE_ACCESSED | \
++			       _PAGE_WRENABLE | _PAGE_NO_CACHE | _PAGE_GUARDED)
++#define PAGE_KERNEL_EXEC __pgprot(_PAGE_BASE | _PAGE_WRENABLE | _PAGE_EXEC)
++
++#define PAGE_AGP	__pgprot(_PAGE_BASE | _PAGE_WRENABLE | _PAGE_NO_CACHE)
++#define HAVE_PAGE_AGP
++
++/* PTEIDX nibble */
++#define _PTEIDX_SECONDARY	0x8
++#define _PTEIDX_GROUP_IX	0x7
++
++
++/*
++ * POWER4 and newer have per page execute protection, older chips can only
++ * do this on a segment (256MB) basis.
++ *
++ * Also, write permissions imply read permissions.
++ * This is the closest we can get..
++ *
++ * Note due to the way vm flags are laid out, the bits are XWR
++ */
++#define __P000	PAGE_NONE
++#define __P001	PAGE_READONLY
++#define __P010	PAGE_COPY
++#define __P011	PAGE_COPY
++#define __P100	PAGE_READONLY_X
++#define __P101	PAGE_READONLY_X
++#define __P110	PAGE_COPY_X
++#define __P111	PAGE_COPY_X
++
++#define __S000	PAGE_NONE
++#define __S001	PAGE_READONLY
++#define __S010	PAGE_SHARED
++#define __S011	PAGE_SHARED
++#define __S100	PAGE_READONLY_X
++#define __S101	PAGE_READONLY_X
++#define __S110	PAGE_SHARED_X
++#define __S111	PAGE_SHARED_X
++
++#ifndef __ASSEMBLY__
++
++/*
++ * ZERO_PAGE is a global shared page that is always zero: used
++ * for zero-mapped memory areas etc..
++ */
++extern unsigned long empty_zero_page[PAGE_SIZE/sizeof(unsigned long)];
++#define ZERO_PAGE(vaddr) (virt_to_page(empty_zero_page))
++#endif /* __ASSEMBLY__ */
++
++#ifdef CONFIG_HUGETLB_PAGE
++
++#define HAVE_ARCH_UNMAPPED_AREA
++#define HAVE_ARCH_UNMAPPED_AREA_TOPDOWN
++
++#endif
++
++#ifndef __ASSEMBLY__
++
++/*
++ * Conversion functions: convert a page and protection to a page entry,
++ * and a page entry and page directory to the page they refer to.
++ *
++ * mk_pte takes a (struct page *) as input
++ */
++#define mk_pte(page, pgprot)	pfn_pte(page_to_pfn(page), (pgprot))
++
++static inline pte_t pfn_pte(unsigned long pfn, pgprot_t pgprot)
++{
++	pte_t pte;
++
++
++	pte_val(pte) = (pfn << PTE_RPN_SHIFT) | pgprot_val(pgprot);
++	return pte;
++}
++
++#define pte_modify(_pte, newprot) \
++  (__pte((pte_val(_pte) & _PAGE_CHG_MASK) | pgprot_val(newprot)))
++
++#define pte_none(pte)		((pte_val(pte) & ~_PAGE_HPTEFLAGS) == 0)
++#define pte_present(pte)	(pte_val(pte) & _PAGE_PRESENT)
++
++/* pte_clear moved to later in this file */
++
++#define pte_pfn(x)		((unsigned long)((pte_val(x)>>PTE_RPN_SHIFT)))
++#define pte_page(x)		pfn_to_page(pte_pfn(x))
++
++#define PMD_BAD_BITS		(PTE_TABLE_SIZE-1)
++#define PUD_BAD_BITS		(PMD_TABLE_SIZE-1)
++
++#define pmd_set(pmdp, pmdval) 	(pmd_val(*(pmdp)) = (pmdval))
++#define pmd_none(pmd)		(!pmd_val(pmd))
++#define	pmd_bad(pmd)		(!is_kernel_addr(pmd_val(pmd)) \
++				 || (pmd_val(pmd) & PMD_BAD_BITS))
++#define	pmd_present(pmd)	(pmd_val(pmd) != 0)
++#define	pmd_clear(pmdp)		(pmd_val(*(pmdp)) = 0)
++#define pmd_page_vaddr(pmd)	(pmd_val(pmd) & ~PMD_MASKED_BITS)
++#define pmd_page(pmd)		virt_to_page(pmd_page_vaddr(pmd))
++
++#define pud_set(pudp, pudval)	(pud_val(*(pudp)) = (pudval))
++#define pud_none(pud)		(!pud_val(pud))
++#define	pud_bad(pud)		(!is_kernel_addr(pud_val(pud)) \
++				 || (pud_val(pud) & PUD_BAD_BITS))
++#define pud_present(pud)	(pud_val(pud) != 0)
++#define pud_clear(pudp)		(pud_val(*(pudp)) = 0)
++#define pud_page_vaddr(pud)	(pud_val(pud) & ~PUD_MASKED_BITS)
++#define pud_page(pud)		virt_to_page(pud_page_vaddr(pud))
++
++#define pgd_set(pgdp, pudp)	({pgd_val(*(pgdp)) = (unsigned long)(pudp);})
++
++/*
++ * Find an entry in a page-table-directory.  We combine the address region
++ * (the high order N bits) and the pgd portion of the address.
++ */
++/* to avoid overflow in free_pgtables we don't use PTRS_PER_PGD here */
++#define pgd_index(address) (((address) >> (PGDIR_SHIFT)) & 0x1ff)
++
++#define pgd_offset(mm, address)	 ((mm)->pgd + pgd_index(address))
++
++#define pmd_offset(pudp,addr) \
++  (((pmd_t *) pud_page_vaddr(*(pudp))) + (((addr) >> PMD_SHIFT) & (PTRS_PER_PMD - 1)))
++
++#define pte_offset_kernel(dir,addr) \
++  (((pte_t *) pmd_page_vaddr(*(dir))) + (((addr) >> PAGE_SHIFT) & (PTRS_PER_PTE - 1)))
++
++#define pte_offset_map(dir,addr)	pte_offset_kernel((dir), (addr))
++#define pte_offset_map_nested(dir,addr)	pte_offset_kernel((dir), (addr))
++#define pte_unmap(pte)			do { } while(0)
++#define pte_unmap_nested(pte)		do { } while(0)
++
++/* to find an entry in a kernel page-table-directory */
++/* This now only contains the vmalloc pages */
++#define pgd_offset_k(address) pgd_offset(&init_mm, address)
++
++/*
++ * The following only work if pte_present() is true.
++ * Undefined behaviour if not..
++ */
++static inline int pte_read(pte_t pte)  { return pte_val(pte) & _PAGE_USER;}
++static inline int pte_write(pte_t pte) { return pte_val(pte) & _PAGE_RW;}
++static inline int pte_exec(pte_t pte)  { return pte_val(pte) & _PAGE_EXEC;}
++static inline int pte_dirty(pte_t pte) { return pte_val(pte) & _PAGE_DIRTY;}
++static inline int pte_young(pte_t pte) { return pte_val(pte) & _PAGE_ACCESSED;}
++static inline int pte_file(pte_t pte) { return pte_val(pte) & _PAGE_FILE;}
++
++static inline void pte_uncache(pte_t pte) { pte_val(pte) |= _PAGE_NO_CACHE; }
++static inline void pte_cache(pte_t pte)   { pte_val(pte) &= ~_PAGE_NO_CACHE; }
++
++static inline pte_t pte_rdprotect(pte_t pte) {
++	pte_val(pte) &= ~_PAGE_USER; return pte; }
++static inline pte_t pte_exprotect(pte_t pte) {
++	pte_val(pte) &= ~_PAGE_EXEC; return pte; }
++static inline pte_t pte_wrprotect(pte_t pte) {
++	pte_val(pte) &= ~(_PAGE_RW); return pte; }
++static inline pte_t pte_mkclean(pte_t pte) {
++	pte_val(pte) &= ~(_PAGE_DIRTY); return pte; }
++static inline pte_t pte_mkold(pte_t pte) {
++	pte_val(pte) &= ~_PAGE_ACCESSED; return pte; }
++static inline pte_t pte_mkread(pte_t pte) {
++	pte_val(pte) |= _PAGE_USER; return pte; }
++static inline pte_t pte_mkexec(pte_t pte) {
++	pte_val(pte) |= _PAGE_USER | _PAGE_EXEC; return pte; }
++static inline pte_t pte_mkwrite(pte_t pte) {
++	pte_val(pte) |= _PAGE_RW; return pte; }
++static inline pte_t pte_mkdirty(pte_t pte) {
++	pte_val(pte) |= _PAGE_DIRTY; return pte; }
++static inline pte_t pte_mkyoung(pte_t pte) {
++	pte_val(pte) |= _PAGE_ACCESSED; return pte; }
++static inline pte_t pte_mkhuge(pte_t pte) {
++	return pte; }
++
++/* Atomic PTE updates */
++static inline unsigned long pte_update(struct mm_struct *mm,
++				       unsigned long addr,
++				       pte_t *ptep, unsigned long clr,
++				       int huge)
++{
++	unsigned long old, tmp;
++
++	__asm__ __volatile__(
++	"1:	ldarx	%0,0,%3		# pte_update\n\
++	andi.	%1,%0,%6\n\
++	bne-	1b \n\
++	andc	%1,%0,%4 \n\
++	stdcx.	%1,0,%3 \n\
++	bne-	1b"
++	: "=&r" (old), "=&r" (tmp), "=m" (*ptep)
++	: "r" (ptep), "r" (clr), "m" (*ptep), "i" (_PAGE_BUSY)
++	: "cc" );
++
++	if (old & _PAGE_HASHPTE)
++		hpte_need_flush(mm, addr, ptep, old, huge);
++	return old;
++}
++
++static inline int __ptep_test_and_clear_young(struct mm_struct *mm,
++					      unsigned long addr, pte_t *ptep)
++{
++	unsigned long old;
++
++       	if ((pte_val(*ptep) & (_PAGE_ACCESSED | _PAGE_HASHPTE)) == 0)
++		return 0;
++	old = pte_update(mm, addr, ptep, _PAGE_ACCESSED, 0);
++	return (old & _PAGE_ACCESSED) != 0;
++}
++#define __HAVE_ARCH_PTEP_TEST_AND_CLEAR_YOUNG
++#define ptep_test_and_clear_young(__vma, __addr, __ptep)		   \
++({									   \
++	int __r;							   \
++	__r = __ptep_test_and_clear_young((__vma)->vm_mm, __addr, __ptep); \
++	__r;								   \
++})
++
++/*
++ * On RW/DIRTY bit transitions we can avoid flushing the hpte. For the
++ * moment we always flush but we need to fix hpte_update and test if the
++ * optimisation is worth it.
++ */
++static inline int __ptep_test_and_clear_dirty(struct mm_struct *mm,
++					      unsigned long addr, pte_t *ptep)
++{
++	unsigned long old;
++
++       	if ((pte_val(*ptep) & _PAGE_DIRTY) == 0)
++		return 0;
++	old = pte_update(mm, addr, ptep, _PAGE_DIRTY, 0);
++	return (old & _PAGE_DIRTY) != 0;
++}
++#define __HAVE_ARCH_PTEP_TEST_AND_CLEAR_DIRTY
++#define ptep_test_and_clear_dirty(__vma, __addr, __ptep)		   \
++({									   \
++	int __r;							   \
++	__r = __ptep_test_and_clear_dirty((__vma)->vm_mm, __addr, __ptep); \
++	__r;								   \
++})
++
++#define __HAVE_ARCH_PTEP_SET_WRPROTECT
++static inline void ptep_set_wrprotect(struct mm_struct *mm, unsigned long addr,
++				      pte_t *ptep)
++{
++	unsigned long old;
++
++       	if ((pte_val(*ptep) & _PAGE_RW) == 0)
++       		return;
++	old = pte_update(mm, addr, ptep, _PAGE_RW, 0);
++}
++
++/*
++ * We currently remove entries from the hashtable regardless of whether
++ * the entry was young or dirty. The generic routines only flush if the
++ * entry was young or dirty which is not good enough.
++ *
++ * We should be more intelligent about this but for the moment we override
++ * these functions and force a tlb flush unconditionally
++ */
++#define __HAVE_ARCH_PTEP_CLEAR_YOUNG_FLUSH
++#define ptep_clear_flush_young(__vma, __address, __ptep)		\
++({									\
++	int __young = __ptep_test_and_clear_young((__vma)->vm_mm, __address, \
++						  __ptep);		\
++	__young;							\
++})
++
++#define __HAVE_ARCH_PTEP_CLEAR_DIRTY_FLUSH
++#define ptep_clear_flush_dirty(__vma, __address, __ptep)		\
++({									\
++	int __dirty = __ptep_test_and_clear_dirty((__vma)->vm_mm, __address, \
++						  __ptep); 		\
++	__dirty;							\
++})
++
++#define __HAVE_ARCH_PTEP_GET_AND_CLEAR
++static inline pte_t ptep_get_and_clear(struct mm_struct *mm,
++				       unsigned long addr, pte_t *ptep)
++{
++	unsigned long old = pte_update(mm, addr, ptep, ~0UL, 0);
++	return __pte(old);
++}
++
++static inline void pte_clear(struct mm_struct *mm, unsigned long addr,
++			     pte_t * ptep)
++{
++	pte_update(mm, addr, ptep, ~0UL, 0);
++}
++
++/*
++ * set_pte stores a linux PTE into the linux page table.
++ */
++static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
++			      pte_t *ptep, pte_t pte)
++{
++	if (pte_present(*ptep))
++		pte_clear(mm, addr, ptep);
++	pte = __pte(pte_val(pte) & ~_PAGE_HPTEFLAGS);
++	*ptep = pte;
++}
++
++/* Set the dirty and/or accessed bits atomically in a linux PTE, this
++ * function doesn't need to flush the hash entry
++ */
++#define __HAVE_ARCH_PTEP_SET_ACCESS_FLAGS
++static inline void __ptep_set_access_flags(pte_t *ptep, pte_t entry, int dirty)
++{
++	unsigned long bits = pte_val(entry) &
++		(_PAGE_DIRTY | _PAGE_ACCESSED | _PAGE_RW | _PAGE_EXEC);
++	unsigned long old, tmp;
++
++	__asm__ __volatile__(
++	"1:	ldarx	%0,0,%4\n\
++		andi.	%1,%0,%6\n\
++		bne-	1b \n\
++		or	%0,%3,%0\n\
++		stdcx.	%0,0,%4\n\
++		bne-	1b"
++	:"=&r" (old), "=&r" (tmp), "=m" (*ptep)
++	:"r" (bits), "r" (ptep), "m" (*ptep), "i" (_PAGE_BUSY)
++	:"cc");
++}
++#define  ptep_set_access_flags(__vma, __address, __ptep, __entry, __dirty) \
++	do {								   \
++		__ptep_set_access_flags(__ptep, __entry, __dirty);	   \
++		flush_tlb_page_nohash(__vma, __address);	       	   \
++	} while(0)
++
++/*
++ * Macro to mark a page protection value as "uncacheable".
++ */
++#define pgprot_noncached(prot)	(__pgprot(pgprot_val(prot) | _PAGE_NO_CACHE | _PAGE_GUARDED))
++
++struct file;
++extern pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
++				     unsigned long size, pgprot_t vma_prot);
++#define __HAVE_PHYS_MEM_ACCESS_PROT
++
++#define __HAVE_ARCH_PTE_SAME
++#define pte_same(A,B)	(((pte_val(A) ^ pte_val(B)) & ~_PAGE_HPTEFLAGS) == 0)
++
++#define pte_ERROR(e) \
++	printk("%s:%d: bad pte %08lx.\n", __FILE__, __LINE__, pte_val(e))
++#define pmd_ERROR(e) \
++	printk("%s:%d: bad pmd %08lx.\n", __FILE__, __LINE__, pmd_val(e))
++#define pgd_ERROR(e) \
++	printk("%s:%d: bad pgd %08lx.\n", __FILE__, __LINE__, pgd_val(e))
++
++extern pgd_t swapper_pg_dir[];
++
++extern void paging_init(void);
++
++/* Encode and de-code a swap entry */
++#define __swp_type(entry)	(((entry).val >> 1) & 0x3f)
++#define __swp_offset(entry)	((entry).val >> 8)
++#define __swp_entry(type, offset) ((swp_entry_t){((type)<< 1)|((offset)<<8)})
++#define __pte_to_swp_entry(pte)	((swp_entry_t){pte_val(pte) >> PTE_RPN_SHIFT})
++#define __swp_entry_to_pte(x)	((pte_t) { (x).val << PTE_RPN_SHIFT })
++#define pte_to_pgoff(pte)	(pte_val(pte) >> PTE_RPN_SHIFT)
++#define pgoff_to_pte(off)	((pte_t) {((off) << PTE_RPN_SHIFT)|_PAGE_FILE})
++#define PTE_FILE_MAX_BITS	(BITS_PER_LONG - PTE_RPN_SHIFT)
++
++/*
++ * kern_addr_valid is intended to indicate whether an address is a valid
++ * kernel address.  Most 32-bit archs define it as always true (like this)
++ * but most 64-bit archs actually perform a test.  What should we do here?
++ * The only use is in fs/ncpfs/dir.c
++ */
++#define kern_addr_valid(addr)	(1)
++
++#define io_remap_pfn_range(vma, vaddr, pfn, size, prot)		\
++		remap_pfn_range(vma, vaddr, pfn, size, prot)
++
++void pgtable_cache_init(void);
++
++/*
++ * find_linux_pte returns the address of a linux pte for a given
++ * effective address and directory.  If not found, it returns zero.
++ */static inline pte_t *find_linux_pte(pgd_t *pgdir, unsigned long ea)
++{
++	pgd_t *pg;
++	pud_t *pu;
++	pmd_t *pm;
++	pte_t *pt = NULL;
++
++	pg = pgdir + pgd_index(ea);
++	if (!pgd_none(*pg)) {
++		pu = pud_offset(pg, ea);
++		if (!pud_none(*pu)) {
++			pm = pmd_offset(pu, ea);
++			if (pmd_present(*pm))
++				pt = pte_offset_kernel(pm, ea);
++		}
++	}
++	return pt;
++}
++
++#endif /* __ASSEMBLY__ */
++
++#endif /* _ASM_POWERPC_PGTABLE_PPC64_H_ */
+Index: linux-2.6.18/include/asm-powerpc/pgtable.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pgtable.h
++++ linux-2.6.18/include/asm-powerpc/pgtable.h
+@@ -2,502 +2,15 @@
+ #define _ASM_POWERPC_PGTABLE_H
+ #ifdef __KERNEL__
+ 
+-#ifndef CONFIG_PPC64
+-#include <asm-ppc/pgtable.h>
++#if defined(CONFIG_PPC64)
++#  include <asm/pgtable-ppc64.h>
+ #else
+-
+-/*
+- * This file contains the functions and defines necessary to modify and use
+- * the ppc64 hashed page table.
+- */
+-
+-#ifndef __ASSEMBLY__
+-#include <linux/stddef.h>
+-#include <asm/processor.h>		/* For TASK_SIZE */
+-#include <asm/mmu.h>
+-#include <asm/page.h>
+-#include <asm/tlbflush.h>
+-struct mm_struct;
+-#endif /* __ASSEMBLY__ */
+-
+-#ifdef CONFIG_PPC_64K_PAGES
+-#include <asm/pgtable-64k.h>
+-#else
+-#include <asm/pgtable-4k.h>
+-#endif
+-
+-#define FIRST_USER_ADDRESS	0
+-
+-/*
+- * Size of EA range mapped by our pagetables.
+- */
+-#define PGTABLE_EADDR_SIZE (PTE_INDEX_SIZE + PMD_INDEX_SIZE + \
+-                	    PUD_INDEX_SIZE + PGD_INDEX_SIZE + PAGE_SHIFT)
+-#define PGTABLE_RANGE (1UL << PGTABLE_EADDR_SIZE)
+-
+-#if TASK_SIZE_USER64 > PGTABLE_RANGE
+-#error TASK_SIZE_USER64 exceeds pagetable range
+-#endif
+-
+-#if TASK_SIZE_USER64 > (1UL << (USER_ESID_BITS + SID_SHIFT))
+-#error TASK_SIZE_USER64 exceeds user VSID range
++#  include <asm/pgtable-ppc32.h>
+ #endif
+ 
+-/*
+- * Define the address range of the vmalloc VM area.
+- */
+-#define VMALLOC_START ASM_CONST(0xD000000000000000)
+-#define VMALLOC_SIZE  ASM_CONST(0x80000000000)
+-#define VMALLOC_END   (VMALLOC_START + VMALLOC_SIZE)
+-
+-/*
+- * Define the address range of the imalloc VM area.
+- */
+-#define PHBS_IO_BASE	VMALLOC_END
+-#define IMALLOC_BASE	(PHBS_IO_BASE + 0x80000000ul)	/* Reserve 2 gigs for PHBs */
+-#define IMALLOC_END	(VMALLOC_START + PGTABLE_RANGE)
+-
+-/*
+- * Region IDs
+- */
+-#define REGION_SHIFT		60UL
+-#define REGION_MASK		(0xfUL << REGION_SHIFT)
+-#define REGION_ID(ea)		(((unsigned long)(ea)) >> REGION_SHIFT)
+-
+-#define VMALLOC_REGION_ID	(REGION_ID(VMALLOC_START))
+-#define KERNEL_REGION_ID	(REGION_ID(PAGE_OFFSET))
+-#define USER_REGION_ID		(0UL)
+-
+-/*
+- * Common bits in a linux-style PTE.  These match the bits in the
+- * (hardware-defined) PowerPC PTE as closely as possible. Additional
+- * bits may be defined in pgtable-*.h
+- */
+-#define _PAGE_PRESENT	0x0001 /* software: pte contains a translation */
+-#define _PAGE_USER	0x0002 /* matches one of the PP bits */
+-#define _PAGE_FILE	0x0002 /* (!present only) software: pte holds file offset */
+-#define _PAGE_EXEC	0x0004 /* No execute on POWER4 and newer (we invert) */
+-#define _PAGE_GUARDED	0x0008
+-#define _PAGE_COHERENT	0x0010 /* M: enforce memory coherence (SMP systems) */
+-#define _PAGE_NO_CACHE	0x0020 /* I: cache inhibit */
+-#define _PAGE_WRITETHRU	0x0040 /* W: cache write-through */
+-#define _PAGE_DIRTY	0x0080 /* C: page changed */
+-#define _PAGE_ACCESSED	0x0100 /* R: page referenced */
+-#define _PAGE_RW	0x0200 /* software: user write access allowed */
+-#define _PAGE_HASHPTE	0x0400 /* software: pte has an associated HPTE */
+-#define _PAGE_BUSY	0x0800 /* software: PTE & hash are busy */ 
+-
+-#define _PAGE_BASE	(_PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_COHERENT)
+-
+-#define _PAGE_WRENABLE	(_PAGE_RW | _PAGE_DIRTY)
+-
+-/* __pgprot defined in asm-powerpc/page.h */
+-#define PAGE_NONE	__pgprot(_PAGE_PRESENT | _PAGE_ACCESSED)
+-
+-#define PAGE_SHARED	__pgprot(_PAGE_BASE | _PAGE_RW | _PAGE_USER)
+-#define PAGE_SHARED_X	__pgprot(_PAGE_BASE | _PAGE_RW | _PAGE_USER | _PAGE_EXEC)
+-#define PAGE_COPY	__pgprot(_PAGE_BASE | _PAGE_USER)
+-#define PAGE_COPY_X	__pgprot(_PAGE_BASE | _PAGE_USER | _PAGE_EXEC)
+-#define PAGE_READONLY	__pgprot(_PAGE_BASE | _PAGE_USER)
+-#define PAGE_READONLY_X	__pgprot(_PAGE_BASE | _PAGE_USER | _PAGE_EXEC)
+-#define PAGE_KERNEL	__pgprot(_PAGE_BASE | _PAGE_WRENABLE)
+-#define PAGE_KERNEL_CI	__pgprot(_PAGE_PRESENT | _PAGE_ACCESSED | \
+-			       _PAGE_WRENABLE | _PAGE_NO_CACHE | _PAGE_GUARDED)
+-#define PAGE_KERNEL_EXEC __pgprot(_PAGE_BASE | _PAGE_WRENABLE | _PAGE_EXEC)
+-
+-#define PAGE_AGP	__pgprot(_PAGE_BASE | _PAGE_WRENABLE | _PAGE_NO_CACHE)
+-#define HAVE_PAGE_AGP
+-
+-/* PTEIDX nibble */
+-#define _PTEIDX_SECONDARY	0x8
+-#define _PTEIDX_GROUP_IX	0x7
+-
+-
+-/*
+- * POWER4 and newer have per page execute protection, older chips can only
+- * do this on a segment (256MB) basis.
+- *
+- * Also, write permissions imply read permissions.
+- * This is the closest we can get..
+- *
+- * Note due to the way vm flags are laid out, the bits are XWR
+- */
+-#define __P000	PAGE_NONE
+-#define __P001	PAGE_READONLY
+-#define __P010	PAGE_COPY
+-#define __P011	PAGE_COPY
+-#define __P100	PAGE_READONLY_X
+-#define __P101	PAGE_READONLY_X
+-#define __P110	PAGE_COPY_X
+-#define __P111	PAGE_COPY_X
+-
+-#define __S000	PAGE_NONE
+-#define __S001	PAGE_READONLY
+-#define __S010	PAGE_SHARED
+-#define __S011	PAGE_SHARED
+-#define __S100	PAGE_READONLY_X
+-#define __S101	PAGE_READONLY_X
+-#define __S110	PAGE_SHARED_X
+-#define __S111	PAGE_SHARED_X
+-
+ #ifndef __ASSEMBLY__
+-
+-/*
+- * ZERO_PAGE is a global shared page that is always zero: used
+- * for zero-mapped memory areas etc..
+- */
+-extern unsigned long empty_zero_page[PAGE_SIZE/sizeof(unsigned long)];
+-#define ZERO_PAGE(vaddr) (virt_to_page(empty_zero_page))
+-#endif /* __ASSEMBLY__ */
+-
+-#ifdef CONFIG_HUGETLB_PAGE
+-
+-#define HAVE_ARCH_UNMAPPED_AREA
+-#define HAVE_ARCH_UNMAPPED_AREA_TOPDOWN
+-
+-#endif
+-
+-#ifndef __ASSEMBLY__
+-
+-/*
+- * Conversion functions: convert a page and protection to a page entry,
+- * and a page entry and page directory to the page they refer to.
+- *
+- * mk_pte takes a (struct page *) as input
+- */
+-#define mk_pte(page, pgprot)	pfn_pte(page_to_pfn(page), (pgprot))
+-
+-static inline pte_t pfn_pte(unsigned long pfn, pgprot_t pgprot)
+-{
+-	pte_t pte;
+-
+-
+-	pte_val(pte) = (pfn << PTE_RPN_SHIFT) | pgprot_val(pgprot);
+-	return pte;
+-}
+-
+-#define pte_modify(_pte, newprot) \
+-  (__pte((pte_val(_pte) & _PAGE_CHG_MASK) | pgprot_val(newprot)))
+-
+-#define pte_none(pte)		((pte_val(pte) & ~_PAGE_HPTEFLAGS) == 0)
+-#define pte_present(pte)	(pte_val(pte) & _PAGE_PRESENT)
+-
+-/* pte_clear moved to later in this file */
+-
+-#define pte_pfn(x)		((unsigned long)((pte_val(x)>>PTE_RPN_SHIFT)))
+-#define pte_page(x)		pfn_to_page(pte_pfn(x))
+-
+-#define PMD_BAD_BITS		(PTE_TABLE_SIZE-1)
+-#define PUD_BAD_BITS		(PMD_TABLE_SIZE-1)
+-
+-#define pmd_set(pmdp, pmdval) 	(pmd_val(*(pmdp)) = (pmdval))
+-#define pmd_none(pmd)		(!pmd_val(pmd))
+-#define	pmd_bad(pmd)		(!is_kernel_addr(pmd_val(pmd)) \
+-				 || (pmd_val(pmd) & PMD_BAD_BITS))
+-#define	pmd_present(pmd)	(pmd_val(pmd) != 0)
+-#define	pmd_clear(pmdp)		(pmd_val(*(pmdp)) = 0)
+-#define pmd_page_vaddr(pmd)	(pmd_val(pmd) & ~PMD_MASKED_BITS)
+-#define pmd_page(pmd)		virt_to_page(pmd_page_vaddr(pmd))
+-
+-#define pud_set(pudp, pudval)	(pud_val(*(pudp)) = (pudval))
+-#define pud_none(pud)		(!pud_val(pud))
+-#define	pud_bad(pud)		(!is_kernel_addr(pud_val(pud)) \
+-				 || (pud_val(pud) & PUD_BAD_BITS))
+-#define pud_present(pud)	(pud_val(pud) != 0)
+-#define pud_clear(pudp)		(pud_val(*(pudp)) = 0)
+-#define pud_page_vaddr(pud)	(pud_val(pud) & ~PUD_MASKED_BITS)
+-#define pud_page(pud)		virt_to_page(pud_page_vaddr(pud))
+-
+-#define pgd_set(pgdp, pudp)	({pgd_val(*(pgdp)) = (unsigned long)(pudp);})
+-
+-/* 
+- * Find an entry in a page-table-directory.  We combine the address region 
+- * (the high order N bits) and the pgd portion of the address.
+- */
+-/* to avoid overflow in free_pgtables we don't use PTRS_PER_PGD here */
+-#define pgd_index(address) (((address) >> (PGDIR_SHIFT)) & 0x1ff)
+-
+-#define pgd_offset(mm, address)	 ((mm)->pgd + pgd_index(address))
+-
+-#define pmd_offset(pudp,addr) \
+-  (((pmd_t *) pud_page_vaddr(*(pudp))) + (((addr) >> PMD_SHIFT) & (PTRS_PER_PMD - 1)))
+-
+-#define pte_offset_kernel(dir,addr) \
+-  (((pte_t *) pmd_page_vaddr(*(dir))) + (((addr) >> PAGE_SHIFT) & (PTRS_PER_PTE - 1)))
+-
+-#define pte_offset_map(dir,addr)	pte_offset_kernel((dir), (addr))
+-#define pte_offset_map_nested(dir,addr)	pte_offset_kernel((dir), (addr))
+-#define pte_unmap(pte)			do { } while(0)
+-#define pte_unmap_nested(pte)		do { } while(0)
+-
+-/* to find an entry in a kernel page-table-directory */
+-/* This now only contains the vmalloc pages */
+-#define pgd_offset_k(address) pgd_offset(&init_mm, address)
+-
+-/*
+- * The following only work if pte_present() is true.
+- * Undefined behaviour if not..
+- */
+-static inline int pte_read(pte_t pte)  { return pte_val(pte) & _PAGE_USER;}
+-static inline int pte_write(pte_t pte) { return pte_val(pte) & _PAGE_RW;}
+-static inline int pte_exec(pte_t pte)  { return pte_val(pte) & _PAGE_EXEC;}
+-static inline int pte_dirty(pte_t pte) { return pte_val(pte) & _PAGE_DIRTY;}
+-static inline int pte_young(pte_t pte) { return pte_val(pte) & _PAGE_ACCESSED;}
+-static inline int pte_file(pte_t pte) { return pte_val(pte) & _PAGE_FILE;}
+-
+-static inline void pte_uncache(pte_t pte) { pte_val(pte) |= _PAGE_NO_CACHE; }
+-static inline void pte_cache(pte_t pte)   { pte_val(pte) &= ~_PAGE_NO_CACHE; }
+-
+-static inline pte_t pte_rdprotect(pte_t pte) {
+-	pte_val(pte) &= ~_PAGE_USER; return pte; }
+-static inline pte_t pte_exprotect(pte_t pte) {
+-	pte_val(pte) &= ~_PAGE_EXEC; return pte; }
+-static inline pte_t pte_wrprotect(pte_t pte) {
+-	pte_val(pte) &= ~(_PAGE_RW); return pte; }
+-static inline pte_t pte_mkclean(pte_t pte) {
+-	pte_val(pte) &= ~(_PAGE_DIRTY); return pte; }
+-static inline pte_t pte_mkold(pte_t pte) {
+-	pte_val(pte) &= ~_PAGE_ACCESSED; return pte; }
+-static inline pte_t pte_mkread(pte_t pte) {
+-	pte_val(pte) |= _PAGE_USER; return pte; }
+-static inline pte_t pte_mkexec(pte_t pte) {
+-	pte_val(pte) |= _PAGE_USER | _PAGE_EXEC; return pte; }
+-static inline pte_t pte_mkwrite(pte_t pte) {
+-	pte_val(pte) |= _PAGE_RW; return pte; }
+-static inline pte_t pte_mkdirty(pte_t pte) {
+-	pte_val(pte) |= _PAGE_DIRTY; return pte; }
+-static inline pte_t pte_mkyoung(pte_t pte) {
+-	pte_val(pte) |= _PAGE_ACCESSED; return pte; }
+-static inline pte_t pte_mkhuge(pte_t pte) {
+-	return pte; }
+-
+-/* Atomic PTE updates */
+-static inline unsigned long pte_update(struct mm_struct *mm,
+-				       unsigned long addr,
+-				       pte_t *ptep, unsigned long clr,
+-				       int huge)
+-{
+-	unsigned long old, tmp;
+-
+-	__asm__ __volatile__(
+-	"1:	ldarx	%0,0,%3		# pte_update\n\
+-	andi.	%1,%0,%6\n\
+-	bne-	1b \n\
+-	andc	%1,%0,%4 \n\
+-	stdcx.	%1,0,%3 \n\
+-	bne-	1b"
+-	: "=&r" (old), "=&r" (tmp), "=m" (*ptep)
+-	: "r" (ptep), "r" (clr), "m" (*ptep), "i" (_PAGE_BUSY)
+-	: "cc" );
+-
+-	if (old & _PAGE_HASHPTE)
+-		hpte_need_flush(mm, addr, ptep, old, huge);
+-	return old;
+-}
+-
+-static inline int __ptep_test_and_clear_young(struct mm_struct *mm,
+-					      unsigned long addr, pte_t *ptep)
+-{
+-	unsigned long old;
+-
+-       	if ((pte_val(*ptep) & (_PAGE_ACCESSED | _PAGE_HASHPTE)) == 0)
+-		return 0;
+-	old = pte_update(mm, addr, ptep, _PAGE_ACCESSED, 0);
+-	return (old & _PAGE_ACCESSED) != 0;
+-}
+-#define __HAVE_ARCH_PTEP_TEST_AND_CLEAR_YOUNG
+-#define ptep_test_and_clear_young(__vma, __addr, __ptep)		   \
+-({									   \
+-	int __r;							   \
+-	__r = __ptep_test_and_clear_young((__vma)->vm_mm, __addr, __ptep); \
+-	__r;								   \
+-})
+-
+-/*
+- * On RW/DIRTY bit transitions we can avoid flushing the hpte. For the
+- * moment we always flush but we need to fix hpte_update and test if the
+- * optimisation is worth it.
+- */
+-static inline int __ptep_test_and_clear_dirty(struct mm_struct *mm,
+-					      unsigned long addr, pte_t *ptep)
+-{
+-	unsigned long old;
+-
+-       	if ((pte_val(*ptep) & _PAGE_DIRTY) == 0)
+-		return 0;
+-	old = pte_update(mm, addr, ptep, _PAGE_DIRTY, 0);
+-	return (old & _PAGE_DIRTY) != 0;
+-}
+-#define __HAVE_ARCH_PTEP_TEST_AND_CLEAR_DIRTY
+-#define ptep_test_and_clear_dirty(__vma, __addr, __ptep)		   \
+-({									   \
+-	int __r;							   \
+-	__r = __ptep_test_and_clear_dirty((__vma)->vm_mm, __addr, __ptep); \
+-	__r;								   \
+-})
+-
+-#define __HAVE_ARCH_PTEP_SET_WRPROTECT
+-static inline void ptep_set_wrprotect(struct mm_struct *mm, unsigned long addr,
+-				      pte_t *ptep)
+-{
+-	unsigned long old;
+-
+-       	if ((pte_val(*ptep) & _PAGE_RW) == 0)
+-       		return;
+-	old = pte_update(mm, addr, ptep, _PAGE_RW, 0);
+-}
+-
+-/*
+- * We currently remove entries from the hashtable regardless of whether
+- * the entry was young or dirty. The generic routines only flush if the
+- * entry was young or dirty which is not good enough.
+- *
+- * We should be more intelligent about this but for the moment we override
+- * these functions and force a tlb flush unconditionally
+- */
+-#define __HAVE_ARCH_PTEP_CLEAR_YOUNG_FLUSH
+-#define ptep_clear_flush_young(__vma, __address, __ptep)		\
+-({									\
+-	int __young = __ptep_test_and_clear_young((__vma)->vm_mm, __address, \
+-						  __ptep);		\
+-	__young;							\
+-})
+-
+-#define __HAVE_ARCH_PTEP_CLEAR_DIRTY_FLUSH
+-#define ptep_clear_flush_dirty(__vma, __address, __ptep)		\
+-({									\
+-	int __dirty = __ptep_test_and_clear_dirty((__vma)->vm_mm, __address, \
+-						  __ptep); 		\
+-	__dirty;							\
+-})
+-
+-#define __HAVE_ARCH_PTEP_GET_AND_CLEAR
+-static inline pte_t ptep_get_and_clear(struct mm_struct *mm,
+-				       unsigned long addr, pte_t *ptep)
+-{
+-	unsigned long old = pte_update(mm, addr, ptep, ~0UL, 0);
+-	return __pte(old);
+-}
+-
+-static inline void pte_clear(struct mm_struct *mm, unsigned long addr,
+-			     pte_t * ptep)
+-{
+-	pte_update(mm, addr, ptep, ~0UL, 0);
+-}
+-
+-/*
+- * set_pte stores a linux PTE into the linux page table.
+- */
+-static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
+-			      pte_t *ptep, pte_t pte)
+-{
+-	if (pte_present(*ptep))
+-		pte_clear(mm, addr, ptep);
+-	pte = __pte(pte_val(pte) & ~_PAGE_HPTEFLAGS);
+-	*ptep = pte;
+-}
+-
+-/* Set the dirty and/or accessed bits atomically in a linux PTE, this
+- * function doesn't need to flush the hash entry
+- */
+-#define __HAVE_ARCH_PTEP_SET_ACCESS_FLAGS
+-static inline void __ptep_set_access_flags(pte_t *ptep, pte_t entry, int dirty)
+-{
+-	unsigned long bits = pte_val(entry) &
+-		(_PAGE_DIRTY | _PAGE_ACCESSED | _PAGE_RW | _PAGE_EXEC);
+-	unsigned long old, tmp;
+-
+-	__asm__ __volatile__(
+-	"1:	ldarx	%0,0,%4\n\
+-		andi.	%1,%0,%6\n\
+-		bne-	1b \n\
+-		or	%0,%3,%0\n\
+-		stdcx.	%0,0,%4\n\
+-		bne-	1b"
+-	:"=&r" (old), "=&r" (tmp), "=m" (*ptep)
+-	:"r" (bits), "r" (ptep), "m" (*ptep), "i" (_PAGE_BUSY)
+-	:"cc");
+-}
+-#define  ptep_set_access_flags(__vma, __address, __ptep, __entry, __dirty) \
+-	do {								   \
+-		__ptep_set_access_flags(__ptep, __entry, __dirty);	   \
+-		flush_tlb_page_nohash(__vma, __address);	       	   \
+-	} while(0)
+-
+-/*
+- * Macro to mark a page protection value as "uncacheable".
+- */
+-#define pgprot_noncached(prot)	(__pgprot(pgprot_val(prot) | _PAGE_NO_CACHE | _PAGE_GUARDED))
+-
+-struct file;
+-extern pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
+-				     unsigned long size, pgprot_t vma_prot);
+-#define __HAVE_PHYS_MEM_ACCESS_PROT
+-
+-#define __HAVE_ARCH_PTE_SAME
+-#define pte_same(A,B)	(((pte_val(A) ^ pte_val(B)) & ~_PAGE_HPTEFLAGS) == 0)
+-
+-#define pte_ERROR(e) \
+-	printk("%s:%d: bad pte %08lx.\n", __FILE__, __LINE__, pte_val(e))
+-#define pmd_ERROR(e) \
+-	printk("%s:%d: bad pmd %08lx.\n", __FILE__, __LINE__, pmd_val(e))
+-#define pgd_ERROR(e) \
+-	printk("%s:%d: bad pgd %08lx.\n", __FILE__, __LINE__, pgd_val(e))
+-
+-extern pgd_t swapper_pg_dir[];
+-
+-extern void paging_init(void);
+-
+-/* Encode and de-code a swap entry */
+-#define __swp_type(entry)	(((entry).val >> 1) & 0x3f)
+-#define __swp_offset(entry)	((entry).val >> 8)
+-#define __swp_entry(type, offset) ((swp_entry_t){((type)<< 1)|((offset)<<8)})
+-#define __pte_to_swp_entry(pte)	((swp_entry_t){pte_val(pte) >> PTE_RPN_SHIFT})
+-#define __swp_entry_to_pte(x)	((pte_t) { (x).val << PTE_RPN_SHIFT })
+-#define pte_to_pgoff(pte)	(pte_val(pte) >> PTE_RPN_SHIFT)
+-#define pgoff_to_pte(off)	((pte_t) {((off) << PTE_RPN_SHIFT)|_PAGE_FILE})
+-#define PTE_FILE_MAX_BITS	(BITS_PER_LONG - PTE_RPN_SHIFT)
+-
+-/*
+- * kern_addr_valid is intended to indicate whether an address is a valid
+- * kernel address.  Most 32-bit archs define it as always true (like this)
+- * but most 64-bit archs actually perform a test.  What should we do here?
+- * The only use is in fs/ncpfs/dir.c
+- */
+-#define kern_addr_valid(addr)	(1)
+-
+-#define io_remap_pfn_range(vma, vaddr, pfn, size, prot)		\
+-		remap_pfn_range(vma, vaddr, pfn, size, prot)
+-
+-void pgtable_cache_init(void);
+-
+-/*
+- * find_linux_pte returns the address of a linux pte for a given 
+- * effective address and directory.  If not found, it returns zero.
+- */static inline pte_t *find_linux_pte(pgd_t *pgdir, unsigned long ea)
+-{
+-	pgd_t *pg;
+-	pud_t *pu;
+-	pmd_t *pm;
+-	pte_t *pt = NULL;
+-
+-	pg = pgdir + pgd_index(ea);
+-	if (!pgd_none(*pg)) {
+-		pu = pud_offset(pg, ea);
+-		if (!pud_none(*pu)) {
+-			pm = pmd_offset(pu, ea);
+-			if (pmd_present(*pm))
+-				pt = pte_offset_kernel(pm, ea);
+-		}
+-	}
+-	return pt;
+-}
+-
+-
+ #include <asm-generic/pgtable.h>
+-
+ #endif /* __ASSEMBLY__ */
+ 
+-#endif /* CONFIG_PPC64 */
+ #endif /* __KERNEL__ */
+ #endif /* _ASM_POWERPC_PGTABLE_H */
+Index: linux-2.6.18/mvl_patches/pro50-0328.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0328.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(328);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

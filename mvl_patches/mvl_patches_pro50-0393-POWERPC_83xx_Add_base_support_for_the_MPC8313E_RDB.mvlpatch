@@ -1,0 +1,615 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_83xx_Add_base_support_for_the_MPC8313E_RDB
+# Date: Wed Sep 26 11:19:11 2007
+# MR: 23853
+# 
+# From b359049f270dcaab8a5bbdbb966594c16caba16c Mon Sep 17 00:00:00 2001
+# From: Kim Phillips <kim.phillips@freescale.com>
+# Date: Wed, 7 Feb 2007 22:19:12 -0600
+# Subject: [PATCH] [POWERPC] 83xx: Add base support for the MPC8313E RDB
+# 
+# Add support for the MPC8313E Reference Development Board (RDB).  The board
+# is a mini-ITX reference board with 128M DDR2, 8M flash, 32M NAND, USB, PCI,
+# gigabit ethernet, and serial.
+# 
+# Signed-off-by: Wilson Lo <Wilson.Lo@freescale.com>
+# Signed-off-by: Scott Wood <scottwood@freescale.com>
+# Signed-off-by: Kim Phillips <kim.phillips@freescale.com>
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+
+PATCHNUM=393
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 23853
+
+From b359049f270dcaab8a5bbdbb966594c16caba16c Mon Sep 17 00:00:00 2001
+From: Kim Phillips <kim.phillips@freescale.com>
+Date: Wed, 7 Feb 2007 22:19:12 -0600
+Subject: [PATCH] [POWERPC] 83xx: Add base support for the MPC8313E RDB
+
+Add support for the MPC8313E Reference Development Board (RDB).  The board
+is a mini-ITX reference board with 128M DDR2, 8M flash, 32M NAND, USB, PCI,
+gigabit ethernet, and serial.
+
+Signed-off-by: Wilson Lo <Wilson.Lo@freescale.com>
+Signed-off-by: Scott Wood <scottwood@freescale.com>
+Signed-off-by: Kim Phillips <kim.phillips@freescale.com>
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8313erdb.dts
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8313erdb.dts
+@@ -0,0 +1,219 @@
++/*
++ * MPC8313E RDB Device Tree Source
++ *
++ * Copyright 2005, 2006, 2007 Freescale Semiconductor Inc.
++ *
++ * This program is free software; you can redistribute  it and/or modify it
++ * under  the terms of  the GNU General  Public License as published by the
++ * Free Software Foundation;  either version 2 of the  License, or (at your
++ * option) any later version.
++ */
++
++/ {
++	model = "MPC8313ERDB";
++	compatible = "MPC83xx";
++	#address-cells = <1>;
++	#size-cells = <1>;
++
++	cpus {
++		#cpus = <1>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		PowerPC,8313@0 {
++			device_type = "cpu";
++			reg = <0>;
++			d-cache-line-size = <20>;	// 32 bytes
++			i-cache-line-size = <20>;	// 32 bytes
++			d-cache-size = <4000>;		// L1, 16K
++			i-cache-size = <4000>;		// L1, 16K
++			timebase-frequency = <0>;	// from bootloader
++			bus-frequency = <0>;		// from bootloader
++			clock-frequency = <0>;		// from bootloader
++			32-bit;
++		};
++	};
++
++	memory {
++		device_type = "memory";
++		reg = <00000000 08000000>;	// 128MB at 0
++	};
++
++	soc8313@e0000000 {
++		#address-cells = <1>;
++		#size-cells = <1>;
++		#interrupt-cells = <2>;
++		device_type = "soc";
++		ranges = <0 e0000000 00100000>;
++		reg = <e0000000 00000200>;
++		bus-frequency = <0>;
++
++		wdt@200 {
++			device_type = "watchdog";
++			compatible = "mpc83xx_wdt";
++			reg = <200 100>;
++		};
++
++		i2c@3000 {
++			device_type = "i2c";
++			compatible = "fsl-i2c";
++			reg = <3000 100>;
++			interrupts = <e 8>;
++			interrupt-parent = <700>;
++			dfsrr;
++		};
++
++		i2c@3100 {
++			device_type = "i2c";
++			compatible = "fsl-i2c";
++			reg = <3100 100>;
++			interrupts = <f 8>;
++			interrupt-parent = <700>;
++			dfsrr;
++		};
++
++		spi@7000 {
++			device_type = "spi";
++			compatible = "mpc83xx_spi";
++			reg = <7000 1000>;
++			interrupts = <10 8>;
++			interrupt-parent = <700>;
++			mode = <0>;
++		};
++
++		/* phy type (ULPI, UTMI, UTMI_WIDE, SERIAL) */
++		usb@23000 {
++			device_type = "usb";
++			compatible = "fsl-usb2-dr";
++			reg = <23000 1000>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++			interrupt-parent = <700>;
++			interrupts = <26 2>;
++			phy_type = "utmi_wide";
++		};
++
++		mdio@24520 {
++			device_type = "mdio";
++			compatible = "gianfar";
++			reg = <24520 20>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++			linux,phandle = <24520>;
++			ethernet-phy@1 {
++				linux,phandle = <2452001>;
++				interrupt-parent = <700>;
++				interrupts = <13 2>;
++				reg = <1>;
++				device_type = "ethernet-phy";
++			};
++			ethernet-phy@4 {
++				linux,phandle = <2452004>;
++				interrupt-parent = <700>;
++				interrupts = <14 2>;
++				reg = <4>;
++				device_type = "ethernet-phy";
++			};
++		};
++
++		ethernet@24000 {
++			device_type = "network";
++			model = "eTSEC";
++			compatible = "gianfar";
++			reg = <24000 1000>;
++			local-mac-address = [ 00 00 00 00 00 00 ];
++			interrupts = <25 8 24 8 23 8>;
++			interrupt-parent = <700>;
++			phy-handle = <2452001>;
++		};
++
++		ethernet@25000 {
++			device_type = "network";
++			model = "eTSEC";
++			compatible = "gianfar";
++			reg = <25000 1000>;
++			local-mac-address = [ 00 00 00 00 00 00 ];
++			interrupts = <22 8 21 8 20 8>;
++			interrupt-parent = <700>;
++			phy-handle = <2452004>;
++		};
++
++		serial@4500 {
++			device_type = "serial";
++			compatible = "ns16550";
++			reg = <4500 100>;
++			clock-frequency = <0>;
++			interrupts = <9 8>;
++			interrupt-parent = <700>;
++		};
++
++		serial@4600 {
++			device_type = "serial";
++			compatible = "ns16550";
++			reg = <4600 100>;
++			clock-frequency = <0>;
++			interrupts = <a 8>;
++			interrupt-parent = <700>;
++		};
++
++		pci@8500 {
++			interrupt-map-mask = <f800 0 0 7>;
++			interrupt-map = <
++
++					/* IDSEL 0x0E -mini PCI */
++					 7000 0 0 1 700 12 8
++					 7000 0 0 2 700 12 8
++					 7000 0 0 3 700 12 8
++					 7000 0 0 4 700 12 8
++
++					/* IDSEL 0x0F - PCI slot */
++					 7800 0 0 1 700 11 8
++					 7800 0 0 2 700 12 8
++					 7800 0 0 3 700 11 8
++					 7800 0 0 4 700 12 8>;
++			interrupt-parent = <700>;
++			interrupts = <42 8>;
++			bus-range = <0 0>;
++			ranges = <02000000 0 90000000 90000000 0 10000000
++			          42000000 0 80000000 80000000 0 10000000
++			          01000000 0 00000000 e2000000 0 00100000>;
++			clock-frequency = <3f940aa>;
++			#interrupt-cells = <1>;
++			#size-cells = <2>;
++			#address-cells = <3>;
++			reg = <8500 100>;
++			compatible = "83xx";
++			device_type = "pci";
++		};
++
++		crypto@30000 {
++			device_type = "crypto";
++			model = "SEC2";
++			compatible = "talitos";
++			reg = <30000 7000>;
++			interrupts = <b 8>;
++			interrupt-parent = <700>;
++			/* Rev. 2.2 */
++			num-channels = <1>;
++			channel-fifo-len = <18>;
++			exec-units-mask = <0000004c>;
++			descriptor-types-mask = <0122003f>;
++		};
++
++		/* IPIC
++		 * interrupts cell = <intr #, sense>
++		 * sense values match linux IORESOURCE_IRQ_* defines:
++		 * sense == 8: Level, low assertion
++		 * sense == 2: Edge, high-to-low change
++		 */
++		pic@700 {
++			linux,phandle = <700>;
++			interrupt-controller;
++			#address-cells = <0>;
++			#interrupt-cells = <2>;
++			reg = <700 100>;
++			built-in;
++			device_type = "ipic";
++		};
++	};
++};
+Index: linux-2.6.18/arch/powerpc/platforms/83xx/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/83xx/Kconfig
++++ linux-2.6.18/arch/powerpc/platforms/83xx/Kconfig
+@@ -5,6 +5,12 @@ choice
+ 	prompt "Machine Type"
+ 	default MPC834x_SYS
+ 
++config MPC8313_RDB
++	bool "Freescale MPC8313 RDB"
++	select DEFAULT_UIMAGE
++	help
++	  This option enables support for the MPC8313 RDB board.
++
+ config MPC832x_MDS
+ 	bool "Freescale MPC832x MDS"
+ 	select DEFAULT_UIMAGE
+@@ -41,6 +47,12 @@ config MPC8360E_PB
+ 
+ endchoice
+ 
++config PPC_MPC831x
++	bool
++	select PPC_UDBG_16550
++	select PPC_INDIRECT_PCI
++	default y if MPC8313_RDB
++
+ config PPC_MPC832x
+ 	bool
+ 	select PPC_UDBG_16550
+Index: linux-2.6.18/arch/powerpc/platforms/83xx/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/83xx/Makefile
++++ linux-2.6.18/arch/powerpc/platforms/83xx/Makefile
+@@ -3,6 +3,7 @@
+ #
+ obj-y				:= misc.o
+ obj-$(CONFIG_PCI)		+= pci.o
++obj-$(CONFIG_MPC8313_RDB)	+= mpc8313_rdb.o
+ obj-$(CONFIG_MPC834x_SYS)	+= mpc834x_sys.o
+ obj-$(CONFIG_MPC834x_ITX)	+= mpc834x_itx.o
+ obj-$(CONFIG_MPC8360E_PB)	+= mpc8360e_pb.o
+Index: linux-2.6.18/arch/powerpc/platforms/83xx/mpc8313_rdb.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/83xx/mpc8313_rdb.c
+@@ -0,0 +1,99 @@
++/*
++ * arch/powerpc/platforms/83xx/mpc8313_rdb.c
++ *
++ * Description: MPC8313x RDB board specific routines.
++ * This file is based on mpc834x_sys.c
++ * Author: Lo Wlison <r43300@freescale.com>
++ *
++ * Copyright (C) Freescale Semiconductor, Inc. 2006. All rights reserved.
++ *
++ * This program is free software; you can redistribute  it and/or modify it
++ * under  the terms of  the GNU General  Public License as published by the
++ * Free Software Foundation;  either version 2 of the  License, or (at your
++ * option) any later version.
++ */
++
++#include <linux/pci.h>
++
++#include <asm/time.h>
++#include <asm/ipic.h>
++#include <asm/udbg.h>
++
++#include "mpc83xx.h"
++
++#undef DEBUG
++#ifdef DEBUG
++#define DBG(fmt...) udbg_printf(fmt)
++#else
++#define DBG(fmt...)
++#endif
++
++#ifndef CONFIG_PCI
++unsigned long isa_io_base = 0;
++unsigned long isa_mem_base = 0;
++#endif
++
++/* ************************************************************************
++ *
++ * Setup the architecture
++ *
++ */
++static void __init mpc8313_rdb_setup_arch(void)
++{
++	struct device_node *np;
++
++	if (ppc_md.progress)
++		ppc_md.progress("mpc8313_rdb_setup_arch()", 0);
++
++#ifdef CONFIG_PCI
++	for (np = NULL; (np = of_find_node_by_type(np, "pci")) != NULL;)
++		add_bridge(np);
++
++	ppc_md.pci_exclude_device = mpc83xx_exclude_device;
++#endif
++}
++
++void __init mpc8313_rdb_init_IRQ(void)
++{
++	struct device_node *np;
++
++	np = of_find_node_by_type(NULL, "ipic");
++	if (!np)
++		return;
++
++	ipic_init(np, 0);
++
++	/* Initialize the default interrupt mapping priorities,
++	 * in case the boot rom changed something on us.
++	 */
++	ipic_set_default_priority();
++}
++
++/*
++ * Called very early, MMU is off, device-tree isn't unflattened
++ */
++static int __init mpc8313_rdb_probe(void)
++{
++	char *model = of_get_flat_dt_prop(of_get_flat_dt_root(),
++					  "model", NULL);
++	if (model == NULL)
++		return 0;
++	if (strcmp(model, "MPC8313ERDB"))
++		return 0;
++
++	DBG("MPC8313 RDB found\n");
++
++	return 1;
++}
++
++define_machine(mpc8313_rdb) {
++	.name			= "MPC8313 RDB",
++	.probe			= mpc8313_rdb_probe,
++	.setup_arch		= mpc8313_rdb_setup_arch,
++	.init_IRQ		= mpc8313_rdb_init_IRQ,
++	.get_irq		= ipic_get_irq,
++	.restart		= mpc83xx_restart,
++	.time_init		= mpc83xx_time_init,
++	.calibrate_decr		= generic_calibrate_decr,
++	.progress		= udbg_progress,
++};
+Index: linux-2.6.18/mvl_patches/pro50-0393.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0393.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(393);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

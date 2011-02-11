@@ -1,0 +1,751 @@
+#! /usr/bin/env bash
+# Patch: -cpm2_CPM2_interrupt_controller_fix
+# Date: Wed Jun 20 09:50:55 2007
+# MR: 22933
+# From 73844ecbaa58885c5e89af7d1b08faaffffa6833 Mon Sep 17 00:00:00 2001
+# From: Vitaly Bordug <vbordug@ru.mvista.com>
+# Date: Wed, 31 Jan 2007 02:08:54 +0300
+# Subject: [PATCH] [POWERPC] cpm2: CPM2 interrupt controller fix
+# 
+# This contains important fixes for the CPM2 PIC code. Eliminated
+# CPM_IRQ_OFFSET, pulling the respective interrupt numbers from the interrupt
+# mapping. Updated devicetree files to reflect that. Changed direct
+# IC-related IO accesses to the IO accessors. Fixed all the sense values to
+# keep coherency with ipic. In the current code, CPM2 stuff will have no IRQs
+# and hence could be hardly usable.
+# 
+# Signed-off-by: Vitaly Bordug <vbordug@ru.mvista.com>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+# 
+#  arch/powerpc/boot/dts/mpc8272ads.dts |   47 ++++++----
+#  arch/powerpc/boot/dts/mpc8560ads.dts |   10 +-
+#  arch/powerpc/sysdev/cpm2_pic.c       |  150 ++++++++++++++++++++---------------
+#  arch/powerpc/sysdev/cpm2_pic.h       |    2 
+#  include/asm-powerpc/mpc8260.h        |   24 +++++
+#  5 files changed, 145 insertions(+), 88 deletions(-)
+#  create mode 100644 include/asm-powerpc/mpc8260.h
+# 
+
+PATCHNUM=42
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 22933
+From 73844ecbaa58885c5e89af7d1b08faaffffa6833 Mon Sep 17 00:00:00 2001
+From: Vitaly Bordug <vbordug@ru.mvista.com>
+Date: Wed, 31 Jan 2007 02:08:54 +0300
+Subject: [PATCH] [POWERPC] cpm2: CPM2 interrupt controller fix
+
+This contains important fixes for the CPM2 PIC code. Eliminated
+CPM_IRQ_OFFSET, pulling the respective interrupt numbers from the interrupt
+mapping. Updated devicetree files to reflect that. Changed direct
+IC-related IO accesses to the IO accessors. Fixed all the sense values to
+keep coherency with ipic. In the current code, CPM2 stuff will have no IRQs
+and hence could be hardly usable.
+
+Signed-off-by: Vitaly Bordug <vbordug@ru.mvista.com>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+ arch/powerpc/boot/dts/mpc8272ads.dts |   47 ++++++----
+ arch/powerpc/boot/dts/mpc8560ads.dts |   10 +-
+ arch/powerpc/sysdev/cpm2_pic.c       |  150 ++++++++++++++++++++---------------
+ arch/powerpc/sysdev/cpm2_pic.h       |    2 
+ include/asm-powerpc/mpc8260.h        |   24 +++++
+ mvl_patches/pro50-0042.c             |   16 +++
+ 6 files changed, 161 insertions(+), 88 deletions(-)
+ create mode 100644 include/asm-powerpc/mpc8260.h
+
+diff --git a/arch/powerpc/boot/dts/mpc8272ads.dts b/arch/powerpc/boot/dts/mpc8272ads.dts
+index 34efdd0..286638e 100644
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8272ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8272ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8272ads.dts
+@@ -53,6 +53,13 @@
+                reg = <00000000 4000000 f4500000 00000020>;
+        };
+ 
++       chosen {
++               name = "chosen";
++               linux,platform = <0>;
++               interrupt-controller = <10c00>;
++               linux,phandle = <400>;
++       };
++
+        soc8272@f0000000 {
+                #address-cells = <1>;
+                #size-cells = <1>;
+@@ -71,7 +78,7 @@
+                        ethernet-phy@0 {
+                                linux,phandle = <2452000>;
+                                interrupt-parent = <10c00>;
+-                               interrupts = <19 1>;
++                               interrupts = <17 4>;
+                                reg = <0>;
+                                bitbang = [ 12 12 13 02 02 01 ];
+                                device_type = "ethernet-phy";
+@@ -79,7 +86,7 @@
+                        ethernet-phy@1 {
+                                linux,phandle = <2452001>;
+                                interrupt-parent = <10c00>;
+-                               interrupts = <19 1>;
++                               interrupts = <17 4>;
+                                bitbang = [ 12 12 13 02 02 01 ];
+                                reg = <3>;
+                                device_type = "ethernet-phy";
+@@ -90,7 +97,7 @@
+                        #address-cells = <1>;
+                        #size-cells = <0>;
+                        device_type = "network";
+-                       device-id = <2>;
++                       device-id = <1>;
+                        compatible = "fs_enet";
+                        model = "FCC";
+                        reg = <11300 20 8400 100 11380 30>;
+@@ -104,7 +111,7 @@
+ 
+                ethernet@25000 {
+                        device_type = "network";
+-                       device-id = <3>;
++                       device-id = <2>;
+                        compatible = "fs_enet";
+                        model = "FCC";
+                        reg = <11320 20 8500 100 113b0 30>;
+@@ -133,7 +140,7 @@
+                                device_type = "serial";
+                                compatible = "cpm_uart";
+                                model = "SCC";
+-                               device-id = <2>;
++                               device-id = <1>;
+                                reg = <11a00 20 8000 100>;
+                                current-speed = <1c200>;
+                                interrupts = <28 2>;
+@@ -147,7 +154,7 @@
+                                device_type = "serial";
+                                compatible = "cpm_uart";
+                                model = "SCC";
+-                               device-id = <5>;
++                               device-id = <4>;
+                                reg = <11a60 20 8300 100>;
+                                current-speed = <1c200>;
+                                interrupts = <2b 2>;
+@@ -181,24 +188,24 @@
+                        interrupt-map = <
+ 
+                                        /* IDSEL 0x16 */
+-                                        b000 0 0 1 f8200000 40 0
+-                                        b000 0 0 2 f8200000 41 0
+-                                        b000 0 0 3 f8200000 42 0
+-                                        b000 0 0 4 f8200000 43 0
++                                        b000 0 0 1 f8200000 40 8
++                                        b000 0 0 2 f8200000 41 8
++                                        b000 0 0 3 f8200000 42 8
++                                        b000 0 0 4 f8200000 43 8
+ 
+                                        /* IDSEL 0x17 */
+-                                        b800 0 0 1 f8200000 43 0
+-                                        b800 0 0 2 f8200000 40 0
+-                                        b800 0 0 3 f8200000 41 0
+-                                        b800 0 0 4 f8200000 42 0
++                                        b800 0 0 1 f8200000 43 8
++                                        b800 0 0 2 f8200000 40 8
++                                        b800 0 0 3 f8200000 41 8
++                                        b800 0 0 4 f8200000 42 8
+ 
+                                        /* IDSEL 0x18 */
+-                                        c000 0 0 1 f8200000 42 0
+-                                        c000 0 0 2 f8200000 43 0
+-                                        c000 0 0 3 f8200000 40 0
+-                                        c000 0 0 4 f8200000 41 0>;
++                                        c000 0 0 1 f8200000 42 8
++                                        c000 0 0 2 f8200000 43 8
++                                        c000 0 0 3 f8200000 40 8
++                                        c000 0 0 4 f8200000 41 8>;
+                        interrupt-parent = <10c00>;
+-                       interrupts = <14 3>;
++                       interrupts = <14 8>;
+                        bus-range = <0 0>;
+                        ranges = <02000000 0 80000000 80000000 0 40000000
+                                  01000000 0 00000000 f6000000 0 02000000>;
+@@ -210,7 +217,7 @@
+                        model = "SEC2";
+                        compatible = "talitos";
+                        reg = <30000 10000>;
+-                       interrupts = <b 0>;
++                       interrupts = <b 2>;
+                        interrupt-parent = <10c00>;
+                        num-channels = <4>;
+                        channel-fifo-len = <18>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8560ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8560ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8560ads.dts
+@@ -200,7 +200,7 @@
+ 					 a800 0 0 4 40000 31 1>;
+ 
+ 			interrupt-parent = <40000>;
+-			interrupts = <42 0>;
++			interrupts = <8 0>;
+ 			bus-range = <0 0>;
+ 			ranges = <02000000 0 80000000 80000000 0 20000000
+ 				  01000000 0 00000000 e2000000 0 01000000>;
+@@ -250,7 +250,7 @@
+ 				rx-clock = <1>;
+ 				tx-clock = <1>;
+ 				current-speed = <1c200>;
+-				interrupts = <64 1>;
++				interrupts = <28 8>;
+ 				interrupt-parent = <90c00>;
+ 			};
+ 
+@@ -264,7 +264,7 @@
+ 				rx-clock = <2>;
+ 				tx-clock = <2>;
+ 				current-speed = <1c200>;
+-				interrupts = <65 1>;
++				interrupts = <29 8>;
+ 				interrupt-parent = <90c00>;
+ 			};
+ 
+@@ -278,7 +278,7 @@
+ 				clock-setup = <ff00ffff 250000>;
+ 				rx-clock = <15>;
+ 				tx-clock = <16>;
+-				interrupts = <5d 1>;
++				interrupts = <21 8>;
+ 				interrupt-parent = <90c00>;
+ 				phy-handle = <2452002>;
+ 			};
+@@ -293,7 +293,7 @@
+ 				clock-setup = <ffff00ff 3700>;
+ 				rx-clock = <17>;
+ 				tx-clock = <18>;
+-				interrupts = <5e 1>;
++				interrupts = <22 8>;
+ 				interrupt-parent = <90c00>;
+ 				phy-handle = <2452003>;
+ 			};
+Index: linux-2.6.18/arch/powerpc/sysdev/cpm2_pic.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/cpm2_pic.c
++++ linux-2.6.18/arch/powerpc/sysdev/cpm2_pic.c
+@@ -36,9 +36,20 @@
+ #include <asm/mpc8260.h>
+ #include <asm/io.h>
+ #include <asm/prom.h>
++#include <asm/fs_pd.h>
+ 
+ #include "cpm2_pic.h"
+ 
++/* External IRQS */
++#define CPM2_IRQ_EXT1		19
++#define CPM2_IRQ_EXT7		25
++
++/* Port C IRQS */
++#define CPM2_IRQ_PORTC15	48
++#define CPM2_IRQ_PORTC0		63
++
++static intctl_cpm2_t *cpm2_intctl;
++
+ static struct device_node *cpm2_pic_node;
+ static struct irq_host *cpm2_pic_host;
+ #define NR_MASK_WORDS   ((NR_IRQS + 31) / 32)
+@@ -68,68 +79,55 @@ static const u_char irq_to_siubit[] = {
+ 	24, 25, 26, 27, 28, 29, 30, 31,
+ };
+ 
+-static void cpm2_mask_irq(unsigned int irq_nr)
++static void cpm2_mask_irq(unsigned int virq)
+ {
+ 	int	bit, word;
+-	volatile uint	*simr;
+-
+-	irq_nr -= CPM_IRQ_OFFSET;
++	unsigned int irq_nr = virq_to_hw(virq);
+ 
+ 	bit = irq_to_siubit[irq_nr];
+ 	word = irq_to_siureg[irq_nr];
+ 
+-	simr = &(cpm2_intctl->ic_simrh);
+ 	ppc_cached_irq_mask[word] &= ~(1 << bit);
+-	simr[word] = ppc_cached_irq_mask[word];
++	out_be32(&cpm2_intctl->ic_simrh + word, ppc_cached_irq_mask[word]);
+ }
+ 
+-static void cpm2_unmask_irq(unsigned int irq_nr)
++static void cpm2_unmask_irq(unsigned int virq)
+ {
+ 	int	bit, word;
+-	volatile uint	*simr;
+-
+-	irq_nr -= CPM_IRQ_OFFSET;
++	unsigned int irq_nr = virq_to_hw(virq);
+ 
+ 	bit = irq_to_siubit[irq_nr];
+ 	word = irq_to_siureg[irq_nr];
+ 
+-	simr = &(cpm2_intctl->ic_simrh);
+ 	ppc_cached_irq_mask[word] |= 1 << bit;
+-	simr[word] = ppc_cached_irq_mask[word];
++	out_be32(&cpm2_intctl->ic_simrh + word, ppc_cached_irq_mask[word]);
+ }
+ 
+-static void cpm2_mask_and_ack(unsigned int irq_nr)
++static void cpm2_ack(unsigned int virq)
+ {
+ 	int	bit, word;
+-	volatile uint	*simr, *sipnr;
+-
+-	irq_nr -= CPM_IRQ_OFFSET;
++	unsigned int irq_nr = virq_to_hw(virq);
+ 
+ 	bit = irq_to_siubit[irq_nr];
+ 	word = irq_to_siureg[irq_nr];
+ 
+-	simr = &(cpm2_intctl->ic_simrh);
+-	sipnr = &(cpm2_intctl->ic_sipnrh);
+-	ppc_cached_irq_mask[word] &= ~(1 << bit);
+-	simr[word] = ppc_cached_irq_mask[word];
+-	sipnr[word] = 1 << bit;
++	out_be32(&cpm2_intctl->ic_sipnrh + word, 1 << bit);
+ }
+ 
+-static void cpm2_end_irq(unsigned int irq_nr)
++static void cpm2_end_irq(unsigned int virq)
+ {
+ 	int	bit, word;
+-	volatile uint	*simr;
++	unsigned int irq_nr = virq_to_hw(virq);
+ 
+ 	if (!(irq_desc[irq_nr].status & (IRQ_DISABLED|IRQ_INPROGRESS))
+ 			&& irq_desc[irq_nr].action) {
+ 
+-		irq_nr -= CPM_IRQ_OFFSET;
+ 		bit = irq_to_siubit[irq_nr];
+ 		word = irq_to_siureg[irq_nr];
+ 
+-		simr = &(cpm2_intctl->ic_simrh);
+ 		ppc_cached_irq_mask[word] |= 1 << bit;
+-		simr[word] = ppc_cached_irq_mask[word];
++		out_be32(&cpm2_intctl->ic_simrh + word, ppc_cached_irq_mask[word]);
++
+ 		/*
+ 		 * Work around large numbers of spurious IRQs on PowerPC 82xx
+ 		 * systems.
+@@ -138,13 +136,59 @@ static void cpm2_end_irq(unsigned int ir
+ 	}
+ }
+ 
++static int cpm2_set_irq_type(unsigned int virq, unsigned int flow_type)
++{
++	unsigned int src = virq_to_hw(virq);
++	struct irq_desc *desc = get_irq_desc(virq);
++	unsigned int vold, vnew, edibit;
++
++	if (flow_type == IRQ_TYPE_NONE)
++		flow_type = IRQ_TYPE_LEVEL_LOW;
++
++	if (flow_type & IRQ_TYPE_EDGE_RISING) {
++		printk(KERN_ERR "CPM2 PIC: sense type 0x%x not supported\n",
++			flow_type);
++		return -EINVAL;
++	}
++
++	desc->status &= ~(IRQ_TYPE_SENSE_MASK | IRQ_LEVEL);
++	desc->status |= flow_type & IRQ_TYPE_SENSE_MASK;
++	if (flow_type & IRQ_TYPE_LEVEL_LOW)  {
++		desc->status |= IRQ_LEVEL;
++		desc->handle_irq = handle_level_irq;
++	} else
++		desc->handle_irq = handle_edge_irq;
++
++	/* internal IRQ senses are LEVEL_LOW
++	 * EXT IRQ and Port C IRQ senses are programmable
++	 */
++	if (src >= CPM2_IRQ_EXT1 && src <= CPM2_IRQ_EXT7)
++			edibit = (14 - (src - CPM2_IRQ_EXT1));
++	else
++		if (src >= CPM2_IRQ_PORTC15 && src <= CPM2_IRQ_PORTC0)
++			edibit = (31 - (src - CPM2_IRQ_PORTC15));
++		else
++			return (flow_type & IRQ_TYPE_LEVEL_LOW) ? 0 : -EINVAL;
++
++	vold = in_be32(&cpm2_intctl->ic_siexr);
++
++	if ((flow_type & IRQ_TYPE_SENSE_MASK) == IRQ_TYPE_EDGE_FALLING)
++		vnew = vold | (1 << edibit);
++	else
++		vnew = vold & ~(1 << edibit);
++
++	if (vold != vnew)
++		out_be32(&cpm2_intctl->ic_siexr, vnew);
++	return 0;
++}
++
+ static struct irq_chip cpm2_pic = {
+ 	.typename = " CPM2 SIU ",
+-	.enable = cpm2_unmask_irq,
+-	.disable = cpm2_mask_irq,
++	.mask = cpm2_mask_irq,
+ 	.unmask = cpm2_unmask_irq,
+-	.mask_ack = cpm2_mask_and_ack,
+-	.end = cpm2_end_irq,
++	.ack = cpm2_ack,
++	.eoi = cpm2_end_irq,
++	.set_type = cpm2_set_irq_type,
+ };
+ 
+ unsigned int cpm2_get_irq(struct pt_regs *regs)
+@@ -154,17 +198,17 @@ unsigned int cpm2_get_irq(struct pt_regs
+ 
+        /* For CPM2, read the SIVEC register and shift the bits down
+          * to get the irq number.         */
+-        bits = cpm2_intctl->ic_sivec;
++        bits = in_be32(&cpm2_intctl->ic_sivec);
+         irq = bits >> 26;
+ 
+ 	if (irq == 0)
+ 		return(-1);
+-	return irq+CPM_IRQ_OFFSET;
++	return irq_linear_revmap(cpm2_pic_host, irq);
+ }
+ 
+ static int cpm2_pic_host_match(struct irq_host *h, struct device_node *node)
+ {
+-	return cpm2_pic_node == NULL || cpm2_pic_node == node;
++	return cpm2_pic_node == node;
+ }
+ 
+ static int cpm2_pic_host_map(struct irq_host *h, unsigned int virq,
+@@ -177,39 +221,21 @@ static int cpm2_pic_host_map(struct irq_
+ 	return 0;
+ }
+ 
+-static void cpm2_host_unmap(struct irq_host *h, unsigned int virq)
+-{
+-	/* Make sure irq is masked in hardware */
+-	cpm2_mask_irq(virq);
+-
+-	/* remove chip and handler */
+-	set_irq_chip_and_handler(virq, NULL, NULL);
+-}
+-
+ static int cpm2_pic_host_xlate(struct irq_host *h, struct device_node *ct,
+ 			    u32 *intspec, unsigned int intsize,
+ 			    irq_hw_number_t *out_hwirq, unsigned int *out_flags)
+ {
+-	static const unsigned char map_cpm2_senses[4] = {
+-		IRQ_TYPE_LEVEL_LOW,
+-		IRQ_TYPE_LEVEL_HIGH,
+-		IRQ_TYPE_EDGE_FALLING,
+-		IRQ_TYPE_EDGE_RISING,
+-	};
+-
+ 	*out_hwirq = intspec[0];
+-	if (intsize > 1 && intspec[1] < 4)
+-		*out_flags = map_cpm2_senses[intspec[1]];
++	if (intsize > 1)
++		*out_flags = intspec[1];
+ 	else
+ 		*out_flags = IRQ_TYPE_NONE;
+-
+ 	return 0;
+ }
+ 
+ static struct irq_host_ops cpm2_pic_host_ops = {
+ 	.match = cpm2_pic_host_match,
+ 	.map = cpm2_pic_host_map,
+-	.unmap = cpm2_host_unmap,
+ 	.xlate = cpm2_pic_host_xlate,
+ };
+ 
+@@ -217,32 +243,34 @@ void cpm2_pic_init(struct device_node *n
+ {
+ 	int i;
+ 
++	cpm2_intctl = cpm2_map(im_intctl);
++
+ 	/* Clear the CPM IRQ controller, in case it has any bits set
+ 	 * from the bootloader
+ 	 */
+ 
+ 	/* Mask out everything */
+ 
+-	cpm2_intctl->ic_simrh = 0x00000000;
+-	cpm2_intctl->ic_simrl = 0x00000000;
++	out_be32(&cpm2_intctl->ic_simrh, 0x00000000);
++	out_be32(&cpm2_intctl->ic_simrl, 0x00000000);
+ 
+ 	wmb();
+ 
+ 	/* Ack everything */
+-	cpm2_intctl->ic_sipnrh = 0xffffffff;
+-	cpm2_intctl->ic_sipnrl = 0xffffffff;
++	out_be32(&cpm2_intctl->ic_sipnrh, 0xffffffff);
++	out_be32(&cpm2_intctl->ic_sipnrl, 0xffffffff);
+ 	wmb();
+ 
+ 	/* Dummy read of the vector */
+-	i = cpm2_intctl->ic_sivec;
++	i = in_be32(&cpm2_intctl->ic_sivec);
+ 	rmb();
+ 
+ 	/* Initialize the default interrupt mapping priorities,
+ 	 * in case the boot rom changed something on us.
+ 	 */
+-	cpm2_intctl->ic_sicr = 0;
+-	cpm2_intctl->ic_scprrh = 0x05309770;
+-	cpm2_intctl->ic_scprrl = 0x05309770;
++	out_be16(&cpm2_intctl->ic_sicr, 0);
++	out_be32(&cpm2_intctl->ic_scprrh, 0x05309770);
++	out_be32(&cpm2_intctl->ic_scprrl, 0x05309770);
+ 
+ 	/* create a legacy host */
+ 	if (node)
+Index: linux-2.6.18/arch/powerpc/sysdev/cpm2_pic.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/cpm2_pic.h
++++ linux-2.6.18/arch/powerpc/sysdev/cpm2_pic.h
+@@ -1,8 +1,6 @@
+ #ifndef _PPC_KERNEL_CPM2_H
+ #define _PPC_KERNEL_CPM2_H
+ 
+-extern intctl_cpm2_t *cpm2_intctl;
+-
+ extern unsigned int cpm2_get_irq(struct pt_regs *regs);
+ 
+ extern void cpm2_pic_init(struct device_node*);
+Index: linux-2.6.18/include/asm-powerpc/mpc8260.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-powerpc/mpc8260.h
+@@ -0,0 +1,24 @@
++/*
++ * Since there are many different boards and no standard configuration,
++ * we have a unique include file for each.  Rather than change every
++ * file that has to include MPC8260 configuration, they all include
++ * this one and the configuration switching is done here.
++ */
++#ifdef __KERNEL__
++#ifndef __ASM_PPC_MPC8260_H__
++#define __ASM_PPC_MPC8260_H__
++
++
++#ifdef CONFIG_8260
++
++#if defined(CONFIG_PQ2ADS) || defined (CONFIG_PQ2FADS)
++#include <platforms/82xx/pq2ads.h>
++#endif
++
++#ifdef CONFIG_PCI_8260
++#include <platforms/82xx/m82xx_pci.h>
++#endif
++
++#endif /* CONFIG_8260 */
++#endif /* !__ASM_PPC_MPC8260_H__ */
++#endif /* __KERNEL__ */
+Index: linux-2.6.18/mvl_patches/pro50-0042.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0042.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(42);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

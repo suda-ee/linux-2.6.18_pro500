@@ -1,0 +1,380 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_DEBUG_PAGEALLOC_for_32_bit
+# Date: Wed Sep 26 11:16:01 2007
+# MR: 24856
+# From 88df6e90fa9782dbf44d936e44649afe271e4790 Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Thu, 12 Apr 2007 15:30:22 +1000
+# Subject: [PATCH] [POWERPC] DEBUG_PAGEALLOC for 32-bit
+# 
+# Here's an implementation of DEBUG_PAGEALLOC for ppc32. It disables BAT
+# mapping and is only tested with Hash table based processor though it
+# shouldn't be too hard to adapt it to others.
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# 
+#  arch/powerpc/Kconfig.debug       |    9 ++++++
+#  arch/powerpc/mm/init_32.c        |    4 +++
+#  arch/powerpc/mm/pgtable_32.c     |   52 +++++++++++++++++++++++++++++++++++++++
+#  arch/powerpc/mm/ppc_mmu_32.c     |    4 ++-
+#  include/asm-powerpc/cacheflush.h |    6 ++++
+#  5 files changed, 74 insertions(+), 1 deletion(-)
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=306
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From 88df6e90fa9782dbf44d936e44649afe271e4790 Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Thu, 12 Apr 2007 15:30:22 +1000
+Subject: [PATCH] [POWERPC] DEBUG_PAGEALLOC for 32-bit
+
+Here's an implementation of DEBUG_PAGEALLOC for ppc32. It disables BAT
+mapping and is only tested with Hash table based processor though it
+shouldn't be too hard to adapt it to others.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+
+ arch/powerpc/Kconfig.debug       |    9 ++++++
+ arch/powerpc/mm/init_32.c        |    4 +++
+ arch/powerpc/mm/pgtable_32.c     |   52 +++++++++++++++++++++++++++++++++++++++
+ arch/powerpc/mm/ppc_mmu_32.c     |    4 ++-
+ include/asm-powerpc/cacheflush.h |    6 ++++
+ mvl_patches/pro50-0306.c         |   16 ++++++++++++
+ 6 files changed, 90 insertions(+), 1 deletion(-)
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/Kconfig.debug
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/Kconfig.debug
++++ linux-2.6.18/arch/powerpc/Kconfig.debug
+@@ -22,6 +22,15 @@ config DEBUG_STACK_USAGE
+ 
+ 	  This option will slow down process creation somewhat.
+ 
++config DEBUG_PAGEALLOC
++        bool "Debug page memory allocations"
++        depends on DEBUG_KERNEL && !SOFTWARE_SUSPEND && PPC32
++        help
++          Unmap pages from the kernel linear mapping after free_pages().
++          This results in a large slowdown, but helps to find certain types
++          of memory corruptions.
++
++
+ config HCALL_STATS
+ 	bool "Hypervisor call instrumentation"
+ 	depends on PPC_PSERIES && DEBUG_FS
+Index: linux-2.6.18/arch/powerpc/mm/init_32.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/init_32.c
++++ linux-2.6.18/arch/powerpc/mm/init_32.c
+@@ -115,6 +115,10 @@ void MMU_setup(void)
+ 	if (strstr(cmd_line, "noltlbs")) {
+ 		__map_without_ltlbs = 1;
+ 	}
++#ifdef CONFIG_DEBUG_PAGEALLOC
++	__map_without_bats = 1;
++	__map_without_ltlbs = 1;
++#endif
+ }
+ 
+ /*
+Index: linux-2.6.18/arch/powerpc/mm/pgtable_32.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/pgtable_32.c
++++ linux-2.6.18/arch/powerpc/mm/pgtable_32.c
+@@ -454,3 +454,55 @@ exit:
+ 	return ret;
+ }
+ 
++#ifdef CONFIG_DEBUG_PAGEALLOC
++
++static int __change_page_attr(struct page *page, pgprot_t prot)
++{
++	pte_t *kpte;
++	pmd_t *kpmd;
++	unsigned long address;
++
++	BUG_ON(PageHighMem(page));
++	address = (unsigned long)page_address(page);
++
++	if (v_mapped_by_bats(address) || v_mapped_by_tlbcam(address))
++		return 0;
++	if (!get_pteptr(&init_mm, address, &kpte, &kpmd))
++		return -EINVAL;
++	set_pte_at(&init_mm, address, kpte, mk_pte(page, prot));
++	wmb();
++	flush_HPTE(0, address, pmd_val(*kpmd));
++	pte_unmap(kpte);
++
++	return 0;
++}
++
++/*
++ * Change the page attributes of an page in the linear mapping.
++ *
++ * THIS CONFLICTS WITH BAT MAPPINGS, DEBUG USE ONLY
++ */
++static int change_page_attr(struct page *page, int numpages, pgprot_t prot)
++{
++	int i, err = 0;
++	unsigned long flags;
++
++	local_irq_save(flags);
++	for (i = 0; i < numpages; i++, page++) {
++		err = __change_page_attr(page, prot);
++		if (err)
++			break;
++	}
++	local_irq_restore(flags);
++	return err;
++}
++
++
++void kernel_map_pages(struct page *page, int numpages, int enable)
++{
++	if (PageHighMem(page))
++		return;
++
++	change_page_attr(page, numpages, enable ? PAGE_KERNEL : __pgprot(0));
++}
++#endif /* CONFIG_DEBUG_PAGEALLOC */
+Index: linux-2.6.18/arch/powerpc/mm/ppc_mmu_32.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/ppc_mmu_32.c
++++ linux-2.6.18/arch/powerpc/mm/ppc_mmu_32.c
+@@ -85,8 +85,10 @@ unsigned long __init mmu_mapin_ram(void)
+ 	unsigned long max_size = (256<<20);
+ 	unsigned long align;
+ 
+-	if (__map_without_bats)
++	if (__map_without_bats) {
++		printk(KERN_DEBUG "RAM mapped without BATs\n");
+ 		return 0;
++	}
+ 
+ 	/* Set up BAT2 and if necessary BAT3 to cover RAM. */
+ 
+Index: linux-2.6.18/include/asm-powerpc/cacheflush.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/cacheflush.h
++++ linux-2.6.18/include/asm-powerpc/cacheflush.h
+@@ -63,6 +63,12 @@ extern void flush_dcache_phys_range(unsi
+ 	memcpy(dst, src, len)
+ 
+ 
++
++#ifdef CONFIG_DEBUG_PAGEALLOC
++/* internal debugging function */
++void kernel_map_pages(struct page *page, int numpages, int enable);
++#endif
++
+ #endif /* __KERNEL__ */
+ 
+ #endif /* _ASM_POWERPC_CACHEFLUSH_H */
+Index: linux-2.6.18/mvl_patches/pro50-0306.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0306.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(306);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

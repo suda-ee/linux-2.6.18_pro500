@@ -1,0 +1,488 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Revise_PPC44x_MMU_code_for_arch_powerpc
+# Date: Wed Sep 26 11:16:55 2007
+# MR: 24856
+# From 57d7909e0d2dd54567ae775e22b14076b777042a Mon Sep 17 00:00:00 2001
+# From: David Gibson <david@gibson.dropbear.id.au>
+# Date: Mon, 30 Apr 2007 14:06:25 +1000
+# Subject: [PATCH] [POWERPC] Revise PPC44x MMU code for arch/powerpc
+# 
+# This patch takes the definitions for the PPC44x MMU (a software loaded
+# TLB) from asm-ppc/mmu.h, cleans them up of things no longer necessary
+# in arch/powerpc and puts them in a new asm-powerpc/mmu_44x.h file.  It
+# also substantially simplifies arch/powerpc/mm/44x_mmu.c and makes a
+# couple of small fixes necessary for the 44x MMU code to build and work
+# properly in arch/powerpc.
+# 
+# Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=326
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From 57d7909e0d2dd54567ae775e22b14076b777042a Mon Sep 17 00:00:00 2001
+From: David Gibson <david@gibson.dropbear.id.au>
+Date: Mon, 30 Apr 2007 14:06:25 +1000
+Subject: [PATCH] [POWERPC] Revise PPC44x MMU code for arch/powerpc
+
+This patch takes the definitions for the PPC44x MMU (a software loaded
+TLB) from asm-ppc/mmu.h, cleans them up of things no longer necessary
+in arch/powerpc and puts them in a new asm-powerpc/mmu_44x.h file.  It
+also substantially simplifies arch/powerpc/mm/44x_mmu.c and makes a
+couple of small fixes necessary for the 44x MMU code to build and work
+properly in arch/powerpc.
+
+Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/kernel/head_44x.S
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/head_44x.S
++++ linux-2.6.18/arch/powerpc/kernel/head_44x.S
+@@ -120,8 +120,8 @@ skpinv:	addi	r4,r4,1				/* Increment */
+  * Configure and load pinned entry into TLB slot 63.
+  */
+ 
+-	lis	r3,KERNELBASE@h		/* Load the kernel virtual address */
+-	ori	r3,r3,KERNELBASE@l
++	lis	r3,PAGE_OFFSET@h
++	ori	r3,r3,PAGE_OFFSET@l
+ 
+ 	/* Kernel is at the base of RAM */
+ 	li r4, 0			/* Load the kernel physical address */
+Index: linux-2.6.18/arch/powerpc/mm/44x_mmu.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/44x_mmu.c
++++ linux-2.6.18/arch/powerpc/mm/44x_mmu.c
+@@ -24,73 +24,38 @@
+  *
+  */
+ 
+-#include <linux/signal.h>
+-#include <linux/sched.h>
+-#include <linux/kernel.h>
+-#include <linux/errno.h>
+-#include <linux/string.h>
+-#include <linux/types.h>
+-#include <linux/ptrace.h>
+-#include <linux/mman.h>
+-#include <linux/mm.h>
+-#include <linux/swap.h>
+-#include <linux/stddef.h>
+-#include <linux/vmalloc.h>
+ #include <linux/init.h>
+-#include <linux/delay.h>
+-#include <linux/highmem.h>
+-
+-#include <asm/pgalloc.h>
+-#include <asm/prom.h>
+-#include <asm/io.h>
+-#include <asm/mmu_context.h>
+-#include <asm/pgtable.h>
+ #include <asm/mmu.h>
+-#include <asm/uaccess.h>
+-#include <asm/smp.h>
+-#include <asm/bootx.h>
+-#include <asm/machdep.h>
+-#include <asm/setup.h>
++#include <asm/system.h>
++#include <asm/page.h>
+ 
+ #include "mmu_decl.h"
+ 
+-extern char etext[], _stext[];
+-
+ /* Used by the 44x TLB replacement exception handler.
+  * Just needed it declared someplace.
+  */
+-unsigned int tlb_44x_index = 0;
+-unsigned int tlb_44x_hwater = 62;
++unsigned int tlb_44x_index; /* = 0 */
++unsigned int tlb_44x_hwater = PPC44x_TLB_SIZE - 1 - PPC44x_EARLY_TLBS;
+ 
+ /*
+  * "Pins" a 256MB TLB entry in AS0 for kernel lowmem
+  */
+-static void __init
+-ppc44x_pin_tlb(int slot, unsigned int virt, unsigned int phys)
++static void __init ppc44x_pin_tlb(unsigned int virt, unsigned int phys)
+ {
+-	unsigned long attrib = 0;
+-
+-	__asm__ __volatile__("\
+-	clrrwi	%2,%2,10\n\
+-	ori	%2,%2,%4\n\
+-	clrrwi	%1,%1,10\n\
+-	li	%0,0\n\
+-	ori	%0,%0,%5\n\
+-	tlbwe	%2,%3,%6\n\
+-	tlbwe	%1,%3,%7\n\
+-	tlbwe	%0,%3,%8"
++	__asm__ __volatile__(
++		"tlbwe	%2,%3,%4\n"
++		"tlbwe	%1,%3,%5\n"
++		"tlbwe	%0,%3,%6\n"
+ 	:
+-	: "r" (attrib), "r" (phys), "r" (virt), "r" (slot),
+-	  "i" (PPC44x_TLB_VALID | PPC44x_TLB_256M),
+-	  "i" (PPC44x_TLB_SW | PPC44x_TLB_SR | PPC44x_TLB_SX | PPC44x_TLB_G),
++	: "r" (PPC44x_TLB_SW | PPC44x_TLB_SR | PPC44x_TLB_SX | PPC44x_TLB_G),
++	  "r" (phys),
++	  "r" (virt | PPC44x_TLB_VALID | PPC44x_TLB_256M),
++	  "r" (tlb_44x_hwater--), /* slot for this TLB entry */
+ 	  "i" (PPC44x_TLB_PAGEID),
+ 	  "i" (PPC44x_TLB_XLAT),
+ 	  "i" (PPC44x_TLB_ATTRIB));
+ }
+ 
+-/*
+- * MMU_init_hw does the chip-specific initialization of the MMU hardware.
+- */
+ void __init MMU_init_hw(void)
+ {
+ 	flush_instruction_cache();
+@@ -98,22 +63,13 @@ void __init MMU_init_hw(void)
+ 
+ unsigned long __init mmu_mapin_ram(void)
+ {
+-	unsigned int pinned_tlbs = 1;
+-	int i;
++	unsigned long addr;
+ 
+-	/* Determine number of entries necessary to cover lowmem */
+-	pinned_tlbs = (unsigned int)
+-		(_ALIGN(total_lowmem, PPC_PIN_SIZE) >> PPC44x_PIN_SHIFT);
+-
+-	/* Write upper watermark to save location */
+-	tlb_44x_hwater = PPC44x_LOW_SLOT - pinned_tlbs;
+-
+-	/* If necessary, set additional pinned TLBs */
+-	if (pinned_tlbs > 1)
+-		for (i = (PPC44x_LOW_SLOT-(pinned_tlbs-1)); i < PPC44x_LOW_SLOT; i++) {
+-			unsigned int phys_addr = (PPC44x_LOW_SLOT-i) * PPC_PIN_SIZE;
+-			ppc44x_pin_tlb(i, phys_addr+PAGE_OFFSET, phys_addr);
+-		}
++	/* Pin in enough TLBs to cover any lowmem not covered by the
++	 * initial 256M mapping established in head_44x.S */
++	for (addr = PPC_PIN_SIZE; addr < total_lowmem;
++	     addr += PPC_PIN_SIZE)
++		ppc44x_pin_tlb(addr + PAGE_OFFSET, addr);
+ 
+ 	return total_lowmem;
+ }
+Index: linux-2.6.18/arch/powerpc/mm/mmu_decl.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/mmu_decl.h
++++ linux-2.6.18/arch/powerpc/mm/mmu_decl.h
+@@ -40,7 +40,8 @@ extern int __map_without_bats;
+ extern unsigned long ioremap_base;
+ extern unsigned int rtas_data, rtas_size;
+ 
+-extern PTE *Hash, *Hash_end;
++struct _PTE;
++extern struct _PTE *Hash, *Hash_end;
+ extern unsigned long Hash_size, Hash_mask;
+ 
+ extern unsigned int num_tlbcam_entries;
+Index: linux-2.6.18/include/asm-powerpc/mmu-44x.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-powerpc/mmu-44x.h
+@@ -0,0 +1,72 @@
++#ifndef _ASM_POWERPC_MMU_44X_H_
++#define _ASM_POWERPC_MMU_44X_H_
++/*
++ * PPC440 support
++ */
++
++#define PPC44x_MMUCR_TID	0x000000ff
++#define PPC44x_MMUCR_STS	0x00010000
++
++#define	PPC44x_TLB_PAGEID	0
++#define	PPC44x_TLB_XLAT		1
++#define	PPC44x_TLB_ATTRIB	2
++
++/* Page identification fields */
++#define PPC44x_TLB_EPN_MASK	0xfffffc00      /* Effective Page Number */
++#define	PPC44x_TLB_VALID	0x00000200      /* Valid flag */
++#define PPC44x_TLB_TS		0x00000100	/* Translation address space */
++#define PPC44x_TLB_1K		0x00000000	/* Page sizes */
++#define PPC44x_TLB_4K		0x00000010
++#define PPC44x_TLB_16K		0x00000020
++#define PPC44x_TLB_64K		0x00000030
++#define PPC44x_TLB_256K		0x00000040
++#define PPC44x_TLB_1M		0x00000050
++#define PPC44x_TLB_16M		0x00000070
++#define	PPC44x_TLB_256M		0x00000090
++
++/* Translation fields */
++#define PPC44x_TLB_RPN_MASK	0xfffffc00      /* Real Page Number */
++#define	PPC44x_TLB_ERPN_MASK	0x0000000f
++
++/* Storage attribute and access control fields */
++#define PPC44x_TLB_ATTR_MASK	0x0000ff80
++#define PPC44x_TLB_U0		0x00008000      /* User 0 */
++#define PPC44x_TLB_U1		0x00004000      /* User 1 */
++#define PPC44x_TLB_U2		0x00002000      /* User 2 */
++#define PPC44x_TLB_U3		0x00001000      /* User 3 */
++#define PPC44x_TLB_W		0x00000800      /* Caching is write-through */
++#define PPC44x_TLB_I		0x00000400      /* Caching is inhibited */
++#define PPC44x_TLB_M		0x00000200      /* Memory is coherent */
++#define PPC44x_TLB_G		0x00000100      /* Memory is guarded */
++#define PPC44x_TLB_E		0x00000080      /* Memory is guarded */
++
++#define PPC44x_TLB_PERM_MASK	0x0000003f
++#define PPC44x_TLB_UX		0x00000020      /* User execution */
++#define PPC44x_TLB_UW		0x00000010      /* User write */
++#define PPC44x_TLB_UR		0x00000008      /* User read */
++#define PPC44x_TLB_SX		0x00000004      /* Super execution */
++#define PPC44x_TLB_SW		0x00000002      /* Super write */
++#define PPC44x_TLB_SR		0x00000001      /* Super read */
++
++/* Number of TLB entries */
++#define PPC44x_TLB_SIZE		64
++
++#ifndef __ASSEMBLY__
++
++typedef unsigned long long phys_addr_t;
++
++extern phys_addr_t fixup_bigphys_addr(phys_addr_t, phys_addr_t);
++
++typedef struct {
++	unsigned long id;
++	unsigned long vdso_base;
++} mm_context_t;
++
++#endif /* !__ASSEMBLY__ */
++
++#define PPC44x_EARLY_TLBS	1
++
++/* Size of the TLBs used for pinning in lowmem */
++#define PPC_PIN_SIZE	(1 << 28)	/* 256M */
++
++#endif /* _ASM_POWERPC_MMU_44X_H_ */
+Index: linux-2.6.18/include/asm-powerpc/mmu.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/mmu.h
++++ linux-2.6.18/include/asm-powerpc/mmu.h
+@@ -5,9 +5,12 @@
+ #ifdef CONFIG_PPC64
+ /* 64-bit classic hash table MMU */
+ #  include <asm/mmu-hash64.h>
++#elif defined(CONFIG_44x)
++/* 44x-style software loaded TLB */
++#  include <asm/mmu-44x.h>
+ #else
+-/* 32-bit.  FIXME: split up the 32-bit MMU types, and revise for
+- * arch/powerpc */
++/* Other 32-bit.  FIXME: split up the other 32-bit MMU types, and
++ * revise for arch/powerpc */
+ #  include <asm-ppc/mmu.h>
+ #endif
+ 
+Index: linux-2.6.18/mvl_patches/pro50-0326.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0326.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(326);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

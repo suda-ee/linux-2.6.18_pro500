@@ -1,0 +1,1046 @@
+#! /usr/bin/env bash
+# Patch: -pro_kgdb_x86_hw_breakpoint_update
+# Date: Mon Mar 31 13:12:23 2008
+# Source: Jason Wessel <jason.wessel@windriver.com>
+# MR: 24168
+# Type: Enhancement
+# Disposition: merged from KGDB project CVS
+# Signed-off-by: Milind Dumbare <milind@linsyssoft.com>
+# Signed-off-by: Jason Wessel <jason.wessel@windriver.com>
+# Signed-off-by: Sergei Shtylyov <sshtylyov@ru.mvista.com>
+# Description:
+# 
+# [PATCH] This fixes hardware breakpoint support for i386/x86_64.
+# 
+# This is the minimal set of routines to support h/w breakpoints on the i386 and
+# x86_64 architectures rewritten by Jason Wessel, based on the work by Milind
+# Dumbare.  Also included are bug fixes by Sergei Shtylyov.
+# 
+#  arch/i386/kernel/kgdb.c    |  147 +++++++++++++++--------------
+#  arch/x86_64/kernel/kgdb.c  |  226 ++++++++++++++++++---------------------------
+#  include/asm-generic/kgdb.h |   40 -------
+#  include/linux/kgdb.h       |    2 
+#  kernel/kgdb.c              |   17 +--
+#  lib/Kconfig.kgdb           |    9 -
+#  6 files changed, 180 insertions(+), 261 deletions(-)
+# 
+
+PATCHNUM=985
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Jason Wessel <jason.wessel@windriver.com>
+MR: 24168
+Type: Enhancement
+Disposition: merged from KGDB project CVS
+Signed-off-by: Milind Dumbare <milind@linsyssoft.com>
+Signed-off-by: Jason Wessel <jason.wessel@windriver.com>
+Signed-off-by: Sergei Shtylyov <sshtylyov@ru.mvista.com>
+Description:
+
+[PATCH] This fixes hardware breakpoint support for i386/x86_64.
+
+This is the minimal set of routines to support h/w breakpoints on the i386 and
+x86_64 architectures rewritten by Jason Wessel, based on the work by Milind
+Dumbare.  Also included are bug fixes by Sergei Shtylyov.
+
+ arch/i386/kernel/kgdb.c    |  147 +++++++++++++++--------------
+ arch/x86_64/kernel/kgdb.c  |  226 ++++++++++++++++++---------------------------
+ include/asm-generic/kgdb.h |   40 -------
+ include/linux/kgdb.h       |    2 
+ kernel/kgdb.c              |   17 +--
+ lib/Kconfig.kgdb           |    9 -
+ mvl_patches/pro50-0985.c   |   16 +++
+ 7 files changed, 196 insertions(+), 261 deletions(-)
+
+Index: linux-2.6.18/arch/i386/kernel/kgdb.c
+===================================================================
+--- linux-2.6.18.orig/arch/i386/kernel/kgdb.c
++++ linux-2.6.18/arch/i386/kernel/kgdb.c
+@@ -14,12 +14,15 @@
+ 
+ /*
+  * Copyright (C) 2000-2001 VERITAS Software Corporation.
++ * Copyright (C) 2007 Wind River Systems, Inc.
++ * Copyright (C) 2007 MontaVista Software, Inc.
+  */
+ /*
+  *  Contributor:     Lake Stevens Instrument Division$
+  *  Written by:      Glenn Engel $
+  *  Updated by:	     Amit Kale<akale@veritas.com>
+  *  Updated by:	     Tom Rini <trini@kernel.crashing.org>
++ *  Updated by:	     Jason Wessel <jason.wessel@windriver.com>
+  *  Modified for 386 by Jim Kingdon, Cygnus Support.
+  *  Origianl kgdb, compatibility with 2.1.xx kernel by
+  *  David Grothe <dave@gcom.com>
+@@ -126,52 +129,38 @@ static struct hw_breakpoint {
+ 	{ .enabled = 0 },
+ };
+ 
+-void kgdb_correct_hw_break(void)
++static void kgdb_correct_hw_break(void)
+ {
+ 	int breakno;
+-	int correctit;
+ 	int breakbit;
+-	unsigned dr7;
++	int correctit = 0;
++	unsigned long dr7;
+ 
+-	asm volatile ("movl %%db7, %0\n":"=r" (dr7)
+-		      :);
+-	do {
+-		unsigned addr0, addr1, addr2, addr3;
+-		asm volatile ("movl %%db0, %0\n"
+-			      "movl %%db1, %1\n"
+-			      "movl %%db2, %2\n"
+-			      "movl %%db3, %3\n":"=r" (addr0), "=r"(addr1),
+-			      "=r"(addr2), "=r"(addr3):);
+-	} while (0);
+-	correctit = 0;
+-	for (breakno = 0; breakno < 3; breakno++) {
++	get_debugreg(dr7, 7);
++	for (breakno = 0; breakno < 4; breakno++) {
+ 		breakbit = 2 << (breakno << 1);
+-		if (!(dr7 & breakbit) && breakinfo[breakno].enabled) {
++ 		if (!(dr7 & breakbit) && breakinfo[breakno].enabled) {
+ 			correctit = 1;
+ 			dr7 |= breakbit;
+ 			dr7 &= ~(0xf0000 << (breakno << 2));
+-			dr7 |= (((breakinfo[breakno].len << 2) |
+-				 breakinfo[breakno].type) << 16) <<
+-			    (breakno << 2);
++			dr7 |= ((breakinfo[breakno].len << 2) |
++				 breakinfo[breakno].type) <<
++			       ((breakno << 2) + 16);
+ 			switch (breakno) {
+ 			case 0:
+-				asm volatile ("movl %0, %%dr0\n"::"r"
+-					      (breakinfo[breakno].addr));
++				set_debugreg(breakinfo[breakno].addr, 0);
+ 				break;
+ 
+ 			case 1:
+-				asm volatile ("movl %0, %%dr1\n"::"r"
+-					      (breakinfo[breakno].addr));
++				set_debugreg(breakinfo[breakno].addr, 1);
+ 				break;
+ 
+ 			case 2:
+-				asm volatile ("movl %0, %%dr2\n"::"r"
+-					      (breakinfo[breakno].addr));
++				set_debugreg(breakinfo[breakno].addr, 2);
+ 				break;
+ 
+ 			case 3:
+-				asm volatile ("movl %0, %%dr3\n"::"r"
+-					      (breakinfo[breakno].addr));
++				set_debugreg(breakinfo[breakno].addr, 3);
+ 				break;
+ 			}
+ 		} else if ((dr7 & breakbit) && !breakinfo[breakno].enabled) {
+@@ -181,61 +170,74 @@ void kgdb_correct_hw_break(void)
+ 		}
+ 	}
+ 	if (correctit)
+-		asm volatile ("movl %0, %%db7\n"::"r" (dr7));
++		set_debugreg(dr7, 7);
+ }
+ 
+-int kgdb_remove_hw_break(unsigned long addr)
++static int kgdb_remove_hw_break(unsigned long addr, int len,
++				enum kgdb_bptype bptype)
+ {
+-	int i, idx = -1;
+-	for (i = 0; i < 4; i++) {
+-		if (breakinfo[i].addr == addr && breakinfo[i].enabled) {
+-			idx = i;
++	int i;
++
++	for (i = 0; i < 4; i++)
++		if (breakinfo[i].addr == addr && breakinfo[i].enabled)
+ 			break;
+-		}
+-	}
+-	if (idx == -1)
++	if (i == 4)
+ 		return -1;
+ 
+-	breakinfo[idx].enabled = 0;
++	breakinfo[i].enabled = 0;
+ 	return 0;
+ }
+ 
+-void kgdb_remove_all_hw_break(void)
++static void kgdb_remove_all_hw_break(void)
+ {
+ 	int i;
+ 
+-	for (i = 0; i < 4; i++) {
+-		if (breakinfo[i].enabled) {
+-			/* Do what? */
+-			;
+-		}
++	for (i = 0; i < 4; i++)
+ 		memset(&breakinfo[i], 0, sizeof(struct hw_breakpoint));
+-	}
+ }
+ 
+-int kgdb_set_hw_break(unsigned long addr)
++static int kgdb_set_hw_break(unsigned long addr, int len,
++					  enum kgdb_bptype bptype)
+ {
+-	int i, idx = -1;
+-	for (i = 0; i < 4; i++) {
+-		if (!breakinfo[i].enabled) {
+-			idx = i;
++	int i;
++	unsigned type;
++
++	for (i = 0; i < 4; i++)
++		if (!breakinfo[i].enabled)
+ 			break;
+-		}
++	if (i == 4)
++		return -1;
++
++	switch (bptype) {
++	case bp_hardware_breakpoint:
++		type = 0;
++		len  = 1;
++		break;
++	case bp_write_watchpoint:
++		type = 1;
++		break;
++	case bp_access_watchpoint:
++		type = 3;
++		break;
++	default:
++ 		return -1;
+ 	}
+-	if (idx == -1)
++
++	if (len == 1 || len == 2 || len == 4)
++		breakinfo[i].len  = len - 1;
++	else
+ 		return -1;
+ 
+-	breakinfo[idx].enabled = 1;
+-	breakinfo[idx].type = 1;
+-	breakinfo[idx].len = 1;
+-	breakinfo[idx].addr = addr;
++	breakinfo[i].enabled = 1;
++	breakinfo[i].addr = addr;
++	breakinfo[i].type = type;
+ 	return 0;
+ }
+ 
+ void kgdb_disable_hw_debug(struct pt_regs *regs)
+ {
+ 	/* Disable hardware debugging while we are in kgdb */
+-	asm volatile ("movl %0,%%db7": /* no output */ :"r" (0));
++	set_debugreg(0, 7);
+ }
+ 
+ void kgdb_post_master_code(struct pt_regs *regs, int e_vector, int err_code)
+@@ -278,12 +280,13 @@ int kgdb_arch_handle_exception(int e_vec
+ 		if (remcom_in_buffer[0] == 's') {
+ 			linux_regs->eflags |= TF_MASK;
+ 			debugger_step = 1;
+-			atomic_set(&cpu_doing_single_step,smp_processor_id());
++			atomic_set(&cpu_doing_single_step, smp_processor_id());
+ 		}
+ 
+-		asm volatile ("movl %%db6, %0\n":"=r" (dr6));
++		get_debugreg(dr6, 6);
+ 		if (!(dr6 & 0x4000)) {
+-			long breakno;
++			int breakno;
++
+ 			for (breakno = 0; breakno < 4; ++breakno) {
+ 				if (dr6 & (1 << breakno) &&
+ 				    breakinfo[breakno].type == 0) {
+@@ -293,11 +296,11 @@ int kgdb_arch_handle_exception(int e_vec
+ 				}
+ 			}
+ 		}
++		set_debugreg(0, 6);
+ 		kgdb_correct_hw_break();
+-		asm volatile ("movl %0, %%db6\n"::"r" (0));
+ 
+-		return (0);
+-	}			/* switch */
++		return 0;
++	}
+ 	/* this means that we do not want to exit from the handler */
+ 	return -1;
+ }
+@@ -312,19 +315,19 @@ static int kgdb_notify(struct notifier_b
+ 
+ 	/* Bad memory access? */
+ 	if (cmd == DIE_PAGE_FAULT_NO_CONTEXT && atomic_read(&debugger_active)
+-			&& kgdb_may_fault) {
++	    && kgdb_may_fault) {
+ 		kgdb_fault_longjmp(kgdb_fault_jmp_regs);
+ 		return NOTIFY_STOP;
+ 	} else if (cmd == DIE_PAGE_FAULT)
+ 		/* A normal page fault, ignore. */
+ 		return NOTIFY_DONE;
+-       else if ((cmd == DIE_NMI || cmd == DIE_NMI_IPI ||
+-               cmd == DIE_NMIWATCHDOG) && atomic_read(&debugger_active)) {
+-               /* CPU roundup */
+-               kgdb_nmihook(smp_processor_id(), regs);
+-               return NOTIFY_STOP;
+-       } else if (cmd == DIE_NMI_IPI || cmd == DIE_NMI || user_mode(regs) ||
+-                       (cmd == DIE_DEBUG && atomic_read(&debugger_active)))
++	else if ((cmd == DIE_NMI || cmd == DIE_NMI_IPI || cmd == DIE_NMIWATCHDOG)
++		 && atomic_read(&debugger_active)) {
++		/* CPU roundup */
++		kgdb_nmihook(smp_processor_id(), regs);
++		return NOTIFY_STOP;
++	} else if (cmd == DIE_NMI_IPI || cmd == DIE_NMI || user_mode(regs)
++		   || (cmd == DIE_DEBUG && atomic_read(&debugger_active)))
+                /* Normal watchdog event or userspace debugging, or spurious
+                 * debug exception, ignore. */
+                return NOTIFY_DONE;
+@@ -362,4 +365,8 @@ int kgdb_skipexception(int exception, st
+ struct kgdb_arch arch_kgdb_ops = {
+ 	.gdb_bpt_instr = {0xcc},
+ 	.flags = KGDB_HW_BREAKPOINT,
++	.set_hw_breakpoint = kgdb_set_hw_break,
++	.remove_hw_breakpoint = kgdb_remove_hw_break,
++	.remove_all_hw_break = kgdb_remove_all_hw_break,
++	.correct_hw_break = kgdb_correct_hw_break,
+ };
+Index: linux-2.6.18/arch/x86_64/kernel/kgdb.c
+===================================================================
+--- linux-2.6.18.orig/arch/x86_64/kernel/kgdb.c
++++ linux-2.6.18/arch/x86_64/kernel/kgdb.c
+@@ -17,6 +17,8 @@
+  * Copyright (C) 2000-2001 VERITAS Software Corporation.
+  * Copyright (C) 2002 Andi Kleen, SuSE Labs
+  * Copyright (C) 2004 LinSysSoft Technologies Pvt. Ltd.
++ * Copyright (C) 2007 Jason Wessel, Wind River Systems, Inc.
++ * Copyright (C) 2007 MontaVista Software, Inc.
+  */
+ /****************************************************************************
+  *  Contributor:     Lake Stevens Instrument Division$
+@@ -125,62 +127,50 @@ void gdb_regs_to_regs(unsigned long *gdb
+ 
+ }				/* gdb_regs_to_regs */
+ 
+-struct hw_breakpoint {
++static struct hw_breakpoint {
+ 	unsigned enabled;
+ 	unsigned type;
+ 	unsigned len;
+ 	unsigned long addr;
+-} breakinfo[4] = { {
+-enabled:0}, {
+-enabled:0}, {
+-enabled:0}, {
+-enabled:0}};
++} breakinfo[4] = {
++	{ .enabled = 0 },
++	{ .enabled = 0 },
++	{ .enabled = 0 },
++	{ .enabled = 0 },
++};
+ 
+-void kgdb_correct_hw_break(void)
++static void kgdb_correct_hw_break(void)
+ {
+ 	int breakno;
+-	int correctit;
+ 	int breakbit;
++	int correctit = 0;
+ 	unsigned long dr7;
+ 
+-	asm volatile ("movq %%db7, %0\n":"=r" (dr7):);
+-	do {
+-		unsigned long addr0, addr1, addr2, addr3;
+-		asm volatile ("movq %%db0, %0\n"
+-			      "movq %%db1, %1\n"
+-			      "movq %%db2, %2\n"
+-			      "movq %%db3, %3\n":"=r" (addr0), "=r"(addr1),
+-			      "=r"(addr2), "=r"(addr3):);
+-	} while (0);
+-	correctit = 0;
+-	for (breakno = 0; breakno < 3; breakno++) {
++	get_debugreg(dr7, 7);
++	for (breakno = 0; breakno < 4; breakno++) {
+ 		breakbit = 2 << (breakno << 1);
+-		if (!(dr7 & breakbit) && breakinfo[breakno].enabled) {
++ 		if (!(dr7 & breakbit) && breakinfo[breakno].enabled) {
+ 			correctit = 1;
+ 			dr7 |= breakbit;
+ 			dr7 &= ~(0xf0000 << (breakno << 2));
+-			dr7 |= (((breakinfo[breakno].len << 2) |
+-				 breakinfo[breakno].type) << 16) <<
+-			    (breakno << 2);
++			dr7 |= ((breakinfo[breakno].len << 2) |
++				 breakinfo[breakno].type) <<
++			       ((breakno << 2) + 16);
+ 			switch (breakno) {
+ 			case 0:
+-				asm volatile ("movq %0, %%dr0\n"::"r"
+-					      (breakinfo[breakno].addr));
++				set_debugreg(breakinfo[breakno].addr, 0);
+ 				break;
+ 
+ 			case 1:
+-				asm volatile ("movq %0, %%dr1\n"::"r"
+-					      (breakinfo[breakno].addr));
++				set_debugreg(breakinfo[breakno].addr, 1);
+ 				break;
+ 
+ 			case 2:
+-				asm volatile ("movq %0, %%dr2\n"::"r"
+-					      (breakinfo[breakno].addr));
++				set_debugreg(breakinfo[breakno].addr, 2);
+ 				break;
+ 
+ 			case 3:
+-				asm volatile ("movq %0, %%dr3\n"::"r"
+-					      (breakinfo[breakno].addr));
++				set_debugreg(breakinfo[breakno].addr, 3);
+ 				break;
+ 			}
+ 		} else if ((dr7 & breakbit) && !breakinfo[breakno].enabled) {
+@@ -189,80 +179,75 @@ void kgdb_correct_hw_break(void)
+ 			dr7 &= ~(0xf0000 << (breakno << 2));
+ 		}
+ 	}
+-	if (correctit) {
+-		asm volatile ("movq %0, %%db7\n"::"r" (dr7));
+-	}
++	if (correctit)
++		set_debugreg(dr7, 7);
+ }
+ 
+-void kgdb_remove_all_hw_break(void)
++static int kgdb_remove_hw_break(unsigned long addr, int len,
++				enum kgdb_bptype bptype)
+ {
+ 	int i;
+ 
+-	for (i = 0; i < 4; i++) {
+-		memset(&breakinfo[i], 0, sizeof(struct hw_breakpoint));
+-	}
+-}
+-
+-int kgdb_remove_hw_break(unsigned long addr)
+-{
+-	int i, idx = -1;
+-	for (i = 0; i < 4; i++) {
+-		if (breakinfo[i].addr == addr && breakinfo[i].enabled) {
+-			idx = i;
++	for (i = 0; i < 4; i++)
++		if (breakinfo[i].addr == addr && breakinfo[i].enabled)
+ 			break;
+-		}
+-	}
+-	if (idx == -1)
++	if (i == 4)
+ 		return -1;
+ 
+-	breakinfo[idx].enabled = 0;
++	breakinfo[i].enabled = 0;
+ 	return 0;
+ }
+ 
+-int kgdb_set_hw_break(unsigned long addr)
++static void kgdb_remove_all_hw_break(void)
+ {
+-	int i, idx = -1;
+-	for (i = 0; i < 4; i++) {
+-		if (!breakinfo[i].enabled) {
+-			idx = i;
+-			break;
+-		}
+-	}
+-	if (idx == -1)
+-		return -1;
++	int i;
+ 
+-	breakinfo[idx].enabled = 1;
+-	breakinfo[idx].type = 0;
+-	breakinfo[idx].len = 0;
+-	breakinfo[idx].addr = addr;
+-	return 0;
++	for (i = 0; i < 4; i++)
++		memset(&breakinfo[i], 0, sizeof(struct hw_breakpoint));
+ }
+ 
+-int remove_hw_break(unsigned breakno)
++static int kgdb_set_hw_break(unsigned long addr, int len,
++					  enum kgdb_bptype bptype)
+ {
+-	if (!breakinfo[breakno].enabled) {
++	int i;
++	unsigned type;
++
++	for (i = 0; i < 4; i++)
++		if (!breakinfo[i].enabled)
++			break;
++	if (i == 4)
+ 		return -1;
+-	}
+-	breakinfo[breakno].enabled = 0;
+-	return 0;
+-}
+ 
+-int set_hw_break(unsigned breakno, unsigned type, unsigned len, unsigned addr)
+-{
+-	if (breakinfo[breakno].enabled) {
++	switch (bptype) {
++	case bp_hardware_breakpoint:
++		type = 0;
++		len  = 1;
++		break;
++	case bp_write_watchpoint:
++		type = 1;
++		break;
++	case bp_access_watchpoint:
++		type = 3;
++		break;
++	default:
+ 		return -1;
+ 	}
+-	breakinfo[breakno].enabled = 1;
+-	breakinfo[breakno].type = type;
+-	breakinfo[breakno].len = len;
+-	breakinfo[breakno].addr = addr;
++
++	if (len == 1 || len == 2 || len == 4)
++		breakinfo[i].len  = len - 1;
++	else
++		return -1;
++
++	breakinfo[i].enabled = 1;
++	breakinfo[i].addr = addr;
++	breakinfo[i].type = type;
+ 	return 0;
+ }
+ 
+ void kgdb_disable_hw_debug(struct pt_regs *regs)
+ {
+ 	/* Disable hardware debugging while we are in kgdb */
+-	asm volatile ("movq %0,%%db7": /* no output */ :"r" (0UL));
++	set_debugreg(0UL, 7);
+ }
+ 
+ void kgdb_post_master_code(struct pt_regs *regs, int e_vector, int err_code)
+@@ -282,7 +267,6 @@ int kgdb_arch_handle_exception(int e_vec
+ 			       struct pt_regs *linux_regs)
+ {
+ 	unsigned long addr;
+-	unsigned long breakno, breaktype, length;
+ 	char *ptr;
+ 	int newPC;
+ 	unsigned long dr6;
+@@ -298,8 +282,8 @@ int kgdb_arch_handle_exception(int e_vec
+ 
+ 		/* clear the trace bit */
+ 		linux_regs->eflags &= ~TF_MASK;
+-
+ 		atomic_set(&cpu_doing_single_step, -1);
++
+ 		/* set the trace bit if we're stepping */
+ 		if (remcomInBuffer[0] == 's') {
+ 			linux_regs->eflags |= TF_MASK;
+@@ -310,76 +294,52 @@ int kgdb_arch_handle_exception(int e_vec
+ 
+ 		}
+ 
+-		asm volatile ("movq %%db6, %0\n":"=r" (dr6));
++		get_debugreg(dr6, 6);
+ 		if (!(dr6 & 0x4000)) {
++			int breakno;
++
+ 			for (breakno = 0; breakno < 4; ++breakno) {
+-				if (dr6 & (1 << breakno)) {
+-					if (breakinfo[breakno].type == 0) {
+-						/* Set restore flag */
+-						linux_regs->eflags |=
+-						    X86_EFLAGS_RF;
+-						break;
+-					}
++				if (dr6 & (1 << breakno) &&
++				    breakinfo[breakno].type == 0) {
++					/* Set restore flag */
++					linux_regs->eflags |= X86_EFLAGS_RF;
++					break;
+ 				}
+ 			}
+ 		}
++		set_debugreg(0UL, 6);
+ 		kgdb_correct_hw_break();
+-		asm volatile ("movq %0, %%db6\n"::"r" (0UL));
+-
+-		return (0);
+-
+-	case 'Y':
+-		ptr = &remcomInBuffer[1];
+-		kgdb_hex2long(&ptr, &breakno);
+-		ptr++;
+-		kgdb_hex2long(&ptr, &breaktype);
+-		ptr++;
+-		kgdb_hex2long(&ptr, &length);
+-		ptr++;
+-		kgdb_hex2long(&ptr, &addr);
+-		if (set_hw_break(breakno & 0x3, breaktype & 0x3,
+-				 length & 0x3, addr) == 0)
+-			strcpy(remcomOutBuffer, "OK");
+-		else
+-			strcpy(remcomOutBuffer, "ERROR");
+-		break;
+-
+-		/* Remove hardware breakpoint */
+-	case 'y':
+-		ptr = &remcomInBuffer[1];
+-		kgdb_hex2long(&ptr, &breakno);
+-		if (remove_hw_break(breakno & 0x3) == 0)
+-			strcpy(remcomOutBuffer, "OK");
+-		else
+-			strcpy(remcomOutBuffer, "ERROR");
+-		break;
+ 
++		return 0;
+ 	}			/* switch */
++	/* this means that we do not want to exit from the handler */
+ 	return -1;
+ }
+ 
+ static struct pt_regs *in_interrupt_stack(unsigned long rsp, int cpu)
+ {
+-	struct pt_regs *regs;
++	struct pt_regs *regs = NULL;
+ 	unsigned long end = (unsigned long)cpu_pda(cpu)->irqstackptr;
+-	if (rsp <= end && rsp >= end - IRQSTACKSIZE + 8) {
++
++	if (rsp <= end && rsp >= end - IRQSTACKSIZE + 8)
+ 		regs = *(((struct pt_regs **)end) - 1);
+-		return regs;
+-	}
+-	return NULL;
++
++	return regs;
+ }
+ 
+ static struct pt_regs *in_exception_stack(unsigned long rsp, int cpu)
+ {
+ 	int i;
+ 	struct tss_struct *init_tss = &__get_cpu_var(init_tss);
++	struct pt_regs *regs;
++
+ 	for (i = 0; i < N_EXCEPTION_STACKS; i++)
+ 		if (rsp >= init_tss[cpu].ist[i] &&
+ 		    rsp <= init_tss[cpu].ist[i] + EXCEPTION_STKSZ) {
+-			struct pt_regs *r =
+-			    (void *)init_tss[cpu].ist[i] + EXCEPTION_STKSZ;
+-			return r - 1;
++			regs = (void *) init_tss[cpu].ist[i] + EXCEPTION_STKSZ;
++			return regs - 1;
+ 		}
++
+ 	return NULL;
+ }
+ 
+@@ -431,7 +391,7 @@ static int kgdb_notify(struct notifier_b
+ 	struct pt_regs *regs = args->regs;
+ 
+ 	if (cmd == DIE_PAGE_FAULT_NO_CONTEXT && atomic_read(&debugger_active)
+-			&& kgdb_may_fault) {
++	    && kgdb_may_fault) {
+ 		kgdb_fault_longjmp(kgdb_fault_jmp_regs);
+ 		return NOTIFY_STOP;
+ 	/* CPU roundup? */
+@@ -439,9 +399,8 @@ static int kgdb_notify(struct notifier_b
+ 		kgdb_nmihook(smp_processor_id(), regs);
+ 		return NOTIFY_STOP;
+ 		/* See if KGDB is interested. */
+-	} else if (cmd == DIE_PAGE_FAULT || user_mode(regs) ||
+-		   cmd == DIE_NMI_IPI || (cmd == DIE_DEBUG &&
+-					  atomic_read(&debugger_active)))
++	} else if (cmd == DIE_PAGE_FAULT || user_mode(regs) || cmd == DIE_NMI_IPI
++		   || (cmd == DIE_DEBUG && atomic_read(&debugger_active)))
+ 		/* Userpace events, normal watchdog event, or spurious
+ 		 * debug exception.  Ignore. */
+ 		return NOTIFY_DONE;
+@@ -453,7 +412,7 @@ static int kgdb_notify(struct notifier_b
+ 
+ static struct notifier_block kgdb_notifier = {
+ 	.notifier_call = kgdb_notify,
+-	.priority = 0x7fffffff,	/* we need to notified first */
++	.priority = 0x7fffffff,	/* we need to be notified first */
+ };
+ 
+ int kgdb_arch_init(void)
+@@ -461,6 +420,7 @@ int kgdb_arch_init(void)
+ 	atomic_notifier_chain_register(&die_chain, &kgdb_notifier);
+ 	return 0;
+ }
++
+ /*
+  * Skip an int3 exception when it occurs after a breakpoint has been
+  * removed. Backtrack eip by 1 since the int3 would have caused it to
+@@ -480,4 +440,8 @@ struct kgdb_arch arch_kgdb_ops = {
+ 	.gdb_bpt_instr = {0xcc},
+ 	.flags = KGDB_HW_BREAKPOINT,
+ 	.shadowth = 1,
++	.set_hw_breakpoint = kgdb_set_hw_break,
++	.remove_hw_breakpoint = kgdb_remove_hw_break,
++	.remove_all_hw_break = kgdb_remove_all_hw_break,
++	.correct_hw_break = kgdb_correct_hw_break,
+ };
+Index: linux-2.6.18/include/asm-generic/kgdb.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-generic/kgdb.h
++++ linux-2.6.18/include/asm-generic/kgdb.h
+@@ -60,46 +60,6 @@ extern void kgdb_disable_hw_debug(struct
+ #define kgdb_post_master_code(regs, v, c)	do { } while (0)
+ #endif
+ 
+-#ifdef CONFIG_KGDB_ARCH_HAS_HARDWARE_BREAKPOINTS
+-/**
+- *	kgdb_set_hw_break - Set a hardware breakpoint at @addr.
+- *	@addr: The address to set a hardware breakpoint at.
+- */
+-extern int kgdb_set_hw_break(unsigned long addr);
+-
+-/**
+- *	kgdb_remove_hw_break - Remove a hardware breakpoint at @addr.
+- *	@addr: The address to remove a hardware breakpoint from.
+- */
+-extern int kgdb_remove_hw_break(unsigned long addr);
+-
+-/**
+- *	kgdb_remove_all_hw_break - Clear all hardware breakpoints.
+- */
+-extern void kgdb_remove_all_hw_break(void);
+-
+-/**
+- *	kgdb_correct_hw_break - Correct hardware breakpoints.
+- *
+- *	A hook to allow for changes to the hardware breakpoint, called
+- *	after a single step (s) or continue (c) packet, and once we're about
+- *	to let the kernel continue running.
+- *
+- *	This is used to set the hardware breakpoint registers for all the
+- *	slave cpus on an SMP configuration. This must be called after any
+- *	changes are made to the hardware breakpoints (such as by a single
+- *	step (s) or continue (c) packet. This is only required on
+- *	architectures that support SMP and every processor has its own set
+- *	of breakpoint registers.
+- */
+-extern void kgdb_correct_hw_break(void);
+-#else
+-#define kgdb_set_hw_break(addr)			0
+-#define kgdb_remove_hw_break(addr)		0
+-#define kgdb_remove_all_hw_break()		do { } while (0)
+-#define kgdb_correct_hw_break()			do { } while (0)
+-#endif
+-
+ #ifdef CONFIG_KGDB_ARCH_HAS_SHADOW_INFO
+ /**
+  *	kgdb_shadowinfo - Get shadowed information on @threadid.
+Index: linux-2.6.18/include/linux/kgdb.h
+===================================================================
+--- linux-2.6.18.orig/include/linux/kgdb.h
++++ linux-2.6.18/include/linux/kgdb.h
+@@ -220,6 +220,8 @@ struct kgdb_arch {
+ 	int (*remove_breakpoint)(unsigned long, char *);
+ 	int (*set_hw_breakpoint)(unsigned long, int, enum kgdb_bptype);
+ 	int (*remove_hw_breakpoint)(unsigned long, int, enum kgdb_bptype);
++	void (*remove_all_hw_break)(void);
++	void (*correct_hw_break)(void);
+ };
+ 
+ /* Thread reference */
+Index: linux-2.6.18/kernel/kgdb.c
+===================================================================
+--- linux-2.6.18.orig/kernel/kgdb.c
++++ linux-2.6.18/kernel/kgdb.c
+@@ -597,14 +597,12 @@ static void kgdb_wait(struct pt_regs *re
+ 	/* Wait till master processor is done with debugging */
+ 	spin_lock(&slavecpulocks[processor]);
+ 
+-	/* This has been taken from x86 kgdb implementation and
+-	 * will be needed by architectures that have SMP support
+-	 */
+-	kgdb_correct_hw_break();
+-
+ 	kgdb_info[processor].debuggerinfo = NULL;
+ 	kgdb_info[processor].task = NULL;
+ 
++	/* fix up hardware debug registers on local cpu */
++	if (kgdb_ops->correct_hw_break)
++		kgdb_ops->correct_hw_break();
+ 	/* Signal the master processor that we are done */
+ 	atomic_set(&procindebug[processor], 0);
+ 	spin_unlock(&slavecpulocks[processor]);
+@@ -778,7 +776,8 @@ int remove_all_break(void)
+ 	}
+ 
+ 	/* Clear hardware breakpoints. */
+-	kgdb_remove_all_hw_break();
++	if (kgdb_ops->remove_all_hw_break)
++		kgdb_ops->remove_all_hw_break();
+ 
+ 	return 0;
+ }
+@@ -1290,7 +1289,7 @@ int kgdb_handle_exception(int ex_vector,
+ 			/* Test if this is a hardware breakpoint, and
+ 			 * if we support it. */
+ 			if (*bpt_type == '1' &&
+-			    !kgdb_ops->flags & KGDB_HW_BREAKPOINT)
++			    !(kgdb_ops->flags & KGDB_HW_BREAKPOINT))
+ 				/* Unsupported. */
+ 				break;
+ 
+@@ -1311,12 +1310,8 @@ int kgdb_handle_exception(int ex_vector,
+ 
+ 			if (remcom_in_buffer[0] == 'Z' && *bpt_type == '0')
+ 				error = kgdb_set_sw_break(addr);
+-			else if (remcom_in_buffer[0] == 'Z' && *bpt_type == '1')
+-				error = kgdb_set_hw_break(addr);
+ 			else if (remcom_in_buffer[0] == 'z' && *bpt_type == '0')
+ 				error = kgdb_remove_sw_break(addr);
+-			else if (remcom_in_buffer[0] == 'z' && *bpt_type == '1')
+-				error = kgdb_remove_hw_break(addr);
+ 			else if (remcom_in_buffer[0] == 'Z')
+ 				error = kgdb_ops->set_hw_breakpoint(addr,
+ 								    (int)length,
+Index: linux-2.6.18/lib/Kconfig.kgdb
+===================================================================
+--- linux-2.6.18.orig/lib/Kconfig.kgdb
++++ linux-2.6.18/lib/Kconfig.kgdb
+@@ -11,7 +11,6 @@ config KGDB
+ 	bool "KGDB: kernel debugging with remote gdb"
+ 	select WANT_EXTRA_DEBUG_INFORMATION
+ 	select KGDB_ARCH_HAS_SHADOW_INFO if X86_64
+-	select KGDB_ARCH_HAS_HARDWARE_BREAKPOINTS if X86
+ 	depends on DEBUG_KERNEL && !DEBUG_PREEMPT && (ARM || X86 || MIPS || (SUPERH && !SUPERH64) || IA64 || PPC)
+ 	help
+ 	  If you say Y here, it will be possible to remotely debug the
+@@ -19,14 +18,6 @@ config KGDB
+ 	  at http://kgdb.sourceforge.net as well as in DocBook form
+ 	  in Documentation/DocBook/.  If unsure, say N.
+ 
+-config KGDB_ARCH_HAS_HARDWARE_BREAKPOINTS
+-	bool
+-	depends on KGDB
+-	default n
+-	help
+-	  If you say Y here, KGDB will make use of hardware breakpoints
+-	  rather than software breakpoints.  If unsure, say N.
+-
+ config KGDB_ARCH_HAS_SHADOW_INFO
+ 	bool
+ 
+Index: linux-2.6.18/mvl_patches/pro50-0985.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0985.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(985);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

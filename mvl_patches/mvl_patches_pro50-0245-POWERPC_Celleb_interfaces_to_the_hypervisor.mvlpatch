@@ -1,0 +1,752 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Celleb_interfaces_to_the_hypervisor
+# Date: Wed Sep 26 11:13:18 2007
+# MR: 24856
+# From b8a590c496474ca80a8f1c2b228e8b8e6a33fb9d Mon Sep 17 00:00:00 2001
+# From: Ishizaki Kou <kou.ishizaki@toshiba.co.jp>
+# Date: Fri, 2 Feb 2007 16:36:27 +0900
+# Subject: [PATCH] [POWERPC] Celleb: interfaces to the hypervisor
+# 
+# This patch creates Celleb platform dependent files which add
+# interfaces to call hypervisor.
+# 
+# Signed-off-by: Kou Ishizaki <kou.ishizaki@toshiba.co.jp>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=245
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From b8a590c496474ca80a8f1c2b228e8b8e6a33fb9d Mon Sep 17 00:00:00 2001
+From: Ishizaki Kou <kou.ishizaki@toshiba.co.jp>
+Date: Fri, 2 Feb 2007 16:36:27 +0900
+Subject: [PATCH] [POWERPC] Celleb: interfaces to the hypervisor
+
+This patch creates Celleb platform dependent files which add
+interfaces to call hypervisor.
+
+Signed-off-by: Kou Ishizaki <kou.ishizaki@toshiba.co.jp>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/platforms/celleb/beat_wrapper.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/celleb/beat_wrapper.h
+@@ -0,0 +1,220 @@
++/*
++ * Beat hypervisor call I/F
++ *
++ * (C) Copyright 2007 TOSHIBA CORPORATION
++ *
++ * This code is based on arch/powerpc/platforms/pseries/plpar_wrapper.h.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++#ifndef BEAT_HCALL
++#include "beat_syscall.h"
++
++/* defined in hvCall.S */
++extern s64 beat_hcall_norets(u64 opcode, ...);
++extern s64 beat_hcall_norets8(u64 opcode, u64 arg1, u64 arg2, u64 arg3,
++	u64 arg4, u64 arg5, u64 arg6, u64 arg7, u64 arg8);
++extern s64 beat_hcall1(u64 opcode, u64 retbuf[1], ...);
++extern s64 beat_hcall2(u64 opcode, u64 retbuf[2], ...);
++extern s64 beat_hcall3(u64 opcode, u64 retbuf[3], ...);
++extern s64 beat_hcall4(u64 opcode, u64 retbuf[4], ...);
++extern s64 beat_hcall5(u64 opcode, u64 retbuf[5], ...);
++extern s64 beat_hcall6(u64 opcode, u64 retbuf[6], ...);
++
++static inline s64 beat_downcount_of_interrupt(u64 plug_id)
++{
++	return beat_hcall_norets(HV_downcount_of_interrupt, plug_id);
++}
++
++static inline s64 beat_set_interrupt_mask(u64 index,
++	u64 val0, u64 val1, u64 val2, u64 val3)
++{
++	return beat_hcall_norets(HV_set_interrupt_mask, index,
++	       val0, val1, val2, val3);
++}
++
++static inline s64 beat_destruct_irq_plug(u64 plug_id)
++{
++	return beat_hcall_norets(HV_destruct_irq_plug, plug_id);
++}
++
++static inline s64 beat_construct_and_connect_irq_plug(u64 plug_id,
++	u64 outlet_id)
++{
++	return beat_hcall_norets(HV_construct_and_connect_irq_plug, plug_id,
++	       outlet_id);
++}
++
++static inline s64 beat_detect_pending_interrupts(u64 index, u64 *retbuf)
++{
++	return beat_hcall4(HV_detect_pending_interrupts, retbuf, index);
++}
++
++static inline s64 beat_pause(u64 style)
++{
++	return beat_hcall_norets(HV_pause, style);
++}
++
++static inline s64 beat_read_htab_entries(u64 htab_id, u64 index, u64 *retbuf)
++{
++	return beat_hcall5(HV_read_htab_entries, retbuf, htab_id, index);
++}
++
++static inline s64 beat_insert_htab_entry(u64 htab_id, u64 group,
++	u64 bitmask, u64 hpte_v, u64 hpte_r, u64 *slot)
++{
++	u64 dummy[3];
++	s64 ret;
++
++	ret = beat_hcall3(HV_insert_htab_entry, dummy, htab_id, group,
++		bitmask, hpte_v, hpte_r);
++	*slot = dummy[0];
++	return ret;
++}
++
++static inline s64 beat_write_htab_entry(u64 htab_id, u64 slot,
++	u64 hpte_v, u64 hpte_r, u64 mask_v, u64 mask_r,
++	u64 *ret_v, u64 *ret_r)
++{
++	u64 dummy[2];
++	s64 ret;
++
++	ret = beat_hcall2(HV_write_htab_entry, dummy, htab_id, slot,
++		hpte_v, hpte_r, mask_v, mask_r);
++	*ret_v = dummy[0];
++	*ret_r = dummy[1];
++	return ret;
++}
++
++static inline void beat_shutdown_logical_partition(u64 code)
++{
++	(void)beat_hcall_norets(HV_shutdown_logical_partition, code);
++}
++
++static inline s64 beat_rtc_write(u64 time_from_epoch)
++{
++	return beat_hcall_norets(HV_rtc_write, time_from_epoch);
++}
++
++static inline s64 beat_rtc_read(u64 *time_from_epoch)
++{
++	u64 dummy[1];
++	s64 ret;
++
++	ret = beat_hcall1(HV_rtc_read, dummy);
++	*time_from_epoch = dummy[0];
++	return ret;
++}
++
++#define	BEAT_NVRW_CNT	(sizeof(u64) * 6)
++
++static inline s64 beat_eeprom_write(u64 index, u64 length, u8 *buffer)
++{
++	u64	b[6];
++
++	if (length > BEAT_NVRW_CNT)
++		return -1;
++	memcpy(b, buffer, sizeof(b));
++	return beat_hcall_norets8(HV_eeprom_write, index, length,
++		b[0], b[1], b[2], b[3], b[4], b[5]);
++}
++
++static inline s64 beat_eeprom_read(u64 index, u64 length, u8 *buffer)
++{
++	u64	b[6];
++	s64	ret;
++
++	if (length > BEAT_NVRW_CNT)
++		return -1;
++	ret = beat_hcall6(HV_eeprom_read, b, index, length);
++	memcpy(buffer, b, length);
++	return ret;
++}
++
++static inline s64 beat_set_dabr(u64 value, u64 style)
++{
++	return beat_hcall_norets(HV_set_dabr, value, style);
++}
++
++static inline s64 beat_get_characters_from_console(u64 termno, u64 *len,
++	u8 *buffer)
++{
++	u64 dummy[3];
++	s64 ret;
++
++	ret = beat_hcall3(HV_get_characters_from_console, dummy, termno, len);
++	*len = dummy[0];
++	memcpy(buffer, dummy + 1, *len);
++	return ret;
++}
++
++static inline s64 beat_put_characters_to_console(u64 termno, u64 len,
++	u8 *buffer)
++{
++	u64 b[2];
++
++	memcpy(b, buffer, len);
++	return beat_hcall_norets(HV_put_characters_to_console, termno, len,					 b[0], b[1]);
++}
++
++static inline s64 beat_get_spe_privileged_state_1_registers(
++		u64 id, u64 offsetof, u64 *value)
++{
++	u64 dummy[1];
++	s64 ret;
++
++	ret = beat_hcall1(HV_get_spe_privileged_state_1_registers, dummy, id,
++		offsetof);
++	*value = dummy[0];
++	return ret;
++}
++
++static inline s64 beat_set_irq_mask_for_spe(u64 id, u64 class, u64 mask)
++{
++	return beat_hcall_norets(HV_set_irq_mask_for_spe, id, class, mask);
++}
++
++static inline s64 beat_clear_interrupt_status_of_spe(u64 id, u64 class,
++	u64 mask)
++{
++	return beat_hcall_norets(HV_clear_interrupt_status_of_spe,
++		id, class, mask);
++}
++
++static inline s64 beat_set_spe_privileged_state_1_registers(
++		u64 id, u64 offsetof, u64 value)
++{
++	return beat_hcall_norets(HV_set_spe_privileged_state_1_registers,
++		id, offsetof, value);
++}
++
++static inline s64 beat_get_interrupt_status_of_spe(u64 id, u64 class, u64 *val)
++{
++	u64 dummy[1];
++	s64 ret;
++
++	ret = beat_hcall1(HV_get_interrupt_status_of_spe, dummy, id, class);
++	*val = dummy[0];
++	return ret;
++}
++
++static inline s64 beat_put_iopte(u64 ioas_id, u64 io_addr, u64 real_addr,
++	u64 ioid, u64 flags)
++{
++	return beat_hcall_norets(HV_put_iopte, ioas_id, io_addr, real_addr,
++		ioid, flags);
++}
++
++#endif
+Index: linux-2.6.18/arch/powerpc/platforms/celleb/hvCall.S
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/celleb/hvCall.S
+@@ -0,0 +1,287 @@
++/*
++ * Beat hypervisor call I/F
++ *
++ * (C) Copyright 2007 TOSHIBA CORPORATION
++ *
++ * This code is based on arch/powerpc/platforms/pseries/hvCall.S.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++#include <asm/ppc_asm.h>
++
++#define	STK_PARM(i)	(48 + ((i)-3)*8)
++
++/* Not implemented on Beat, now */
++#define	HCALL_INST_PRECALL
++#define	HCALL_INST_POSTCALL
++
++	.text
++
++#define	HVSC	.long	0x44000022
++
++/* Note: takes only 7 input parameters at maximum */
++_GLOBAL(beat_hcall_norets)
++	HMT_MEDIUM
++
++	mfcr	r0
++	stw	r0,8(r1)
++
++	HCALL_INST_PRECALL
++
++	mr	r11,r3
++	mr	r3,r4
++	mr	r4,r5
++	mr	r5,r6
++	mr	r6,r7
++	mr	r7,r8
++	mr	r8,r9
++
++	HVSC				/* invoke the hypervisor */
++
++	HCALL_INST_POSTCALL
++
++	lwz	r0,8(r1)
++	mtcrf	0xff,r0
++
++	blr				/* return r3 = status */
++
++/* Note: takes 8 input parameters at maximum */
++_GLOBAL(beat_hcall_norets8)
++	HMT_MEDIUM
++
++	mfcr	r0
++	stw	r0,8(r1)
++
++	HCALL_INST_PRECALL
++
++	mr	r11,r3
++	mr	r3,r4
++	mr	r4,r5
++	mr	r5,r6
++	mr	r6,r7
++	mr	r7,r8
++	mr	r8,r9
++	ld	r10,STK_PARM(r10)(r1)
++
++	HVSC				/* invoke the hypervisor */
++
++	HCALL_INST_POSTCALL
++
++	lwz	r0,8(r1)
++	mtcrf	0xff,r0
++
++	blr				/* return r3 = status */
++
++/* Note: takes only 6 input parameters, 1 output parameters at maximum */
++_GLOBAL(beat_hcall1)
++	HMT_MEDIUM
++
++	mfcr	r0
++	stw	r0,8(r1)
++
++	HCALL_INST_PRECALL
++
++	std	r4,STK_PARM(r4)(r1)	/* save ret buffer */
++
++	mr	r11,r3
++	mr	r3,r5
++	mr	r4,r6
++	mr	r5,r7
++	mr	r6,r8
++	mr	r7,r9
++	mr	r8,r10
++
++	HVSC				/* invoke the hypervisor */
++
++	HCALL_INST_POSTCALL
++
++	ld	r12,STK_PARM(r4)(r1)
++	std	r4,  0(r12)
++
++	lwz	r0,8(r1)
++	mtcrf	0xff,r0
++
++	blr				/* return r3 = status */
++
++/* Note: takes only 6 input parameters, 2 output parameters at maximum */
++_GLOBAL(beat_hcall2)
++	HMT_MEDIUM
++
++	mfcr	r0
++	stw	r0,8(r1)
++
++	HCALL_INST_PRECALL
++
++	std	r4,STK_PARM(r4)(r1)	/* save ret buffer */
++
++	mr	r11,r3
++	mr	r3,r5
++	mr	r4,r6
++	mr	r5,r7
++	mr	r6,r8
++	mr	r7,r9
++	mr	r8,r10
++
++	HVSC				/* invoke the hypervisor */
++
++	HCALL_INST_POSTCALL
++
++	ld	r12,STK_PARM(r4)(r1)
++	std	r4,  0(r12)
++	std	r5,  8(r12)
++
++	lwz	r0,8(r1)
++	mtcrf	0xff,r0
++
++	blr				/* return r3 = status */
++
++/* Note: takes only 6 input parameters, 3 output parameters at maximum */
++_GLOBAL(beat_hcall3)
++	HMT_MEDIUM
++
++	mfcr	r0
++	stw	r0,8(r1)
++
++	HCALL_INST_PRECALL
++
++	std	r4,STK_PARM(r4)(r1)	/* save ret buffer */
++
++	mr	r11,r3
++	mr	r3,r5
++	mr	r4,r6
++	mr	r5,r7
++	mr	r6,r8
++	mr	r7,r9
++	mr	r8,r10
++
++	HVSC				/* invoke the hypervisor */
++
++	HCALL_INST_POSTCALL
++
++	ld	r12,STK_PARM(r4)(r1)
++	std	r4,  0(r12)
++	std	r5,  8(r12)
++	std	r6, 16(r12)
++
++	lwz	r0,8(r1)
++	mtcrf	0xff,r0
++
++	blr				/* return r3 = status */
++
++/* Note: takes only 6 input parameters, 4 output parameters at maximum */
++_GLOBAL(beat_hcall4)
++	HMT_MEDIUM
++
++	mfcr	r0
++	stw	r0,8(r1)
++
++	HCALL_INST_PRECALL
++
++	std	r4,STK_PARM(r4)(r1)	/* save ret buffer */
++
++	mr	r11,r3
++	mr	r3,r5
++	mr	r4,r6
++	mr	r5,r7
++	mr	r6,r8
++	mr	r7,r9
++	mr	r8,r10
++
++	HVSC				/* invoke the hypervisor */
++
++	HCALL_INST_POSTCALL
++
++	ld	r12,STK_PARM(r4)(r1)
++	std	r4,  0(r12)
++	std	r5,  8(r12)
++	std	r6, 16(r12)
++	std	r7, 24(r12)
++
++	lwz	r0,8(r1)
++	mtcrf	0xff,r0
++
++	blr				/* return r3 = status */
++
++/* Note: takes only 6 input parameters, 5 output parameters at maximum */
++_GLOBAL(beat_hcall5)
++	HMT_MEDIUM
++
++	mfcr	r0
++	stw	r0,8(r1)
++
++	HCALL_INST_PRECALL
++
++	std	r4,STK_PARM(r4)(r1)	/* save ret buffer */
++
++	mr	r11,r3
++	mr	r3,r5
++	mr	r4,r6
++	mr	r5,r7
++	mr	r6,r8
++	mr	r7,r9
++	mr	r8,r10
++
++	HVSC				/* invoke the hypervisor */
++
++	HCALL_INST_POSTCALL
++
++	ld	r12,STK_PARM(r4)(r1)
++	std	r4,  0(r12)
++	std	r5,  8(r12)
++	std	r6, 16(r12)
++	std	r7, 24(r12)
++	std	r8, 32(r12)
++
++	lwz	r0,8(r1)
++	mtcrf	0xff,r0
++
++	blr				/* return r3 = status */
++
++/* Note: takes only 6 input parameters, 6 output parameters at maximum */
++_GLOBAL(beat_hcall6)
++	HMT_MEDIUM
++
++	mfcr	r0
++	stw	r0,8(r1)
++
++	HCALL_INST_PRECALL
++
++	std	r4,STK_PARM(r4)(r1)	/* save ret buffer */
++
++	mr	r11,r3
++	mr	r3,r5
++	mr	r4,r6
++	mr	r5,r7
++	mr	r6,r8
++	mr	r7,r9
++	mr	r8,r10
++
++	HVSC				/* invoke the hypervisor */
++
++	HCALL_INST_POSTCALL
++
++	ld	r12,STK_PARM(r4)(r1)
++	std	r4,  0(r12)
++	std	r5,  8(r12)
++	std	r6, 16(r12)
++	std	r7, 24(r12)
++	std	r8, 32(r12)
++	std	r9, 40(r12)
++
++	lwz	r0,8(r1)
++	mtcrf	0xff,r0
++
++	blr				/* return r3 = status */
+Index: linux-2.6.18/mvl_patches/pro50-0245.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0245.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(245);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

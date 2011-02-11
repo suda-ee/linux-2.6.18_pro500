@@ -1,0 +1,999 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Create_common_fsl_pci_e_files_based_on_86x
+# Date: Fri Oct 26 08:40:07 2007
+# Source: Kernel.org
+# MR: 25195
+# Type: Enhancement
+# Disposition: merged from Kernel.org
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# From 55c44991e2910519bab274c857d95a08100ff5f7 Mon Sep 17 00:00:00 2001
+# From: Roy Zang <tie-fei.zang@freescale.com>
+# Date: Tue, 10 Jul 2007 18:44:34 +0800
+# Subject: [PATCH] [POWERPC] Create common fsl pci/e files based on 86xx platforms
+# 
+# Move
+# arch/powerpc/platforms/86xx/pci.c -> arch/powerpc/sysdev/fsl_pci.c
+# arch/powerpc/sysdev/fsl_pcie.h -> arch/powerpc/sysdev/fsl_pci.h
+# as the base to unify 83xx/85xx/86xx pci and pcie.
+# 
+# Add CONFIG_FSL_PCI to build fsl_pci.c for Freescale pci and pcie option.
+# The code still works for 86xx platforms.
+# 
+# Signed-off-by: Roy Zang <tie-fei.zang@freescale.com>
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+PATCHNUM=523
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Kernel.org
+MR: 25195
+Type: Enhancement
+Disposition: merged from Kernel.org
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+From 55c44991e2910519bab274c857d95a08100ff5f7 Mon Sep 17 00:00:00 2001
+From: Roy Zang <tie-fei.zang@freescale.com>
+Date: Tue, 10 Jul 2007 18:44:34 +0800
+Subject: [PATCH] [POWERPC] Create common fsl pci/e files based on 86xx platforms
+
+Move
+arch/powerpc/platforms/86xx/pci.c -> arch/powerpc/sysdev/fsl_pci.c
+arch/powerpc/sysdev/fsl_pcie.h -> arch/powerpc/sysdev/fsl_pci.h
+as the base to unify 83xx/85xx/86xx pci and pcie.
+
+Add CONFIG_FSL_PCI to build fsl_pci.c for Freescale pci and pcie option.
+The code still works for 86xx platforms.
+
+Signed-off-by: Roy Zang <tie-fei.zang@freescale.com>
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+Index: linux-2.6.18/arch/powerpc/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/Kconfig
++++ linux-2.6.18/arch/powerpc/Kconfig
+@@ -412,6 +412,10 @@ config SBUS
+ config FSL_SOC
+ 	bool
+ 
++config FSL_PCI
++ 	bool
++	select PPC_INDIRECT_PCI
++
+ # Yes MCA RS/6000s exist but Linux-PPC does not currently support any
+ config MCA
+ 	bool
+Index: linux-2.6.18/arch/powerpc/platforms/86xx/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/86xx/Kconfig
++++ linux-2.6.18/arch/powerpc/platforms/86xx/Kconfig
+@@ -14,8 +14,8 @@ endchoice
+ 
+ config MPC8641
+ 	bool
+-	select PPC_INDIRECT_PCI
+-	select PPC_INDIRECT_PCI_BE
++	select PPC_INDIRECT_PCI_BE if PCI
++	select FSL_PCI if PCI
+ 	select PPC_UDBG_16550
+ 	select MPIC
+ 	default y if MPC8641_HPCN
+Index: linux-2.6.18/arch/powerpc/platforms/86xx/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/86xx/Makefile
++++ linux-2.6.18/arch/powerpc/platforms/86xx/Makefile
+@@ -4,4 +4,3 @@
+ 
+ obj-$(CONFIG_SMP)		+= mpc86xx_smp.o
+ obj-$(CONFIG_MPC8641_HPCN)	+= mpc86xx_hpcn.o
+-obj-$(CONFIG_PCI)		+= pci.o
+Index: linux-2.6.18/arch/powerpc/platforms/86xx/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/86xx/pci.c
++++ /dev/null
+@@ -1,247 +0,0 @@
+-/*
+- * MPC86XX pci setup code
+- *
+- * Recode: ZHANG WEI <wei.zhang@freescale.com>
+- * Initial author: Xianghua Xiao <x.xiao@freescale.com>
+- *
+- * Copyright 2006 Freescale Semiconductor Inc.
+- *
+- * This program is free software; you can redistribute  it and/or modify it
+- * under  the terms of  the GNU General  Public License as published by the
+- * Free Software Foundation;  either version 2 of the  License, or (at your
+- * option) any later version.
+- */
+-
+-#include <linux/types.h>
+-#include <linux/module.h>
+-#include <linux/init.h>
+-#include <linux/pci.h>
+-#include <linux/serial.h>
+-
+-#include <asm/system.h>
+-#include <asm/atomic.h>
+-#include <asm/io.h>
+-#include <asm/prom.h>
+-#include <asm/pci-bridge.h>
+-#include <sysdev/fsl_soc.h>
+-#include <sysdev/fsl_pcie.h>
+-
+-#include "mpc86xx.h"
+-
+-#undef DEBUG
+-
+-#ifdef DEBUG
+-#define DBG(fmt, args...) printk(KERN_ERR "%s: " fmt, __FUNCTION__, ## args)
+-#else
+-#define DBG(fmt, args...)
+-#endif
+-
+-struct pcie_outbound_window_regs {
+-	uint    pexotar;               /* 0x.0 - PCI Express outbound translation address register */
+-	uint    pexotear;              /* 0x.4 - PCI Express outbound translation extended address register */
+-	uint    pexowbar;              /* 0x.8 - PCI Express outbound window base address register */
+-	char    res1[4];
+-	uint    pexowar;               /* 0x.10 - PCI Express outbound window attributes register */
+-	char    res2[12];
+-};
+-
+-struct pcie_inbound_window_regs {
+-	uint    pexitar;               /* 0x.0 - PCI Express inbound translation address register */
+-	char    res1[4];
+-	uint    pexiwbar;              /* 0x.8 - PCI Express inbound window base address register */
+-	uint    pexiwbear;             /* 0x.c - PCI Express inbound window base extended address register */
+-	uint    pexiwar;               /* 0x.10 - PCI Express inbound window attributes register */
+-	char    res2[12];
+-};
+-
+-extern struct pci_controller *hose_head;
+-
+-static void __init setup_pcie_atmu(struct pci_controller *hose, struct resource *rsrc)
+-{
+-	volatile struct ccsr_pex *pcie;
+-	volatile struct pcie_outbound_window_regs *pcieow;
+-	volatile struct pcie_inbound_window_regs *pcieiw;
+-	int i = 0;
+-
+-	DBG("PCIE memory map start 0x%x, size 0x%x\n", rsrc->start,
+-			rsrc->end - rsrc->start + 1);
+-	pcie = ioremap(rsrc->start, rsrc->end - rsrc->start + 1);
+-
+-	/* Disable all windows (except pexowar0 since its ignored) */
+-	pcie->pexowar1 = 0;
+-	pcie->pexowar2 = 0;
+- 	pcie->pexowar3 = 0;
+- 	pcie->pexowar4 = 0;
+- 	pcie->pexiwar1 = 0;
+- 	pcie->pexiwar2 = 0;
+- 	pcie->pexiwar3 = 0;
+-
+- 	pcieow = (struct pcie_outbound_window_regs *)&pcie->pexotar1;
+- 	pcieiw = (struct pcie_inbound_window_regs *)&pcie->pexitar1;
+-
+- 	/* Setup outbound MEM window */
+- 	for(i = 0; i < 3; i++)
+- 		if (hose->mem_resources[i].flags & IORESOURCE_MEM){
+- 			DBG("PCIE MEM resource start 0x%08x, size 0x%08x.\n",
+- 				hose->mem_resources[i].start,
+- 				hose->mem_resources[i].end
+- 				  - hose->mem_resources[i].start + 1);
+- 			pcieow->pexotar = (hose->mem_resources[i].start) >> 12
+- 				& 0x000fffff;
+- 			pcieow->pexotear = 0;
+- 			pcieow->pexowbar = (hose->mem_resources[i].start) >> 12
+- 				& 0x000fffff;
+- 			/* Enable, Mem R/W */
+- 			pcieow->pexowar = 0x80044000 |
+- 				(__ilog2(hose->mem_resources[i].end
+- 					 - hose->mem_resources[i].start + 1)
+- 				 - 1);
+- 			pcieow++;
+- 		}
+-
+- 	/* Setup outbound IO window */
+- 	if (hose->io_resource.flags & IORESOURCE_IO){
+- 		DBG("PCIE IO resource start 0x%08x, size 0x%08x, phy base 0x%08x.\n",
+- 			hose->io_resource.start,
+- 			hose->io_resource.end - hose->io_resource.start + 1,
+- 			hose->io_base_phys);
+- 		pcieow->pexotar = (hose->io_resource.start) >> 12 & 0x000fffff;
+- 		pcieow->pexotear = 0;
+- 		pcieow->pexowbar = (hose->io_base_phys) >> 12 & 0x000fffff;
+- 		/* Enable, IO R/W */
+- 		pcieow->pexowar = 0x80088000 | (__ilog2(hose->io_resource.end
+- 					- hose->io_resource.start + 1) - 1);
+- 	}
+-
+- 	/* Setup 2G inbound Memory Window @ 0 */
+- 	pcieiw->pexitar = 0x00000000;
+- 	pcieiw->pexiwbar = 0x00000000;
+- 	/* Enable, Prefetch, Local Mem, Snoop R/W, 2G */
+- 	pcieiw->pexiwar = 0xa0f5501e;
+-}
+-
+-static void __init
+-mpc86xx_setup_pcie(struct pci_controller *hose, u32 pcie_offset, u32 pcie_size)
+-{
+-	u16 cmd;
+-
+-	DBG("PCIE host controller register offset 0x%08x, size 0x%08x.\n",
+-			pcie_offset, pcie_size);
+-
+-	early_read_config_word(hose, 0, 0, PCI_COMMAND, &cmd);
+-	cmd |= PCI_COMMAND_SERR | PCI_COMMAND_MASTER | PCI_COMMAND_MEMORY
+-	    | PCI_COMMAND_IO;
+-	early_write_config_word(hose, 0, 0, PCI_COMMAND, cmd);
+-
+-	early_write_config_byte(hose, 0, 0, PCI_LATENCY_TIMER, 0x80);
+-}
+-
+-static void __devinit quirk_fsl_pcie_transparent(struct pci_dev *dev)
+-{
+-	struct resource *res;
+-	int i, res_idx = PCI_BRIDGE_RESOURCES;
+-	struct pci_controller *hose;
+-
+-	/*
+-	 * Make the bridge be transparent.
+-	 */
+-	dev->transparent = 1;
+-
+-	hose = pci_bus_to_host(dev->bus);
+-	if (!hose) {
+-		printk(KERN_ERR "Can't find hose for bus %d\n",
+-		       dev->bus->number);
+-		return;
+-	}
+-
+-	if (hose->io_resource.flags) {
+-		res = &dev->resource[res_idx++];
+-		res->start = hose->io_resource.start;
+-		res->end = hose->io_resource.end;
+-		res->flags = hose->io_resource.flags;
+-	}
+-
+-	for (i = 0; i < 3; i++) {
+-		res = &dev->resource[res_idx + i];
+-		res->start = hose->mem_resources[i].start;
+-		res->end = hose->mem_resources[i].end;
+-		res->flags = hose->mem_resources[i].flags;
+-	}
+-}
+-
+-
+-DECLARE_PCI_FIXUP_EARLY(0x1957, 0x7010, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, 0x7011, quirk_fsl_pcie_transparent);
+-
+-#define PCIE_LTSSM	0x404	/* PCIe Link Training and Status */
+-#define PCIE_LTSSM_L0	0x16	/* L0 state */
+-
+-int __init mpc86xx_add_bridge(struct device_node *dev)
+-{
+-	int len;
+-	struct pci_controller *hose;
+-	struct resource rsrc;
+-	const int *bus_range;
+-	int has_address = 0;
+-	int primary = 0;
+-	u16 val;
+-
+-	DBG("Adding PCIE host bridge %s\n", dev->full_name);
+-
+-	/* Fetch host bridge registers address */
+-	has_address = (of_address_to_resource(dev, 0, &rsrc) == 0);
+-
+-	/* Get bus range if any */
+-	bus_range = get_property(dev, "bus-range", &len);
+-	if (bus_range == NULL || len < 2 * sizeof(int))
+-		printk(KERN_WARNING "Can't get bus-range for %s, assume"
+-		       " bus 0\n", dev->full_name);
+-
+-	pci_assign_all_buses = 1;
+-	hose = pcibios_alloc_controller(dev);
+-	if (!hose)
+-		return -ENOMEM;
+-
+-	hose->indirect_type = PPC_INDIRECT_TYPE_EXT_REG |
+-				PPC_INDIRECT_TYPE_SURPRESS_PRIMARY_BUS;
+-
+-	hose->first_busno = bus_range ? bus_range[0] : 0x0;
+-	hose->last_busno = bus_range ? bus_range[1] : 0xff;
+-
+-	setup_indirect_pci(hose, rsrc.start, rsrc.start + 0x4);
+-
+-	/* Probe the hose link training status */
+-	early_read_config_word(hose, 0, 0, PCIE_LTSSM, &val);
+-	if (val < PCIE_LTSSM_L0) {
+-		struct pci_controller *p = hose_head;
+-
+-		while (p && (p->next != hose))
+-			p = p->next;
+-		if (p)
+-			p->next = NULL;
+-		return -ENXIO;
+-	}
+-
+-	/* Setup the PCIE host controller. */
+-	mpc86xx_setup_pcie(hose, rsrc.start, rsrc.end - rsrc.start + 1);
+-
+-	if ((rsrc.start & 0xfffff) == 0x8000)
+-		primary = 1;
+-
+-	printk(KERN_INFO "Found MPC86xx PCIE host bridge at 0x%08lx. "
+-	       "Firmware bus number: %d->%d\n",
+-	       (unsigned long) rsrc.start,
+-	       hose->first_busno, hose->last_busno);
+-
+-	DBG(" ->Hose at 0x%p, cfg_addr=0x%p,cfg_data=0x%p\n",
+-		hose, hose->cfg_addr, hose->cfg_data);
+-
+-	/* Interpret the "ranges" property */
+-	/* This also maps the I/O region and sets isa_io/mem_base */
+-	pci_process_bridge_OF_ranges(hose, dev, primary);
+-
+-	/* Setup PEX window registers */
+-	setup_pcie_atmu(hose, &rsrc);
+-
+-	return 0;
+-}
+Index: linux-2.6.18/arch/powerpc/sysdev/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/Makefile
++++ linux-2.6.18/arch/powerpc/sysdev/Makefile
+@@ -9,6 +9,7 @@ obj-$(CONFIG_PPC_DCR_NATIVE)	+= dcr-low.
+ obj-$(CONFIG_U3_DART)		+= dart_iommu.o
+ obj-$(CONFIG_MMIO_NVRAM)	+= mmio_nvram.o
+ obj-$(CONFIG_FSL_SOC)		+= fsl_soc.o
++obj-$(CONFIG_FSL_PCI)		+= fsl_pci.o
+ obj-$(CONFIG_TSI108_BRIDGE)	+= tsi108_pci.o tsi108_dev.o
+ obj-$(CONFIG_QUICC_ENGINE)	+= qe_lib/
+ mv64x60-$(CONFIG_PCI)		+= mv64x60_pci.o
+Index: linux-2.6.18/arch/powerpc/sysdev/fsl_pci.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/sysdev/fsl_pci.c
+@@ -0,0 +1,238 @@
++/*
++ * MPC86XX pci setup code
++ *
++ * Recode: ZHANG WEI <wei.zhang@freescale.com>
++ * Initial author: Xianghua Xiao <x.xiao@freescale.com>
++ *
++ * Copyright 2006 Freescale Semiconductor Inc.
++ *
++ * This program is free software; you can redistribute  it and/or modify it
++ * under  the terms of  the GNU General  Public License as published by the
++ * Free Software Foundation;  either version 2 of the  License, or (at your
++ * option) any later version.
++ */
++
++#include <linux/types.h>
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/pci.h>
++#include <linux/serial.h>
++
++#include <asm/system.h>
++#include <asm/atomic.h>
++#include <asm/io.h>
++#include <asm/prom.h>
++#include <asm/pci-bridge.h>
++#include <sysdev/fsl_soc.h>
++#include <sysdev/fsl_pci.h>
++
++#include "../platforms/86xx/mpc86xx.h"
++
++#undef DEBUG
++
++#ifdef DEBUG
++#define DBG(fmt, args...) printk(KERN_ERR "%s: " fmt, __FUNCTION__, ## args)
++#else
++#define DBG(fmt, args...)
++#endif
++
++struct pcie_outbound_window_regs {
++	uint    pexotar;               /* 0x.0 - PCI Express outbound translation address register */
++	uint    pexotear;              /* 0x.4 - PCI Express outbound translation extended address register */
++	uint    pexowbar;              /* 0x.8 - PCI Express outbound window base address register */
++	char    res1[4];
++	uint    pexowar;               /* 0x.10 - PCI Express outbound window attributes register */
++	char    res2[12];
++};
++
++struct pcie_inbound_window_regs {
++	uint    pexitar;               /* 0x.0 - PCI Express inbound translation address register */
++	char    res1[4];
++	uint    pexiwbar;              /* 0x.8 - PCI Express inbound window base address register */
++	uint    pexiwbear;             /* 0x.c - PCI Express inbound window base extended address register */
++	uint    pexiwar;               /* 0x.10 - PCI Express inbound window attributes register */
++	char    res2[12];
++};
++
++static void __init setup_pcie_atmu(struct pci_controller *hose, struct resource *rsrc)
++{
++	volatile struct ccsr_pex *pcie;
++	volatile struct pcie_outbound_window_regs *pcieow;
++	volatile struct pcie_inbound_window_regs *pcieiw;
++	int i = 0;
++
++	DBG("PCIE memory map start 0x%x, size 0x%x\n", rsrc->start,
++			rsrc->end - rsrc->start + 1);
++	pcie = ioremap(rsrc->start, rsrc->end - rsrc->start + 1);
++
++	/* Disable all windows (except pexowar0 since its ignored) */
++	pcie->pexowar1 = 0;
++	pcie->pexowar2 = 0;
++ 	pcie->pexowar3 = 0;
++ 	pcie->pexowar4 = 0;
++ 	pcie->pexiwar1 = 0;
++ 	pcie->pexiwar2 = 0;
++ 	pcie->pexiwar3 = 0;
++
++ 	pcieow = (struct pcie_outbound_window_regs *)&pcie->pexotar1;
++ 	pcieiw = (struct pcie_inbound_window_regs *)&pcie->pexitar1;
++
++ 	/* Setup outbound MEM window */
++ 	for(i = 0; i < 3; i++)
++ 		if (hose->mem_resources[i].flags & IORESOURCE_MEM){
++ 			DBG("PCIE MEM resource start 0x%08x, size 0x%08x.\n",
++ 				hose->mem_resources[i].start,
++ 				hose->mem_resources[i].end
++ 				  - hose->mem_resources[i].start + 1);
++ 			pcieow->pexotar = (hose->mem_resources[i].start) >> 12
++ 				& 0x000fffff;
++ 			pcieow->pexotear = 0;
++ 			pcieow->pexowbar = (hose->mem_resources[i].start) >> 12
++ 				& 0x000fffff;
++ 			/* Enable, Mem R/W */
++ 			pcieow->pexowar = 0x80044000 |
++ 				(__ilog2(hose->mem_resources[i].end
++ 					 - hose->mem_resources[i].start + 1)
++ 				 - 1);
++ 			pcieow++;
++ 		}
++
++ 	/* Setup outbound IO window */
++ 	if (hose->io_resource.flags & IORESOURCE_IO){
++ 		DBG("PCIE IO resource start 0x%08x, size 0x%08x, phy base 0x%08x.\n",
++ 			hose->io_resource.start,
++ 			hose->io_resource.end - hose->io_resource.start + 1,
++ 			hose->io_base_phys);
++ 		pcieow->pexotar = (hose->io_resource.start) >> 12 & 0x000fffff;
++ 		pcieow->pexotear = 0;
++ 		pcieow->pexowbar = (hose->io_base_phys) >> 12 & 0x000fffff;
++ 		/* Enable, IO R/W */
++ 		pcieow->pexowar = 0x80088000 | (__ilog2(hose->io_resource.end
++ 					- hose->io_resource.start + 1) - 1);
++ 	}
++
++ 	/* Setup 2G inbound Memory Window @ 0 */
++ 	pcieiw->pexitar = 0x00000000;
++ 	pcieiw->pexiwbar = 0x00000000;
++ 	/* Enable, Prefetch, Local Mem, Snoop R/W, 2G */
++ 	pcieiw->pexiwar = 0xa0f5501e;
++}
++
++static void __init
++mpc86xx_setup_pcie(struct pci_controller *hose, u32 pcie_offset, u32 pcie_size)
++{
++	u16 cmd;
++
++	DBG("PCIE host controller register offset 0x%08x, size 0x%08x.\n",
++			pcie_offset, pcie_size);
++
++	early_read_config_word(hose, 0, 0, PCI_COMMAND, &cmd);
++	cmd |= PCI_COMMAND_SERR | PCI_COMMAND_MASTER | PCI_COMMAND_MEMORY
++	    | PCI_COMMAND_IO;
++	early_write_config_word(hose, 0, 0, PCI_COMMAND, cmd);
++
++	early_write_config_byte(hose, 0, 0, PCI_LATENCY_TIMER, 0x80);
++}
++
++static void __devinit quirk_fsl_pcie_transparent(struct pci_dev *dev)
++{
++	struct resource *res;
++	int i, res_idx = PCI_BRIDGE_RESOURCES;
++	struct pci_controller *hose;
++
++	/*
++	 * Make the bridge be transparent.
++	 */
++	dev->transparent = 1;
++
++	hose = pci_bus_to_host(dev->bus);
++	if (!hose) {
++		printk(KERN_ERR "Can't find hose for bus %d\n",
++		       dev->bus->number);
++		return;
++	}
++
++	if (hose->io_resource.flags) {
++		res = &dev->resource[res_idx++];
++		res->start = hose->io_resource.start;
++		res->end = hose->io_resource.end;
++		res->flags = hose->io_resource.flags;
++	}
++
++	for (i = 0; i < 3; i++) {
++		res = &dev->resource[res_idx + i];
++		res->start = hose->mem_resources[i].start;
++		res->end = hose->mem_resources[i].end;
++		res->flags = hose->mem_resources[i].flags;
++	}
++}
++
++
++DECLARE_PCI_FIXUP_EARLY(0x1957, 0x7010, quirk_fsl_pcie_transparent);
++DECLARE_PCI_FIXUP_EARLY(0x1957, 0x7011, quirk_fsl_pcie_transparent);
++
++#define PCIE_LTSSM	0x404	/* PCIe Link Training and Status */
++#define PCIE_LTSSM_L0	0x16	/* L0 state */
++
++int __init mpc86xx_add_bridge(struct device_node *dev)
++{
++	int len;
++	struct pci_controller *hose;
++	struct resource rsrc;
++	const int *bus_range;
++	int has_address = 0;
++	int primary = 0;
++	u16 val;
++
++	DBG("Adding PCIE host bridge %s\n", dev->full_name);
++
++	/* Fetch host bridge registers address */
++	has_address = (of_address_to_resource(dev, 0, &rsrc) == 0);
++
++	/* Get bus range if any */
++	bus_range = of_get_property(dev, "bus-range", &len);
++	if (bus_range == NULL || len < 2 * sizeof(int))
++		printk(KERN_WARNING "Can't get bus-range for %s, assume"
++		       " bus 0\n", dev->full_name);
++
++	pci_assign_all_buses = 1;
++	hose = pcibios_alloc_controller(dev);
++	if (!hose)
++		return -ENOMEM;
++
++	hose->indirect_type = PPC_INDIRECT_TYPE_EXT_REG |
++				PPC_INDIRECT_TYPE_SURPRESS_PRIMARY_BUS;
++
++	hose->first_busno = bus_range ? bus_range[0] : 0x0;
++	hose->last_busno = bus_range ? bus_range[1] : 0xff;
++
++	setup_indirect_pci(hose, rsrc.start, rsrc.start + 0x4);
++
++	/* Probe the hose link training status */
++	early_read_config_word(hose, 0, 0, PCIE_LTSSM, &val);
++	if (val < PCIE_LTSSM_L0)
++		return -ENXIO;
++
++	/* Setup the PCIE host controller. */
++	mpc86xx_setup_pcie(hose, rsrc.start, rsrc.end - rsrc.start + 1);
++
++	if ((rsrc.start & 0xfffff) == 0x8000)
++		primary = 1;
++
++	printk(KERN_INFO "Found MPC86xx PCIE host bridge at 0x%08lx. "
++	       "Firmware bus number: %d->%d\n",
++	       (unsigned long) rsrc.start,
++	       hose->first_busno, hose->last_busno);
++
++	DBG(" ->Hose at 0x%p, cfg_addr=0x%p,cfg_data=0x%p\n",
++		hose, hose->cfg_addr, hose->cfg_data);
++
++	/* Interpret the "ranges" property */
++	/* This also maps the I/O region and sets isa_io/mem_base */
++	pci_process_bridge_OF_ranges(hose, dev, primary);
++
++	/* Setup PEX window registers */
++	setup_pcie_atmu(hose, &rsrc);
++
++	return 0;
++}
+Index: linux-2.6.18/arch/powerpc/sysdev/fsl_pci.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/sysdev/fsl_pci.h
+@@ -0,0 +1,94 @@
++/*
++ * MPC85xx/86xx PCI Express structure define
++ *
++ * Copyright 2007 Freescale Semiconductor, Inc
++ *
++ * This program is free software; you can redistribute  it and/or modify it
++ * under  the terms of  the GNU General  Public License as published by the
++ * Free Software Foundation;  either version 2 of the  License, or (at your
++ * option) any later version.
++ *
++ */
++
++#ifdef __KERNEL__
++#ifndef __POWERPC_FSL_PCIE_H
++#define __POWERPC_FSL_PCIE_H
++
++/* PCIE Express IO block registers in 85xx/86xx */
++
++struct ccsr_pex {
++	__be32 __iomem    pex_config_addr;	/* 0x.000 - PCI Express Configuration Address Register */
++	__be32 __iomem    pex_config_data;	/* 0x.004 - PCI Express Configuration Data Register */
++	u8 __iomem    res1[4];
++	__be32 __iomem    pex_otb_cpl_tor;	/* 0x.00c - PCI Express Outbound completion timeout register */
++	__be32 __iomem    pex_conf_tor;		/* 0x.010 - PCI Express configuration timeout register */
++	u8 __iomem    res2[12];
++	__be32 __iomem    pex_pme_mes_dr;	/* 0x.020 - PCI Express PME and message detect register */
++	__be32 __iomem    pex_pme_mes_disr;	/* 0x.024 - PCI Express PME and message disable register */
++	__be32 __iomem    pex_pme_mes_ier;	/* 0x.028 - PCI Express PME and message interrupt enable register */
++	__be32 __iomem    pex_pmcr;		/* 0x.02c - PCI Express power management command register */
++	u8 __iomem    res3[3024];
++	__be32 __iomem    pexotar0;		/* 0x.c00 - PCI Express outbound translation address register 0 */
++	__be32 __iomem    pexotear0;		/* 0x.c04 - PCI Express outbound translation extended address register 0*/
++	u8 __iomem    res4[8];
++	__be32 __iomem    pexowar0;		/* 0x.c10 - PCI Express outbound window attributes register 0*/
++	u8 __iomem    res5[12];
++	__be32 __iomem    pexotar1;		/* 0x.c20 - PCI Express outbound translation address register 1 */
++	__be32 __iomem    pexotear1;		/* 0x.c24 - PCI Express outbound translation extended address register 1*/
++	__be32 __iomem    pexowbar1;		/* 0x.c28 - PCI Express outbound window base address register 1*/
++	u8 __iomem    res6[4];
++	__be32 __iomem    pexowar1;		/* 0x.c30 - PCI Express outbound window attributes register 1*/
++	u8 __iomem    res7[12];
++	__be32 __iomem    pexotar2;		/* 0x.c40 - PCI Express outbound translation address register 2 */
++	__be32 __iomem    pexotear2;		/* 0x.c44 - PCI Express outbound translation extended address register 2*/
++	__be32 __iomem    pexowbar2;		/* 0x.c48 - PCI Express outbound window base address register 2*/
++	u8 __iomem    res8[4];
++	__be32 __iomem    pexowar2;		/* 0x.c50 - PCI Express outbound window attributes register 2*/
++	u8 __iomem    res9[12];
++	__be32 __iomem    pexotar3;		/* 0x.c60 - PCI Express outbound translation address register 3 */
++	__be32 __iomem    pexotear3;		/* 0x.c64 - PCI Express outbound translation extended address register 3*/
++	__be32 __iomem    pexowbar3;		/* 0x.c68 - PCI Express outbound window base address register 3*/
++	u8 __iomem    res10[4];
++	__be32 __iomem    pexowar3;		/* 0x.c70 - PCI Express outbound window attributes register 3*/
++	u8 __iomem    res11[12];
++	__be32 __iomem    pexotar4;		/* 0x.c80 - PCI Express outbound translation address register 4 */
++	__be32 __iomem    pexotear4;		/* 0x.c84 - PCI Express outbound translation extended address register 4*/
++	__be32 __iomem    pexowbar4;		/* 0x.c88 - PCI Express outbound window base address register 4*/
++	u8 __iomem    res12[4];
++	__be32 __iomem    pexowar4;		/* 0x.c90 - PCI Express outbound window attributes register 4*/
++	u8 __iomem    res13[12];
++	u8 __iomem    res14[256];
++	__be32 __iomem    pexitar3;		/* 0x.da0 - PCI Express inbound translation address register 3 */
++	u8 __iomem    res15[4];
++	__be32 __iomem    pexiwbar3;		/* 0x.da8 - PCI Express inbound window base address register 3 */
++	__be32 __iomem    pexiwbear3;		/* 0x.dac - PCI Express inbound window base extended address register 3 */
++	__be32 __iomem    pexiwar3;		/* 0x.db0 - PCI Express inbound window attributes register 3 */
++	u8 __iomem    res16[12];
++	__be32 __iomem    pexitar2;		/* 0x.dc0 - PCI Express inbound translation address register 2 */
++	u8 __iomem    res17[4];
++	__be32 __iomem    pexiwbar2;		/* 0x.dc8 - PCI Express inbound window base address register 2 */
++	__be32 __iomem    pexiwbear2;		/* 0x.dcc - PCI Express inbound window base extended address register 2 */
++	__be32 __iomem    pexiwar2;		/* 0x.dd0 - PCI Express inbound window attributes register 2 */
++	u8 __iomem    res18[12];
++	__be32 __iomem    pexitar1;		/* 0x.de0 - PCI Express inbound translation address register 2 */
++	u8 __iomem    res19[4];
++	__be32 __iomem    pexiwbar1;		/* 0x.de8 - PCI Express inbound window base address register 2 */
++	__be32 __iomem    pexiwbear1;		/* 0x.dec - PCI Express inbound window base extended address register 2 */
++	__be32 __iomem    pexiwar1;		/* 0x.df0 - PCI Express inbound window attributes register 2 */
++	u8 __iomem    res20[12];
++	__be32 __iomem    pex_err_dr;		/* 0x.e00 - PCI Express error detect register */
++	u8 __iomem    res21[4];
++	__be32 __iomem    pex_err_en;		/* 0x.e08 - PCI Express error interrupt enable register */
++	u8 __iomem    res22[4];
++	__be32 __iomem    pex_err_disr;		/* 0x.e10 - PCI Express error disable register */
++	u8 __iomem    res23[12];
++	__be32 __iomem    pex_err_cap_stat;	/* 0x.e20 - PCI Express error capture status register */
++	u8 __iomem    res24[4];
++	__be32 __iomem    pex_err_cap_r0;	/* 0x.e28 - PCI Express error capture register 0 */
++	__be32 __iomem    pex_err_cap_r1;	/* 0x.e2c - PCI Express error capture register 0 */
++	__be32 __iomem    pex_err_cap_r2;	/* 0x.e30 - PCI Express error capture register 0 */
++	__be32 __iomem    pex_err_cap_r3;	/* 0x.e34 - PCI Express error capture register 0 */
++};
++
++#endif /* __POWERPC_FSL_PCIE_H */
++#endif /* __KERNEL__ */
+Index: linux-2.6.18/arch/powerpc/sysdev/fsl_pcie.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/fsl_pcie.h
++++ /dev/null
+@@ -1,94 +0,0 @@
+-/*
+- * MPC85xx/86xx PCI Express structure define
+- *
+- * Copyright 2007 Freescale Semiconductor, Inc
+- *
+- * This program is free software; you can redistribute  it and/or modify it
+- * under  the terms of  the GNU General  Public License as published by the
+- * Free Software Foundation;  either version 2 of the  License, or (at your
+- * option) any later version.
+- *
+- */
+-
+-#ifdef __KERNEL__
+-#ifndef __POWERPC_FSL_PCIE_H
+-#define __POWERPC_FSL_PCIE_H
+-
+-/* PCIE Express IO block registers in 85xx/86xx */
+-
+-struct ccsr_pex {
+-	__be32 __iomem    pex_config_addr;	/* 0x.000 - PCI Express Configuration Address Register */
+-	__be32 __iomem    pex_config_data;	/* 0x.004 - PCI Express Configuration Data Register */
+-	u8 __iomem    res1[4];
+-	__be32 __iomem    pex_otb_cpl_tor;	/* 0x.00c - PCI Express Outbound completion timeout register */
+-	__be32 __iomem    pex_conf_tor;		/* 0x.010 - PCI Express configuration timeout register */
+-	u8 __iomem    res2[12];
+-	__be32 __iomem    pex_pme_mes_dr;	/* 0x.020 - PCI Express PME and message detect register */
+-	__be32 __iomem    pex_pme_mes_disr;	/* 0x.024 - PCI Express PME and message disable register */
+-	__be32 __iomem    pex_pme_mes_ier;	/* 0x.028 - PCI Express PME and message interrupt enable register */
+-	__be32 __iomem    pex_pmcr;		/* 0x.02c - PCI Express power management command register */
+-	u8 __iomem    res3[3024];
+-	__be32 __iomem    pexotar0;		/* 0x.c00 - PCI Express outbound translation address register 0 */
+-	__be32 __iomem    pexotear0;		/* 0x.c04 - PCI Express outbound translation extended address register 0*/
+-	u8 __iomem    res4[8];
+-	__be32 __iomem    pexowar0;		/* 0x.c10 - PCI Express outbound window attributes register 0*/
+-	u8 __iomem    res5[12];
+-	__be32 __iomem    pexotar1;		/* 0x.c20 - PCI Express outbound translation address register 1 */
+-	__be32 __iomem    pexotear1;		/* 0x.c24 - PCI Express outbound translation extended address register 1*/
+-	__be32 __iomem    pexowbar1;		/* 0x.c28 - PCI Express outbound window base address register 1*/
+-	u8 __iomem    res6[4];
+-	__be32 __iomem    pexowar1;		/* 0x.c30 - PCI Express outbound window attributes register 1*/
+-	u8 __iomem    res7[12];
+-	__be32 __iomem    pexotar2;		/* 0x.c40 - PCI Express outbound translation address register 2 */
+-	__be32 __iomem    pexotear2;		/* 0x.c44 - PCI Express outbound translation extended address register 2*/
+-	__be32 __iomem    pexowbar2;		/* 0x.c48 - PCI Express outbound window base address register 2*/
+-	u8 __iomem    res8[4];
+-	__be32 __iomem    pexowar2;		/* 0x.c50 - PCI Express outbound window attributes register 2*/
+-	u8 __iomem    res9[12];
+-	__be32 __iomem    pexotar3;		/* 0x.c60 - PCI Express outbound translation address register 3 */
+-	__be32 __iomem    pexotear3;		/* 0x.c64 - PCI Express outbound translation extended address register 3*/
+-	__be32 __iomem    pexowbar3;		/* 0x.c68 - PCI Express outbound window base address register 3*/
+-	u8 __iomem    res10[4];
+-	__be32 __iomem    pexowar3;		/* 0x.c70 - PCI Express outbound window attributes register 3*/
+-	u8 __iomem    res11[12];
+-	__be32 __iomem    pexotar4;		/* 0x.c80 - PCI Express outbound translation address register 4 */
+-	__be32 __iomem    pexotear4;		/* 0x.c84 - PCI Express outbound translation extended address register 4*/
+-	__be32 __iomem    pexowbar4;		/* 0x.c88 - PCI Express outbound window base address register 4*/
+-	u8 __iomem    res12[4];
+-	__be32 __iomem    pexowar4;		/* 0x.c90 - PCI Express outbound window attributes register 4*/
+-	u8 __iomem    res13[12];
+-	u8 __iomem    res14[256];
+-	__be32 __iomem    pexitar3;		/* 0x.da0 - PCI Express inbound translation address register 3 */
+-	u8 __iomem    res15[4];
+-	__be32 __iomem    pexiwbar3;		/* 0x.da8 - PCI Express inbound window base address register 3 */
+-	__be32 __iomem    pexiwbear3;		/* 0x.dac - PCI Express inbound window base extended address register 3 */
+-	__be32 __iomem    pexiwar3;		/* 0x.db0 - PCI Express inbound window attributes register 3 */
+-	u8 __iomem    res16[12];
+-	__be32 __iomem    pexitar2;		/* 0x.dc0 - PCI Express inbound translation address register 2 */
+-	u8 __iomem    res17[4];
+-	__be32 __iomem    pexiwbar2;		/* 0x.dc8 - PCI Express inbound window base address register 2 */
+-	__be32 __iomem    pexiwbear2;		/* 0x.dcc - PCI Express inbound window base extended address register 2 */
+-	__be32 __iomem    pexiwar2;		/* 0x.dd0 - PCI Express inbound window attributes register 2 */
+-	u8 __iomem    res18[12];
+-	__be32 __iomem    pexitar1;		/* 0x.de0 - PCI Express inbound translation address register 2 */
+-	u8 __iomem    res19[4];
+-	__be32 __iomem    pexiwbar1;		/* 0x.de8 - PCI Express inbound window base address register 2 */
+-	__be32 __iomem    pexiwbear1;		/* 0x.dec - PCI Express inbound window base extended address register 2 */
+-	__be32 __iomem    pexiwar1;		/* 0x.df0 - PCI Express inbound window attributes register 2 */
+-	u8 __iomem    res20[12];
+-	__be32 __iomem    pex_err_dr;		/* 0x.e00 - PCI Express error detect register */
+-	u8 __iomem    res21[4];
+-	__be32 __iomem    pex_err_en;		/* 0x.e08 - PCI Express error interrupt enable register */
+-	u8 __iomem    res22[4];
+-	__be32 __iomem    pex_err_disr;		/* 0x.e10 - PCI Express error disable register */
+-	u8 __iomem    res23[12];
+-	__be32 __iomem    pex_err_cap_stat;	/* 0x.e20 - PCI Express error capture status register */
+-	u8 __iomem    res24[4];
+-	__be32 __iomem    pex_err_cap_r0;	/* 0x.e28 - PCI Express error capture register 0 */
+-	__be32 __iomem    pex_err_cap_r1;	/* 0x.e2c - PCI Express error capture register 0 */
+-	__be32 __iomem    pex_err_cap_r2;	/* 0x.e30 - PCI Express error capture register 0 */
+-	__be32 __iomem    pex_err_cap_r3;	/* 0x.e34 - PCI Express error capture register 0 */
+-};
+-
+-#endif /* __POWERPC_FSL_PCIE_H */
+-#endif /* __KERNEL__ */
+Index: linux-2.6.18/mvl_patches/pro50-0523.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0523.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(523);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

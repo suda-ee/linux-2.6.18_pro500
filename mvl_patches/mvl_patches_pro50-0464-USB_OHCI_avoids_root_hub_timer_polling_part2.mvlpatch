@@ -1,0 +1,628 @@
+#! /usr/bin/env bash
+# Patch: -USB_OHCI_avoids_root_hub_timer_polling_part2
+# Date: Fri Oct 26 08:36:08 2007
+# MR: 24856
+# From d413984ae936fad46678403b38d79c595e5aaafe Mon Sep 17 00:00:00 2001
+# From: David Brownell <david-b@pacbell.net>
+# Date: Fri, 4 Aug 2006 11:31:55 -0700
+# Subject: [PATCH] USB: OHCI avoids root hub timer polling
+# 
+# This teaches OHCI to use the root hub status change (RHSC) IRQ, bypassing
+# root hub timers most of the time and switching over to the "new" root hub
+# polling scheme.  It's complicated by the fact that implementations of OHCI
+# trigger and ack that IRQ differently (the spec is vague there).
+# 
+# Avoiding root hub timers helps mechanisms like "dynamic tick" leave the
+# CPU in lowpower modes for longer intervals.
+# 
+# Signed-off-by: David Brownell <dbrownell@users.sourceforge.net>
+# Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+# 
+# Adjustments:
+#     Removed some already applied changes, most of them 
+#     refer to commented PM stuff.
+
+PATCHNUM=464
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From d413984ae936fad46678403b38d79c595e5aaafe Mon Sep 17 00:00:00 2001
+From: David Brownell <david-b@pacbell.net>
+Date: Fri, 4 Aug 2006 11:31:55 -0700
+Subject: [PATCH] USB: OHCI avoids root hub timer polling
+
+This teaches OHCI to use the root hub status change (RHSC) IRQ, bypassing
+root hub timers most of the time and switching over to the "new" root hub
+polling scheme.  It's complicated by the fact that implementations of OHCI
+trigger and ack that IRQ differently (the spec is vague there).
+
+Avoiding root hub timers helps mechanisms like "dynamic tick" leave the
+CPU in lowpower modes for longer intervals.
+
+Signed-off-by: David Brownell <dbrownell@users.sourceforge.net>
+Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+
+Adjustments:
+    Removed some already applied changes, most of them 
+    refer to commented PM stuff.
+Index: linux-2.6.18/drivers/usb/host/ohci-at91.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-at91.c
++++ linux-2.6.18/drivers/usb/host/ohci-at91.c
+@@ -240,7 +240,7 @@ static const struct hc_driver ohci_at91_
+ 	 */
+ 	.hub_status_data =	ohci_hub_status_data,
+ 	.hub_control =		ohci_hub_control,
+-
++	.hub_irq_enable =	ohci_rhsc_enable,
+ #ifdef CONFIG_PM
+ 	.bus_suspend =		ohci_bus_suspend,
+ 	.bus_resume =		ohci_bus_resume,
+Index: linux-2.6.18/drivers/usb/host/ohci-au1xxx.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-au1xxx.c
++++ linux-2.6.18/drivers/usb/host/ohci-au1xxx.c
+@@ -288,6 +288,7 @@ static const struct hc_driver ohci_au1xx
+ 	 */
+ 	.hub_status_data =	ohci_hub_status_data,
+ 	.hub_control =		ohci_hub_control,
++	.hub_irq_enable =	ohci_rhsc_enable,
+ #ifdef	CONFIG_PM
+ 	.bus_suspend =		ohci_bus_suspend,
+ 	.bus_resume =		ohci_bus_resume,
+Index: linux-2.6.18/drivers/usb/host/ohci-dbg.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-dbg.c
++++ linux-2.6.18/drivers/usb/host/ohci-dbg.c
+@@ -667,6 +667,11 @@ show_registers (struct class_device *cla
+ 	size -= temp;
+ 	next += temp;
+ 
++	temp = scnprintf (next, size, "hub poll timer %s\n",
++			ohci_to_hcd(ohci)->poll_rh ? "ON" : "off");
++	size -= temp;
++	next += temp;
++
+ 	/* roothub */
+ 	ohci_dump_roothub (ohci, 1, &next, &size);
+ 
+Index: linux-2.6.18/drivers/usb/host/ohci-ep93xx.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-ep93xx.c
++++ linux-2.6.18/drivers/usb/host/ohci-ep93xx.c
+@@ -135,6 +135,7 @@ static struct hc_driver ohci_ep93xx_hc_d
+ 	.get_frame_number	= ohci_get_frame,
+ 	.hub_status_data	= ohci_hub_status_data,
+ 	.hub_control		= ohci_hub_control,
++	.hub_irq_enable		= ohci_rhsc_enable,
+ #ifdef CONFIG_PM
+ 	.bus_suspend		= ohci_bus_suspend,
+ 	.bus_resume		= ohci_bus_resume,
+Index: linux-2.6.18/drivers/usb/host/ohci-hcd.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-hcd.c
++++ linux-2.6.18/drivers/usb/host/ohci-hcd.c
+@@ -101,7 +101,7 @@
+ 
+ #include "../core/hcd.h"
+ 
+-#define DRIVER_VERSION "2005 April 22"
++#define DRIVER_VERSION "2006 August 04"
+ #define DRIVER_AUTHOR "Roman Weissgaerber, David Brownell"
+ #define DRIVER_DESC "USB 1.1 'Open' Host Controller (OHCI) Driver"
+ 
+@@ -110,9 +110,10 @@
+ #undef OHCI_VERBOSE_DEBUG	/* not always helpful */
+ 
+ /* For initializing controller (mask in an HCFS mode too) */
+-#define	OHCI_CONTROL_INIT 	OHCI_CTRL_CBSR
++#define	OHCI_CONTROL_INIT	OHCI_CTRL_CBSR
+ #define	OHCI_INTR_INIT \
+-	(OHCI_INTR_MIE | OHCI_INTR_UE | OHCI_INTR_RD | OHCI_INTR_WDH)
++		(OHCI_INTR_MIE | OHCI_INTR_RHSC | OHCI_INTR_UE \
++		| OHCI_INTR_RD | OHCI_INTR_WDH)
+ 
+ #ifdef __hppa__
+ /* On PA-RISC, PDC can leave IR set incorrectly; ignore it there. */
+@@ -128,6 +129,8 @@
+ 
+ static const char	hcd_name [] = "ohci_hcd";
+ 
++#define	STATECHANGE_DELAY	msecs_to_jiffies(300)
++
+ #include "ohci.h"
+ 
+ static void ohci_dump (struct ohci_hcd *ohci, int verbose);
+@@ -444,7 +447,6 @@ static int ohci_init (struct ohci_hcd *o
+ 
+ 	disable (ohci);
+ 	ohci->regs = hcd->regs;
+-	ohci->next_statechange = jiffies;
+ 
+ 	/* REVISIT this BIOS handshake is now moved into PCI "quirks", and
+ 	 * was never needed for most non-PCI systems ... remove the code?
+@@ -634,10 +636,14 @@ retry:
+ 		return -EOVERFLOW;
+ 	}
+ 
+- 	/* start controller operations */
++	/* use rhsc irqs after khubd is fully initialized */
++	hcd->poll_rh = 1;
++	hcd->uses_new_polling = 1;
++
++	/* start controller operations */
+ 	ohci->hc_control &= OHCI_CTRL_RWC;
+- 	ohci->hc_control |= OHCI_CONTROL_INIT | OHCI_USB_OPER;
+- 	ohci_writel (ohci, ohci->hc_control, &ohci->regs->control);
++	ohci->hc_control |= OHCI_CONTROL_INIT | OHCI_USB_OPER;
++	ohci_writel (ohci, ohci->hc_control, &ohci->regs->control);
+ 	hcd->state = HC_STATE_RUNNING;
+ 
+ 	/* wake on ConnectStatusChange, matching external hubs */
+@@ -645,7 +651,7 @@ retry:
+ 
+ 	/* Choose the interrupts we care about now, others later on demand */
+ 	mask = OHCI_INTR_INIT;
+-	ohci_writel (ohci, mask, &ohci->regs->intrstatus);
++	ohci_writel (ohci, ~0, &ohci->regs->intrstatus);
+ 	ohci_writel (ohci, mask, &ohci->regs->intrenable);
+ 
+ 	/* handle root hub init quirks ... */
+@@ -669,6 +675,7 @@ retry:
+ 	// flush those writes
+ 	(void) ohci_readl (ohci, &ohci->regs->control);
+ 
++	ohci->next_statechange = jiffies + STATECHANGE_DELAY;
+ 	spin_unlock_irq (&ohci->lock);
+ 
+ 	// POTPGT delay is bits 24-31, in 2 ms units.
+@@ -706,7 +713,23 @@ static irqreturn_t ohci_irq (struct usb_
+ 	/* interrupt for some other device? */
+ 	} else if ((ints &= ohci_readl (ohci, &regs->intrenable)) == 0) {
+ 		return IRQ_NOTMINE;
+-	} 
++	}
++
++	/* NOTE:  vendors didn't always make the same implementation
++	 * choices for RHSC.  Sometimes it triggers on an edge (like
++	 * setting and maybe clearing a port status change bit); and
++	 * it's level-triggered on other silicon, active until khubd
++	 * clears all active port status change bits.  Poll by timer
++	 * til it's fully debounced and the difference won't matter.
++	 */
++	if (ints & OHCI_INTR_RHSC) {
++		ohci_vdbg (ohci, "rhsc\n");
++		ohci_writel (ohci, OHCI_INTR_RHSC, &regs->intrdisable);
++		hcd->poll_rh = 1;
++		ohci->next_statechange = jiffies + STATECHANGE_DELAY;
++		ohci_writel (ohci, OHCI_INTR_RHSC, &regs->intrstatus);
++		usb_hcd_poll_rh_status(hcd);
++	}
+ 
+ 	if (ints & OHCI_INTR_UE) {
+ 		disable (ohci);
+Index: linux-2.6.18/drivers/usb/host/ohci-hub.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-hub.c
++++ linux-2.6.18/drivers/usb/host/ohci-hub.c
+@@ -36,6 +36,14 @@
+ 
+ /*-------------------------------------------------------------------------*/
+ 
++/* hcd->hub_irq_enable() */
++static void ohci_rhsc_enable (struct usb_hcd *hcd)
++{
++	struct ohci_hcd		*ohci = hcd_to_ohci (hcd);
++
++	ohci_writel (ohci, OHCI_INTR_RHSC, &ohci->regs->intrenable);
++}
++
+ #ifdef	CONFIG_PM
+ 
+ #define OHCI_SCHED_ENABLES \
+@@ -123,6 +131,9 @@ static int ohci_bus_suspend (struct usb_
+ 	/* no resumes until devices finish suspending */
+ 	ohci->next_statechange = jiffies + msecs_to_jiffies (5);
+ 
++	/* no timer polling */
++	hcd->poll_rh = 0;
++
+ done:
+ 	/* external suspend vs self autosuspend ... same effect */
+ 	if (status == 0)
+@@ -256,8 +267,8 @@ static int ohci_bus_resume (struct usb_h
+ 	/* TRSMRCY */
+ 	msleep (10);
+ 
+-	/* keep it alive for ~5x suspend + resume costs */
+-	ohci->next_statechange = jiffies + msecs_to_jiffies (250);
++	/* keep it alive for more than ~5x suspend + resume costs */
++	ohci->next_statechange = jiffies + STATECHANGE_DELAY;
+ 
+ 	/* maybe turn schedules back on */
+ 	enables = 0;
+@@ -302,9 +313,10 @@ ohci_hub_status_data (struct usb_hcd *hc
+ {
+ 	struct ohci_hcd	*ohci = hcd_to_ohci (hcd);
+ 	int		i, changed = 0, length = 1;
+-	int		can_suspend = device_may_wakeup(&hcd->self.root_hub->dev);
++	int		can_suspend;
+ 	unsigned long	flags;
+ 
++	can_suspend = device_may_wakeup(&hcd->self.root_hub->dev);
+ 	spin_lock_irqsave (&ohci->lock, flags);
+ 
+ 	/* handle autosuspended root:  finish resuming before
+@@ -339,6 +351,10 @@ ohci_hub_status_data (struct usb_hcd *hc
+ 	for (i = 0; i < ohci->num_ports; i++) {
+ 		u32	status = roothub_portstatus (ohci, i);
+ 
++		/* can't autosuspend with active ports */
++		if ((status & RH_PS_PES) && !(status & RH_PS_PSS))
++			can_suspend = 0;
++
+ 		if (status & (RH_PS_CSC | RH_PS_PESC | RH_PS_PSSC
+ 				| RH_PS_OCIC | RH_PS_PRSC)) {
+ 			changed = 1;
+@@ -348,32 +364,41 @@ ohci_hub_status_data (struct usb_hcd *hc
+ 			    buf [1] |= 1 << (i - 7);
+ 			continue;
+ 		}
++	}
+ 
+-		/* can suspend if no ports are enabled; or if all all
+-		 * enabled ports are suspended AND remote wakeup is on.
+-		 */
+-		if (!(status & RH_PS_CCS))
+-			continue;
+-		if ((status & RH_PS_PSS) && can_suspend)
+-			continue;
++	/* after root hub changes, stop polling after debouncing
++	 * for a while and maybe kicking in autosuspend
++	 */
++	if (changed) {
++		ohci->next_statechange = jiffies + STATECHANGE_DELAY;
+ 		can_suspend = 0;
++	} else if (time_before (jiffies, ohci->next_statechange)) {
++		can_suspend = 0;
++	} else {
++#ifdef	CONFIG_PM
++		can_suspend = can_suspend
++			&& !ohci->ed_rm_list
++			&& ((OHCI_CTRL_HCFS | OHCI_SCHED_ENABLES)
++					& ohci->hc_control)
++				== OHCI_USB_OPER;
++#endif
++		if (hcd->uses_new_polling) {
++			hcd->poll_rh = 0;
++			/* use INTR_RHSC iff INTR_RD won't apply */
++			if (!can_suspend)
++				ohci_writel (ohci, OHCI_INTR_RHSC,
++						&ohci->regs->intrenable);
++		}
+ 	}
++
+ done:
+ 	spin_unlock_irqrestore (&ohci->lock, flags);
+ 
+-#ifdef CONFIG_PM
+-	/* save power by suspending idle root hubs;
++#ifdef	CONFIG_PM
++	/* save power by autosuspending idle root hubs;
+ 	 * INTR_RD wakes us when there's work
+ 	 */
+-	if (can_suspend
+-			&& !changed
+-			&& !ohci->ed_rm_list
+-			&& ((OHCI_CTRL_HCFS | OHCI_SCHED_ENABLES)
+-					& ohci->hc_control)
+-				== OHCI_USB_OPER
+-			&& time_after (jiffies, ohci->next_statechange)
+-			&& usb_trylock_device (hcd->self.root_hub) == 0
+-			) {
++	if (can_suspend && usb_trylock_device (hcd->self.root_hub) == 0) {
+ 		ohci_vdbg (ohci, "autosuspend\n");
+ 		(void) ohci_bus_suspend (hcd);
+ 		usb_unlock_device (hcd->self.root_hub);
+Index: linux-2.6.18/drivers/usb/host/ohci-lh7a404.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-lh7a404.c
++++ linux-2.6.18/drivers/usb/host/ohci-lh7a404.c
+@@ -193,6 +193,7 @@ static const struct hc_driver ohci_lh7a4
+ 	 */
+ 	.hub_status_data =	ohci_hub_status_data,
+ 	.hub_control =		ohci_hub_control,
++	.hub_irq_enable =	ohci_rhsc_enable,
+ #ifdef	CONFIG_PM
+ 	.bus_suspend =		ohci_bus_suspend,
+ 	.bus_resume =		ohci_bus_resume,
+Index: linux-2.6.18/drivers/usb/host/ohci-omap.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-omap.c
++++ linux-2.6.18/drivers/usb/host/ohci-omap.c
+@@ -415,8 +415,10 @@ ohci_omap_start (struct usb_hcd *hcd)
+ 	if (!host_enabled)
+ 		return 0;
+ 	config = hcd->self.controller->platform_data;
+-	if (config->otg || config->rwc)
++	if (config->otg || config->rwc) {
++		ohci->hc_control = OHCI_CTRL_RWC;
+ 		writel(OHCI_CTRL_RWC, &ohci->regs->control);
++	}
+ 
+ 	if ((ret = ohci_run (ohci)) < 0) {
+ 		dev_err(hcd->self.controller, "can't start\n");
+@@ -464,6 +466,7 @@ static const struct hc_driver ohci_omap_
+ 	 */
+ 	.hub_status_data =	ohci_hub_status_data,
+ 	.hub_control =		ohci_hub_control,
++	.hub_irq_enable =	ohci_rhsc_enable,
+ #ifdef	CONFIG_PM
+ 	.bus_suspend =		ohci_bus_suspend,
+ 	.bus_resume =		ohci_bus_resume,
+Index: linux-2.6.18/drivers/usb/host/ohci-pci.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-pci.c
++++ linux-2.6.18/drivers/usb/host/ohci-pci.c
+@@ -202,6 +202,7 @@ static const struct hc_driver ohci_pci_h
+ 	 */
+ 	.hub_status_data =	ohci_hub_status_data,
+ 	.hub_control =		ohci_hub_control,
++	.hub_irq_enable =	ohci_rhsc_enable,
+ #ifdef	CONFIG_PM
+ 	.bus_suspend =		ohci_bus_suspend,
+ 	.bus_resume =		ohci_bus_resume,
+Index: linux-2.6.18/drivers/usb/host/ohci-ppc-soc.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-ppc-soc.c
++++ linux-2.6.18/drivers/usb/host/ohci-ppc-soc.c
+@@ -167,6 +167,7 @@ static const struct hc_driver ohci_ppc_s
+ 	 */
+ 	.hub_status_data =	ohci_hub_status_data,
+ 	.hub_control =		ohci_hub_control,
++	.hub_irq_enable =	ohci_rhsc_enable,
+ #ifdef	CONFIG_PM
+ 	.bus_suspend =		ohci_bus_suspend,
+ 	.bus_resume =		ohci_bus_resume,
+Index: linux-2.6.18/drivers/usb/host/ohci-pxa27x.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-pxa27x.c
++++ linux-2.6.18/drivers/usb/host/ohci-pxa27x.c
+@@ -289,6 +289,7 @@ static const struct hc_driver ohci_pxa27
+ 	 */
+ 	.hub_status_data =	ohci_hub_status_data,
+ 	.hub_control =		ohci_hub_control,
++	.hub_irq_enable =	ohci_rhsc_enable,
+ #ifdef  CONFIG_PM
+ 	.bus_suspend =		ohci_bus_suspend,
+ 	.bus_resume =		ohci_bus_resume,
+Index: linux-2.6.18/drivers/usb/host/ohci-s3c2410.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-s3c2410.c
++++ linux-2.6.18/drivers/usb/host/ohci-s3c2410.c
+@@ -466,6 +466,7 @@ static const struct hc_driver ohci_s3c24
+ 	 */
+ 	.hub_status_data =	ohci_s3c2410_hub_status_data,
+ 	.hub_control =		ohci_s3c2410_hub_control,
++	.hub_irq_enable =	ohci_rhsc_enable,
+ #ifdef	CONFIG_PM
+ 	.bus_suspend =		ohci_bus_suspend,
+ 	.bus_resume =		ohci_bus_resume,
+Index: linux-2.6.18/drivers/usb/host/ohci-sa1111.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-sa1111.c
++++ linux-2.6.18/drivers/usb/host/ohci-sa1111.c
+@@ -231,6 +231,7 @@ static const struct hc_driver ohci_sa111
+ 	 */
+ 	.hub_status_data =	ohci_hub_status_data,
+ 	.hub_control =		ohci_hub_control,
++	.hub_irq_enable =	ohci_rhsc_enable,
+ #ifdef	CONFIG_PM
+ 	.bus_suspend =		ohci_bus_suspend,
+ 	.bus_resume =		ohci_bus_resume,
+Index: linux-2.6.18/mvl_patches/pro50-0464.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0464.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(464);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

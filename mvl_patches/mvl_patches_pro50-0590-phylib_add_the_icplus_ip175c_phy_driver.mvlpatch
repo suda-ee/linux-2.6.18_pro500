@@ -1,0 +1,417 @@
+#! /usr/bin/env bash
+# Patch: -phylib_add_the_icplus_ip175c_phy_driver
+# Date: Wed Nov  7 15:17:53 2007
+# Source: Michael Barkowski <michael.barkowski@freescale.com>
+# MR: 24200
+# Type: Enhancement
+# Disposition: backport from 2.6.23-rc1 (0cefeebaf3da39d768bffcf62460fe2088e824ef)
+# Signed-off-by: Michael Barkowski <michael.barkowski@freescale.com>
+# Signed-off-by: Kim Phillips <kim.phillips@freescale.com>
+# Signed-off-by: Jeff Garzik <jeff@garzik.org>
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# phylib: add the ICPlus IP175C PHY driver
+# 
+# The ICPlus IP175C sports a 100Mbit/s 4-port switch in addition
+# to a dedicated 100Mbit/s WAN port.
+# 
+#  drivers/net/phy/Kconfig  |    6 ++
+#  drivers/net/phy/Makefile |    1 
+#  drivers/net/phy/icplus.c |  134 ++++++++++++++++++++++++++++++++++++++++++++++
+#  3 files changed, 141 insertions(+), 0 deletions(-)
+# 
+
+PATCHNUM=590
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Michael Barkowski <michael.barkowski@freescale.com>
+MR: 24200
+Type: Enhancement
+Disposition: backport from 2.6.23-rc1 (0cefeebaf3da39d768bffcf62460fe2088e824ef)
+Signed-off-by: Michael Barkowski <michael.barkowski@freescale.com>
+Signed-off-by: Kim Phillips <kim.phillips@freescale.com>
+Signed-off-by: Jeff Garzik <jeff@garzik.org>
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+phylib: add the ICPlus IP175C PHY driver
+
+The ICPlus IP175C sports a 100Mbit/s 4-port switch in addition
+to a dedicated 100Mbit/s WAN port.
+
+ drivers/net/phy/Kconfig  |    6 ++
+ drivers/net/phy/Makefile |    1 
+ drivers/net/phy/icplus.c |  134 +++++++++++++++++++++++++++++++++++++++++++++++
+ mvl_patches/pro50-0590.c |   16 +++++
+ 4 files changed, 157 insertions(+)
+
+Index: linux-2.6.18/drivers/net/phy/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/net/phy/Kconfig
++++ linux-2.6.18/drivers/net/phy/Kconfig
+@@ -56,6 +56,12 @@ config SMSC_PHY
+ 	---help---
+ 	  Currently supports the LAN83C185 PHY
+ 
++config ICPLUS_PHY
++	tristate "Drivers for ICPlus PHYs"
++	depends on PHYLIB
++	---help---
++	  Currently supports the IP175C PHY.
++
+ config FIXED_PHY
+ 	tristate "Drivers for PHY emulation on fixed speed/link"
+ 	depends on PHYLIB
+Index: linux-2.6.18/drivers/net/phy/Makefile
+===================================================================
+--- linux-2.6.18.orig/drivers/net/phy/Makefile
++++ linux-2.6.18/drivers/net/phy/Makefile
+@@ -11,3 +11,4 @@ obj-$(CONFIG_QSEMI_PHY)		+= qsemi.o
+ obj-$(CONFIG_SMSC_PHY)		+= smsc.o
+ obj-$(CONFIG_VITESSE_PHY)	+= vitesse.o
+ obj-$(CONFIG_FIXED_PHY)		+= fixed.o
++obj-$(CONFIG_ICPLUS_PHY)	+= icplus.o
+Index: linux-2.6.18/drivers/net/phy/icplus.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/net/phy/icplus.c
+@@ -0,0 +1,134 @@
++/*
++ * Driver for ICPlus PHYs
++ *
++ * Copyright (c) 2007 Freescale Semiconductor, Inc.
++ *
++ * This program is free software; you can redistribute  it and/or modify it
++ * under  the terms of  the GNU General  Public License as published by the
++ * Free Software Foundation;  either version 2 of the  License, or (at your
++ * option) any later version.
++ *
++ */
++#include <linux/kernel.h>
++#include <linux/string.h>
++#include <linux/errno.h>
++#include <linux/unistd.h>
++#include <linux/slab.h>
++#include <linux/interrupt.h>
++#include <linux/init.h>
++#include <linux/delay.h>
++#include <linux/netdevice.h>
++#include <linux/etherdevice.h>
++#include <linux/skbuff.h>
++#include <linux/spinlock.h>
++#include <linux/mm.h>
++#include <linux/module.h>
++#include <linux/mii.h>
++#include <linux/ethtool.h>
++#include <linux/phy.h>
++
++#include <asm/io.h>
++#include <asm/irq.h>
++#include <asm/uaccess.h>
++
++MODULE_DESCRIPTION("ICPlus IP175C PHY driver");
++MODULE_AUTHOR("Michael Barkowski");
++MODULE_LICENSE("GPL");
++
++static int ip175c_config_init(struct phy_device *phydev)
++{
++	int err, i;
++	static int full_reset_performed = 0;
++
++	if (full_reset_performed == 0) {
++
++		/* master reset */
++		err = phydev->bus->write(phydev->bus, 30, 0, 0x175c);
++		if (err < 0)
++			return err;
++
++		/* ensure no bus delays overlap reset period */
++		err = phydev->bus->read(phydev->bus, 30, 0);
++
++		/* data sheet specifies reset period is 2 msec */
++		mdelay(2);
++
++		/* enable IP175C mode */
++		err = phydev->bus->write(phydev->bus, 29, 31, 0x175c);
++		if (err < 0)
++			return err;
++
++		/* Set MII0 speed and duplex (in PHY mode) */
++		err = phydev->bus->write(phydev->bus, 29, 22, 0x420);
++		if (err < 0)
++			return err;
++
++		/* reset switch ports */
++		for (i = 0; i < 5; i++) {
++			err = phydev->bus->write(phydev->bus, i,
++						 MII_BMCR, BMCR_RESET);
++			if (err < 0)
++				return err;
++		}
++
++		for (i = 0; i < 5; i++)
++			err = phydev->bus->read(phydev->bus, i, MII_BMCR);
++
++		mdelay(2);
++
++		full_reset_performed = 1;
++	}
++
++	if (phydev->addr != 4) {
++		phydev->state = PHY_RUNNING;
++		phydev->speed = SPEED_100;
++		phydev->duplex = DUPLEX_FULL;
++		phydev->link = 1;
++		netif_carrier_on(phydev->attached_dev);
++	}
++
++	return 0;
++}
++
++static int ip175c_read_status(struct phy_device *phydev)
++{
++	if (phydev->addr == 4) /* WAN port */
++		genphy_read_status(phydev);
++	else
++		/* Don't need to read status for switch ports */
++		phydev->irq = PHY_IGNORE_INTERRUPT;
++
++	return 0;
++}
++
++static int ip175c_config_aneg(struct phy_device *phydev)
++{
++	if (phydev->addr == 4) /* WAN port */
++		genphy_config_aneg(phydev);
++
++	return 0;
++}
++
++static struct phy_driver ip175c_driver = {
++	.phy_id		= 0x02430d80,
++	.name		= "ICPlus IP175C",
++	.phy_id_mask	= 0x0ffffff0,
++	.features	= PHY_BASIC_FEATURES,
++	.config_init	= &ip175c_config_init,
++	.config_aneg	= &ip175c_config_aneg,
++	.read_status	= &ip175c_read_status,
++	.driver		= { .owner = THIS_MODULE,},
++};
++
++static int __init ip175c_init(void)
++{
++	return phy_driver_register(&ip175c_driver);
++}
++
++static void __exit ip175c_exit(void)
++{
++	phy_driver_unregister(&ip175c_driver);
++}
++
++module_init(ip175c_init);
++module_exit(ip175c_exit);
+Index: linux-2.6.18/mvl_patches/pro50-0590.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0590.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(590);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

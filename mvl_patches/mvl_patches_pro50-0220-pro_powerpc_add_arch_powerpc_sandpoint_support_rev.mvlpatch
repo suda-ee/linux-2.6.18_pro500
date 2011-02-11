@@ -1,0 +1,2329 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_add_arch_powerpc_sandpoint_support_rev
+# Date: Wed Sep 26 11:12:24 2007
+# Source: MontaVista Software, Inc.
+# MR: 24856
+# Type: Integration
+# Disposition: local
+# Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+# Description:
+#     This removes support for the Freescale Sandpoint platform
+#     from the arch/powerpc tree, that requires the flat device tree
+#     functionality provided by the patch series started here:
+#     http://ozlabs.org/pipermail/linuxppc-dev/2006-October/026738.html
+#     (That was MR: 20036)
+#     The sandpoint support has to be slightly modified
+#     and applied on top of the Sequoia 440EPx patch series,
+#     since the bootwrapper code has changed.
+# 
+
+PATCHNUM=220
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: MontaVista Software, Inc.
+MR: 24856
+Type: Integration
+Disposition: local
+Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+Description:
+    This removes support for the Freescale Sandpoint platform
+    from the arch/powerpc tree, that requires the flat device tree
+    functionality provided by the patch series started here:
+    http://ozlabs.org/pipermail/linuxppc-dev/2006-October/026738.html
+    (That was MR: 20036)
+    The sandpoint support has to be slightly modified
+    and applied on top of the Sequoia 440EPx patch series,
+    since the bootwrapper code has changed.
+
+Index: linux-2.6.18/arch/powerpc/boot/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/Makefile
++++ linux-2.6.18/arch/powerpc/boot/Makefile
+@@ -49,8 +49,8 @@ $(addprefix $(obj)/,$(zlib) main.o): $(a
+ 		$(addprefix $(obj)/,$(zlibheader))
+ 
+ src-wlib := string.S stdio.c main.c flatdevtree.c flatdevtree_misc.c ns16550.c \
+-		serial.c simple_alloc.c mpc10x.c div64.S util.S $(zlib)
+-src-plat := of.c sandpoint.c
++		serial.c simple_alloc.c div64.S util.S $(zlib)
++src-plat := of.c
+ src-boot := crt0.S $(src-wlib) $(src-plat) empty.c
+ 
+ src-boot := $(addprefix $(obj)/, $(src-boot))
+@@ -164,12 +164,6 @@ $(obj)/zImage.miboot: vmlinux $(wrapperb
+ $(obj)/zImage.initrd.miboot: vmlinux $(wrapperbits)
+ 	$(call cmd,wrap_initrd,miboot)
+ 
+-$(obj)/zImage.sandpoint: vmlinux $(wrapperbits)
+-	$(call cmd,wrap_dts,sandpoint)
+-
+-$(obj)/zImage.initrd.sandpoint: vmlinux $(wrapperbits)
+-	$(call cmd,wrap_dts_initrd,sandpoint)
+-
+ $(obj)/uImage: vmlinux $(wrapperbits)
+ 	$(call cmd,wrap,uboot)
+ 
+@@ -178,7 +172,6 @@ image-$(CONFIG_PPC_MAPLE)		+= zImage.pse
+ image-$(CONFIG_PPC_IBM_CELL_BLADE)	+= zImage.pseries
+ image-$(CONFIG_PPC_CHRP)		+= zImage.chrp
+ image-$(CONFIG_PPC_PMAC)		+= zImage.pmac
+-image-$(CONFIG_SANDPOINT)		+= zImage.sandpoint
+ image-$(CONFIG_DEFAULT_UIMAGE)		+= uImage
+ 
+ # For 32-bit powermacs, build the COFF and miboot images
+Index: linux-2.6.18/arch/powerpc/boot/dts/sandpoint.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/sandpoint.dts
++++ /dev/null
+@@ -1,218 +0,0 @@
+-/*
+- * Device Tree Souce for Freescale Sandpoint
+- *
+- * Author: Mark A. Greer <mgreer@mvista.com>
+- *
+- * 2006 (c) MontaVista, Software, Inc.  This file is licensed under
+- * the terms of the GNU General Public License version 2.  This program
+- * is licensed "as is" without any warranty of any kind, whether express
+- * or implied.
+- *
+- * add flash parts, rtc, ??
+- *
+- * To build:
+- *   dtc -I dts -O asm -o sandpoint.S -V 16 sandpoint.dts
+- *   dtc -I dts -O dtb -o sandpoint.dtb -V 16 sandpoint.dts
+- */
+-
+-/ {
+-	linux,phandle = <1000>;
+-	#address-cells = <1>;
+-	#size-cells = <1>;
+-	model = "Sandpoint X3";
+-	compatible = "Sandpoint";
+-
+-	cpus {
+-		linux,phandle = <2000>;
+-		#cpus = <1>;
+-		#address-cells = <1>;
+-		#size-cells = <0>;
+-
+-		PowerPC,603e { /* Really 75x, 74xx, 824x */
+-			linux,phandle = <2100>;
+-			device_type = "cpu";
+-			reg = <0>;
+-			clock-frequency = <0>;	/* Set by bootwrapper */
+-			timebase-frequency = <0>; /* Set by bootwrapper */
+-			/* Following required by dtc but not used */
+-			i-cache-line-size = <0>;
+-			d-cache-line-size = <0>;
+-			i-cache-size = <0>;
+-			d-cache-size = <0>;
+-		};
+-	};
+-
+-	memory {
+-		linux,phandle = <3000>;
+-		device_type = "memory";
+-		reg =	<00000000 00000000>;	/* Set by bootwrapper */
+-	};
+-
+-	soc10x@fc000000 { /* Freescale/Tundra MPC10x */
+-		linux,phandle = <4000>;
+-		#address-cells = <1>;
+-		#size-cells = <1>;
+-		#interrupt-cells = <2>;
+-		device_type = "soc";
+-		compatible = "mpc10x";
+-		store-gathering = <0>; /* 0 == off, !0 == on */
+-		clock-frequency = <0>; /* Set by bootwrapper */
+-		reg = <fc000000 00100000>;
+-		ranges = <80000000 80000000 70000000	/* pci mem space */
+-			  fc000000 fc000000 00100000	/* EUMB */
+-			  fe000000 fe000000 00c00000	/* pci i/o space */
+-			  fec00000 fec00000 00300000	/* pci cfg regs */
+-			  fef00000 fef00000 00100000>;	/* pci iack */
+-
+-		dma@fc001100 {
+-			linux,phandle = <4100>;
+-			#interrupt-cells = <1>;
+-			#address-cells = <1>;
+-			#size-cells = <1>;
+-			device_type = "dma";
+-			compatible = "fsl-dma";
+-			clock-frequency = <0>;
+-			reg = <fc001100 24>;
+-			interrupts = <33 0>;
+-			interrupt-parent = <4400>;
+-		};
+-
+-		dma@fc001200 {
+-			linux,phandle = <4200>;
+-			#interrupt-cells = <1>;
+-			#address-cells = <1>;
+-			#size-cells = <1>;
+-			device_type = "dma";
+-			compatible = "fsl-dma";
+-			clock-frequency = <0>;
+-			reg = <fc001200 24>;
+-			interrupts = <34 0>;
+-			interrupt-parent = <4400>;
+-		};
+-
+-		i2c@fc003000 {
+-			linux,phandle = <4300>;
+-			#interrupt-cells = <1>;
+-			#address-cells = <1>;
+-			#size-cells = <1>;
+-			device_type = "i2c";
+-			compatible = "fsl-i2c";
+-			clock-frequency = <0>;
+-			reg = <fc003000 1000>;
+-			interrupts = <32 0>;
+-			interrupt-parent = <4400>;
+-		};
+-
+-		pic@fc040000 { /* EPIC */
+-			linux,phandle = <4400>;
+-			#interrupt-cells = <2>;
+-			#address-cells = <0>;
+-			device_type = "open-pic";
+-			compatible = "chrp,open-pic";
+-			interrupt-controller;
+-			reg = <fc040000 40000>;
+-			clock-frequency = <0>;
+-			clock-ratio = <7>;
+-			serial-mode = <1>;
+-			built-in;
+-		};
+-
+-		pci@fec00000 {
+-			linux,phandle = <4500>;
+-			#address-cells = <3>;
+-			#size-cells = <2>;
+-			#interrupt-cells = <1>;
+-			device_type = "pci";
+-			compatible = "mpc10x-pci";
+-			reg = <fec00000 00400000>;
+-			ranges = <01000000 0        0 fe000000 0 00c00000
+-				  02000000 0 80000000 80000000 0 70000000>;
+-			bus-range = <0 ff>;
+-			clock-frequency = <7f28155>;
+-			interrupt-pci-iack = <fef00000>; /* New - PCI IACK */
+-			interrupt-parent = <4400>;
+-			interrupt-map-mask = <f800 0 0 7>;
+-			interrupt-map = <
+-				/* IDSEL 0x0b - i8259 on Windbond */
+-				5800 0 0 1 4400 0 1
+-				5800 0 0 2 4400 0 1
+-				5800 0 0 3 4400 0 1
+-				5800 0 0 4 4400 0 1
+-				/* IDSEL 0x0d - PCI slot 1 */
+-				6800 0 0 1 4400 2 1
+-				6800 0 0 2 4400 5 1
+-				6800 0 0 3 4400 4 1
+-				6800 0 0 4 4400 3 1
+-				/* IDSEL 0x0e - PCI slot 2 */
+-				7000 0 0 1 4400 3 1
+-				7000 0 0 2 4400 2 1
+-				7000 0 0 3 4400 5 1
+-				7000 0 0 4 4400 4 1
+-				/* IDSEL 0x0f - PCI slot 3 */
+-				7800 0 0 1 4400 4 1
+-				7800 0 0 2 4400 3 1
+-				7800 0 0 3 4400 2 1
+-				7800 0 0 4 4400 5 1
+-				/* IDSEL 0x10 - PCI slot 4 */
+-				8000 0 0 1 4400 5 1
+-				8000 0 0 2 4400 4 1
+-				8000 0 0 3 4400 3 1
+-				8000 0 0 4 4400 2 1
+-			>;
+-
+-			isa {
+-				linux,phandle = <4510>;
+-				#address-cells = <2>;
+-				#size-cells = <1>;
+-				#interrupt-cells = <2>;
+-				device_type = "isa";
+-				compatible = "isa";
+-				ranges = <1 0 01000000 0 0 00800000>;
+-				interrupt-parent = <4511>;
+-
+-				i8259@4d0 {
+-					linux,phandle = <4511>;
+-					#interrupt-cells = <2>;
+-					#address-cells = <0>;
+-					device_type = "interrupt-controller";
+-					compatible = "chrp,iic";
+-					interrupt-controller;
+-					clock-frequency = <0>;
+-					built-in;
+-					interrupt-parent = <4400>;
+-					interrupts = <0 0>;
+-				};
+-
+-				serial@3f8 {
+-					linux,phandle = <4512>;
+-					device_type = "serial";
+-					compatible = "ns16550";
+-					reg = <1 3f8 8>;
+-					virtual-reg = <fe0003f8>;
+-					clock-frequency = <1c2000>;
+-					current-speed = <2580>;
+-					interrupts = <4 0>;
+-				};
+-
+-				serial@2f8 {
+-					linux,phandle = <4513>;
+-					device_type = "serial";
+-					compatible = "ns16550";
+-					reg = <1 2f8 8>;
+-					virtual-reg = <fe0002f8>;
+-					clock-frequency = <1c2000>;
+-					current-speed = <2580>;
+-					interrupts = <3 0>;
+-				};
+-			};
+-		};
+-	};
+-
+-	chosen {
+-		linux,phandle = <5000>;
+-		linux,platform = <1>;
+-		bootargs = "ip=on";
+-		linux,stdout-path = "/soc10x/pci/isa/serial@3f8";
+-		interrupt-controller = <4400>;
+-	};
+-};
+Index: linux-2.6.18/arch/powerpc/boot/mpc10x.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/mpc10x.c
++++ /dev/null
+@@ -1,109 +0,0 @@
+-/*
+- * Freescale mpc10[67] & mpc824[015] specific code.
+- *
+- * Author: Mark A. Greer <mgreer@mvista.com>
+- *
+- * 2001 (c) MontaVista, Software, Inc.  This file is licensed under
+- * the terms of the GNU General Public License version 2.  This program
+- * is licensed "as is" without any warranty of any kind, whether express
+- * or implied.
+- */
+-
+-#include <stdarg.h>
+-#include <stddef.h>
+-#include "types.h"
+-#include "string.h"
+-#include "stdio.h"
+-#include "io.h"
+-
+-/* Map B (CHRP Map) Defines */
+-#define	MPC10X_MAPB_CNFG_ADDR		0xfec00000
+-#define	MPC10X_MAPB_CNFG_DATA		0xfee00000
+-
+-/* Define offsets for the memory controller registers in the config space */
+-#define MPC10X_MCTLR_MEM_START_1	0x80	/* Banks 0-3 */
+-#define MPC10X_MCTLR_MEM_START_2	0x84	/* Banks 4-7 */
+-#define MPC10X_MCTLR_EXT_MEM_START_1	0x88	/* Banks 0-3 */
+-#define MPC10X_MCTLR_EXT_MEM_START_2	0x8c	/* Banks 4-7 */
+-
+-#define MPC10X_MCTLR_MEM_END_1		0x90	/* Banks 0-3 */
+-#define MPC10X_MCTLR_MEM_END_2		0x94	/* Banks 4-7 */
+-#define MPC10X_MCTLR_EXT_MEM_END_1	0x98	/* Banks 0-3 */
+-#define MPC10X_MCTLR_EXT_MEM_END_2	0x9c	/* Banks 4-7 */
+-
+-#define MPC10X_MCTLR_MEM_BANK_ENABLES	0xa0
+-
+-#define	PCI_DEVFN(slot,func)	((((slot) & 0x1f) << 3) | ((func) & 0x07))
+-
+-/* Indirect PCI config space access routines */
+-static inline void
+-pci_indirect_read_config_byte(u32 *cfg_addr, u32 *cfg_data, int devfn,
+-		int offset, u8 *val)
+-{
+-	out_be32(cfg_addr,
+-		((offset & 0xfc) << 24) | (devfn << 16) | (0 << 8) | 0x80);
+-	*val = in_8((u8 *)(cfg_data + (offset & 3)));
+-	return;
+-}
+-
+-static inline void
+-pci_indirect_read_config_dword(u32 *cfg_addr, u32 *cfg_data, int devfn,
+-		int offset, u32 *val)
+-{
+-	out_be32(cfg_addr,
+-		((offset & 0xfc) << 24) | (devfn << 16) | (0 << 8) | 0x80);
+-	*val = in_le32(cfg_data + (offset & 3));
+-	return;
+-}
+-
+-/*
+- * Read the memory controller registers to determine the amount of memory in
+- * the system.  This assumes that the firmware has correctly set up the memory
+- * controller registers.
+- * Assume memory map B (CHRP).
+- */
+-u32
+-mpc10x_get_mem_size(void)
+-{
+-	u32 *config_addr, *config_data, val;
+-	u32 start, end, total, offset, i;
+-	u8 bank_enables;
+-
+-	config_addr = (u32 *)MPC10X_MAPB_CNFG_ADDR;
+-	config_data = (u32 *)MPC10X_MAPB_CNFG_DATA;
+-
+-	pci_indirect_read_config_byte(config_addr, config_data, PCI_DEVFN(0,0),
+-			MPC10X_MCTLR_MEM_BANK_ENABLES, &bank_enables);
+-
+-	total = 0;
+-
+-	for (i=0; i<8; i++) {
+-		if (bank_enables & (1 << i)) {
+-			offset = MPC10X_MCTLR_MEM_START_1 + ((i > 3) ? 4 : 0);
+-			pci_indirect_read_config_dword(config_addr, config_data,
+-					PCI_DEVFN(0,0), offset, &val);
+-			start = (val >> ((i & 3) << 3)) & 0xff;
+-
+-			offset = MPC10X_MCTLR_EXT_MEM_START_1 + ((i>3) ? 4 : 0);
+-			pci_indirect_read_config_dword(config_addr, config_data,
+-					PCI_DEVFN(0,0), offset, &val);
+-			val = (val >> ((i & 3) << 3)) & 0x03;
+-			start = (val << 28) | (start << 20);
+-
+-			offset = MPC10X_MCTLR_MEM_END_1 + ((i > 3) ? 4 : 0);
+-			pci_indirect_read_config_dword(config_addr, config_data,
+-					PCI_DEVFN(0,0), offset, &val);
+-			end = (val >> ((i & 3) << 3)) & 0xff;
+-
+-			offset = MPC10X_MCTLR_EXT_MEM_END_1 + ((i > 3) ? 4 : 0);
+-			pci_indirect_read_config_dword(config_addr, config_data,
+-					PCI_DEVFN(0,0), offset, &val);
+-			val = (val >> ((i & 3) << 3)) & 0x03;
+-			end = (val << 28) | (end << 20) | 0xfffff;
+-
+-			total += (end - start + 1);
+-		}
+-	}
+-
+-	return total;
+-}
+Index: linux-2.6.18/arch/powerpc/boot/sandpoint.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/sandpoint.c
++++ /dev/null
+@@ -1,162 +0,0 @@
+-/*
+- * Sandpoint specific fixups.
+- *
+- * Author: Mark A. Greer <mgreer@mvista.com>
+- *
+- * 2006 (c) MontaVista, Software, Inc.  This file is licensed under
+- * the terms of the GNU General Public License version 2.  This program
+- * is licensed "as is" without any warranty of any kind, whether express
+- * or implied.
+- */
+-
+-#include <stdarg.h>
+-#include <stddef.h>
+-#include "types.h"
+-#include "string.h"
+-#include "stdio.h"
+-#include "io.h"
+-#include "ops.h"
+-
+-extern char _end[];
+-
+-#define	KB	1024
+-#define	MB	(1024*1024)
+-
+-#define	CPU_824X	0
+-#define	CPU_7XX		1
+-#define	CPU_7457	2
+-#define	CPU_NUM		3
+-
+-static u32 cpu_pll[CPU_NUM][32] = {
+-	[CPU_824X] = { /* 824x */
+-		5, 6, 9, 4, 4, 5, 2, 6, 6, 4, 9, 6, 5, 7, 6, 7,
+-		4, 5, 4, 6, 7, 8, 8, 4, 6, 5, 8, 6, 6, 5, 7, 0
+-	},
+-	[CPU_7XX] = { /* 750/755 */
+-		0, 15, 14, 2, 4, 13, 20, 9, 6, 11, 8, 10, 16, 12, 7, 0,
+-		0,  0,  0, 0, 0,  0,  0, 0, 0,  0, 0,  0,  0,  0, 0, 0
+-
+-	},
+-	[CPU_7457] = { /* 7457 */
+-		23, 34, 15, 30, 14, 36,  2, 40,  4, 42, 13, 26, 17, 48, 19, 18,
+-		 6, 21, 11, 22,  8, 20, 10, 24, 16, 28, 12, 32, 27, 56,  0, 25
+-	}
+-};
+-
+-static struct processor_info {
+-	u32	pvr;
+-	u32	mask;
+-	u32	bus_freq;
+-	u32	hid1_shift;
+-	u32	hid1_mask;
+-	u32	pll_tbl_idx;
+-	u32	max_mem;	/* DINK still sets up mem ctlr wrong */
+-} processor_info_tbl[] = { /* From cputable -- MHz are only guesses */
+-	/* 824x */
+-	{ 0x00810000, 0x7fff0000, 100000000, 27, 0x1f, CPU_824X, 0x08000000 },
+-	/* 750 */
+-	{ 0x00084202, 0xffffffff, 100000000, 28, 0xf, CPU_7XX, 0x02000000 },
+-	/* 745/755 */
+-	{ 0x00083000, 0xfffff000, 100000000, 28, 0xf, CPU_7XX, 0x02000000 },
+-	/* 7447/7457 Rev 1.0 */
+-	{ 0x80020100, 0xffffffff, 100000000, 12, 0x1f, CPU_7457, 0x04000000 },
+-	/* 7447/7457 Rev 1.1 */
+-	{ 0x80020101, 0xffffffff, 100000000, 12, 0x1f, CPU_7457, 0x04000000 },
+-	/* 7447/7457 Rev 1.2 & up*/
+-	{ 0x80020000, 0xffff0000, 100000000, 12, 0x1f, CPU_7457, 0x04000000 },
+-	/* 7447A */
+-	{ 0x80030000, 0xffff0000, 100000000, 12, 0x1f, CPU_7457, 0x80000000 },
+-};
+-
+-static struct processor_info *get_processor_info(u32 pvr)
+-{
+-	struct processor_info *pit = processor_info_tbl;
+-	u32 i;
+-
+-	for (i=0; i<ARRAY_SIZE(processor_info_tbl); i++, pit++)
+-		if (pit->pvr == (pvr & pit->mask))
+-			return pit;
+-	return NULL;
+-}
+-
+-#define	__stringify_1(x)	#x
+-#define	__stringify(x)		__stringify_1(x)
+-
+-#define SPRN_PVR	0x11F	/* Processor Version Register */
+-#define SPRN_HID1	0x3F1	/* Hardware Implementation Register 1 */
+-#define mfspr(rn)	({unsigned long rval; \
+-			asm volatile("mfspr %0," __stringify(rn) \
+-				: "=r" (rval)); rval;})
+-
+-static void sandpoint_fixups(void)
+-{
+-	u32 i, v[2], hid1, max_mem = 0xffffffff;
+-	void *devp;
+-	struct processor_info *pit;
+-	extern u32 mpc10x_get_mem_size(void);
+-
+-	/* Update cpu's clock-frequency & timebase-frequency in fdt */
+-	if ((pit = get_processor_info(mfspr(SPRN_PVR)))) {
+-		if ((devp = finddevice("/cpus/PowerPC,603e"))) {
+-			max_mem = pit->max_mem;
+-
+-			hid1 = (mfspr(SPRN_HID1) >> pit->hid1_shift)
+-				& pit->hid1_mask;
+-			v[0] = pit->bus_freq
+-				* cpu_pll[pit->pll_tbl_idx][hid1]/2;
+-			setprop(devp, "clock-frequency", v, sizeof(v[0]));
+-
+-			v[0] = pit->bus_freq / 4;
+-			setprop(devp, "timebase-frequency", v, sizeof(v[0]));
+-		}
+-		if ((devp = finddevice("/soc10x@fc000000")))
+-			setprop(devp, "clock-frequency", &pit->bus_freq,
+-					sizeof(u32));
+-	}
+-
+-	/* Get the RAM size from the memory controller & update fdt */
+-	if ((devp = finddevice("/memory"))) {
+-		i = mpc10x_get_mem_size();
+-		v[0] = 0;
+-		v[1] = min(i, max_mem);
+-		setprop(devp, "reg", v, sizeof(v));
+-	}
+-
+-	/* XXXX stuff from platforms/.../sandpoint.c should be here */
+-}
+-
+-static void sandpoint_reset(void)
+-{
+-	void _nmask_and_or_msr(unsigned long nmask, unsigned long or_val);
+-	_nmask_and_or_msr(0, (1<<6)); /* Set exception prefix high - firmware */
+-
+-	/* Reset system via Port 92 */
+-	out_8((volatile unsigned char *)0xfe000092, 0x00);
+-	out_8((volatile unsigned char *)0xfe000092, 0x01);
+-
+-	for(;;);	/* Spin until reset happens */
+-}
+-
+-#define	HEAP_SIZE	(16*MB)
+-
+-int platform_init(void *promptr, char *dt_blob_start, char *dt_blob_end)
+-{
+-	int dt_size = dt_blob_end - dt_blob_start;
+-
+-	if (dt_size <= 0) /* No fdt */
+-		goto err_out;
+-
+-	if ((unsigned)simple_alloc_init(_end, HEAP_SIZE, 2*KB, 16) > (32*MB))
+-		goto err_out;
+-
+-	if (ft_init(dt_blob_start, dt_size, 16))
+-		goto err_out;
+-
+-	platform_ops.fixups = sandpoint_fixups;
+-	platform_ops.exit = sandpoint_reset;
+-
+-	return serial_console_init();
+-
+-err_out:
+-	return -1;
+-}
+Index: linux-2.6.18/arch/powerpc/configs/sandpoint_defconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/configs/sandpoint_defconfig
++++ /dev/null
+@@ -1,1128 +0,0 @@
+-#
+-# Automatically generated make config: don't edit
+-# Linux kernel version: 2.6.18.rt5
+-# Fri Oct 13 12:26:59 2006
+-#
+-# CONFIG_PPC64 is not set
+-CONFIG_PPC32=y
+-CONFIG_PPC_MERGE=y
+-CONFIG_MMU=y
+-CONFIG_GENERIC_TIME=y
+-CONFIG_GENERIC_HARDIRQS=y
+-CONFIG_IRQ_PER_CPU=y
+-CONFIG_GENERIC_HWEIGHT=y
+-CONFIG_GENERIC_CALIBRATE_DELAY=y
+-CONFIG_GENERIC_FIND_NEXT_BIT=y
+-CONFIG_PPC=y
+-CONFIG_EARLY_PRINTK=y
+-CONFIG_GENERIC_NVRAM=y
+-CONFIG_SCHED_NO_NO_OMIT_FRAME_POINTER=y
+-CONFIG_ARCH_MAY_HAVE_PC_FDC=y
+-CONFIG_PPC_OF=y
+-CONFIG_PPC_UDBG_16550=y
+-# CONFIG_GENERIC_TBSYNC is not set
+-CONFIG_AUDIT_ARCH=y
+-# CONFIG_DEFAULT_UIMAGE is not set
+-
+-#
+-# Processor support
+-#
+-CONFIG_CLASSIC32=y
+-# CONFIG_PPC_52xx is not set
+-# CONFIG_PPC_82xx is not set
+-# CONFIG_PPC_83xx is not set
+-# CONFIG_PPC_85xx is not set
+-# CONFIG_PPC_86xx is not set
+-# CONFIG_40x is not set
+-# CONFIG_44x is not set
+-# CONFIG_8xx is not set
+-# CONFIG_E200 is not set
+-CONFIG_6xx=y
+-CONFIG_PPC_FPU=y
+-CONFIG_ALTIVEC=y
+-CONFIG_PPC_STD_MMU=y
+-CONFIG_PPC_STD_MMU_32=y
+-# CONFIG_SMP is not set
+-CONFIG_DEFCONFIG_LIST="/lib/modules/$UNAME_RELEASE/.config"
+-
+-#
+-# Code maturity level options
+-#
+-CONFIG_EXPERIMENTAL=y
+-CONFIG_BROKEN_ON_SMP=y
+-CONFIG_INIT_ENV_ARG_LIMIT=32
+-
+-#
+-# General setup
+-#
+-CONFIG_LOCALVERSION=""
+-# CONFIG_LOCALVERSION_AUTO is not set
+-CONFIG_SWAP=y
+-CONFIG_SYSVIPC=y
+-CONFIG_SYSVIPC_SEMMNI=128
+-CONFIG_SYSVIPC_SEMMSL=250
+-CONFIG_POSIX_MQUEUE=y
+-# CONFIG_BSD_PROCESS_ACCT is not set
+-# CONFIG_TASKSTATS is not set
+-# CONFIG_AUDIT is not set
+-CONFIG_IKCONFIG=y
+-CONFIG_IKCONFIG_PROC=y
+-# CONFIG_RELAY is not set
+-CONFIG_INITRAMFS_SOURCE=""
+-# CONFIG_CC_OPTIMIZE_FOR_SIZE is not set
+-CONFIG_EMBEDDED=y
+-CONFIG_SYSCTL=y
+-CONFIG_KALLSYMS=y
+-# CONFIG_KALLSYMS_ALL is not set
+-# CONFIG_KALLSYMS_EXTRA_PASS is not set
+-CONFIG_HOTPLUG=y
+-CONFIG_PRINTK=y
+-CONFIG_BUG=y
+-CONFIG_ELF_CORE=y
+-CONFIG_BASE_FULL=y
+-CONFIG_FUTEX=y
+-CONFIG_EPOLL=y
+-CONFIG_SHMEM=y
+-CONFIG_SLAB=y
+-CONFIG_VM_EVENT_COUNTERS=y
+-CONFIG_RT_MUTEXES=y
+-# CONFIG_TINY_SHMEM is not set
+-CONFIG_BASE_SMALL=0
+-# CONFIG_SLOB is not set
+-
+-#
+-# Loadable module support
+-#
+-CONFIG_MODULES=y
+-CONFIG_MODULE_UNLOAD=y
+-CONFIG_MODULE_FORCE_UNLOAD=y
+-# CONFIG_MODVERSIONS is not set
+-# CONFIG_MODULE_SRCVERSION_ALL is not set
+-CONFIG_KMOD=y
+-
+-#
+-# Block layer
+-#
+-# CONFIG_LBD is not set
+-# CONFIG_BLK_DEV_IO_TRACE is not set
+-# CONFIG_LSF is not set
+-
+-#
+-# IO Schedulers
+-#
+-CONFIG_IOSCHED_NOOP=y
+-# CONFIG_IOSCHED_AS is not set
+-# CONFIG_IOSCHED_DEADLINE is not set
+-# CONFIG_IOSCHED_CFQ is not set
+-# CONFIG_DEFAULT_AS is not set
+-# CONFIG_DEFAULT_DEADLINE is not set
+-# CONFIG_DEFAULT_CFQ is not set
+-CONFIG_DEFAULT_NOOP=y
+-CONFIG_DEFAULT_IOSCHED="noop"
+-
+-#
+-# Platform support
+-#
+-# CONFIG_PPC_MULTIPLATFORM is not set
+-CONFIG_EMBEDDED6xx=y
+-# CONFIG_APUS is not set
+-# CONFIG_PPC_CELL is not set
+-# CONFIG_PPC_CELL_NATIVE is not set
+-# CONFIG_PPC_RTAS is not set
+-# CONFIG_MMIO_NVRAM is not set
+-# CONFIG_PPC_MPC106 is not set
+-# CONFIG_PPC_970_NAP is not set
+-# CONFIG_CPU_FREQ is not set
+-# CONFIG_TAU is not set
+-CONFIG_PPC_TODC=y
+-# CONFIG_KATANA is not set
+-# CONFIG_WILLOW is not set
+-# CONFIG_CPCI690 is not set
+-# CONFIG_POWERPMC250 is not set
+-# CONFIG_CHESTNUT is not set
+-# CONFIG_SPRUCE is not set
+-# CONFIG_HDPU is not set
+-# CONFIG_EV64260 is not set
+-# CONFIG_LOPEC is not set
+-# CONFIG_MVME5100 is not set
+-# CONFIG_PPLUS is not set
+-# CONFIG_PRPMC750 is not set
+-# CONFIG_PRPMC800 is not set
+-CONFIG_SANDPOINT=y
+-# CONFIG_MPC7448HPC2 is not set
+-# CONFIG_RADSTONE_PPC7D is not set
+-# CONFIG_PAL4 is not set
+-# CONFIG_GEMINI is not set
+-# CONFIG_EST8260 is not set
+-# CONFIG_SBC82xx is not set
+-# CONFIG_SBS8260 is not set
+-# CONFIG_RPX8260 is not set
+-# CONFIG_TQM8260 is not set
+-# CONFIG_ADS8272 is not set
+-# CONFIG_PQ2FADS is not set
+-# CONFIG_LITE5200 is not set
+-# CONFIG_EV64360 is not set
+-CONFIG_PPC_GEN550=y
+-CONFIG_EPIC_SERIAL_MODE=y
+-CONFIG_MPC10X_BRIDGE=y
+-CONFIG_MPC10X_OPENPIC=y
+-# CONFIG_MPC10X_STORE_GATHERING is not set
+-# CONFIG_SANDPOINT_ENABLE_UART1 is not set
+-# CONFIG_WANT_EARLY_SERIAL is not set
+-CONFIG_MPIC=y
+-
+-#
+-# Kernel options
+-#
+-# CONFIG_HIGHMEM is not set
+-CONFIG_HZ_100=y
+-# CONFIG_HZ_250 is not set
+-# CONFIG_HZ_1000 is not set
+-CONFIG_HZ=100
+-# CONFIG_HIGH_RES_TIMERS is not set
+-CONFIG_PREEMPT_NONE=y
+-# CONFIG_PREEMPT_VOLUNTARY is not set
+-# CONFIG_PREEMPT_DESKTOP is not set
+-# CONFIG_PREEMPT_RT is not set
+-# CONFIG_PREEMPT_SOFTIRQS is not set
+-# CONFIG_PREEMPT_HARDIRQS is not set
+-# CONFIG_PREEMPT_BKL is not set
+-CONFIG_CLASSIC_RCU=y
+-# CONFIG_PREEMPT_RCU is not set
+-CONFIG_RCU_TRACE=y
+-CONFIG_RWSEM_GENERIC_SPINLOCK=y
+-CONFIG_ASM_SEMAPHORES=y
+-CONFIG_BINFMT_ELF=y
+-CONFIG_BINFMT_MISC=y
+-CONFIG_ARCH_ENABLE_MEMORY_HOTPLUG=y
+-CONFIG_ARCH_FLATMEM_ENABLE=y
+-CONFIG_SELECT_MEMORY_MODEL=y
+-CONFIG_FLATMEM_MANUAL=y
+-# CONFIG_DISCONTIGMEM_MANUAL is not set
+-# CONFIG_SPARSEMEM_MANUAL is not set
+-CONFIG_FLATMEM=y
+-CONFIG_FLAT_NODE_MEM_MAP=y
+-# CONFIG_SPARSEMEM_STATIC is not set
+-CONFIG_SPLIT_PTLOCK_CPUS=4
+-# CONFIG_RESOURCES_64BIT is not set
+-CONFIG_PROC_DEVICETREE=y
+-# CONFIG_CMDLINE_BOOL is not set
+-# CONFIG_PM is not set
+-# CONFIG_SECCOMP is not set
+-CONFIG_ISA_DMA_API=y
+-
+-#
+-# Bus options
+-#
+-CONFIG_GENERIC_ISA_DMA=y
+-# CONFIG_MPIC_WEIRD is not set
+-CONFIG_PPC_I8259=y
+-CONFIG_PPC_INDIRECT_PCI=y
+-CONFIG_PCI=y
+-CONFIG_PCI_DOMAINS=y
+-# CONFIG_PCIEPORTBUS is not set
+-# CONFIG_PCI_DEBUG is not set
+-
+-#
+-# PCCARD (PCMCIA/CardBus) support
+-#
+-CONFIG_PCCARD=m
+-# CONFIG_PCMCIA_DEBUG is not set
+-CONFIG_PCMCIA=m
+-CONFIG_PCMCIA_LOAD_CIS=y
+-CONFIG_PCMCIA_IOCTL=y
+-CONFIG_CARDBUS=y
+-
+-#
+-# PC-card bridges
+-#
+-CONFIG_YENTA=m
+-CONFIG_YENTA_O2=y
+-CONFIG_YENTA_RICOH=y
+-CONFIG_YENTA_TI=y
+-CONFIG_YENTA_ENE_TUNE=y
+-CONFIG_YENTA_TOSHIBA=y
+-# CONFIG_PD6729 is not set
+-# CONFIG_I82092 is not set
+-CONFIG_PCCARD_NONSTATIC=m
+-
+-#
+-# PCI Hotplug Support
+-#
+-# CONFIG_HOTPLUG_PCI is not set
+-
+-#
+-# Advanced setup
+-#
+-# CONFIG_ADVANCED_OPTIONS is not set
+-
+-#
+-# Default settings for advanced configuration options are used
+-#
+-CONFIG_HIGHMEM_START=0xfe000000
+-CONFIG_LOWMEM_SIZE=0x30000000
+-CONFIG_KERNEL_START=0xc0000000
+-CONFIG_TASK_SIZE=0x80000000
+-CONFIG_BOOT_LOAD=0x00800000
+-
+-#
+-# Networking
+-#
+-CONFIG_NET=y
+-
+-#
+-# Networking options
+-#
+-# CONFIG_NETDEBUG is not set
+-CONFIG_PACKET=y
+-# CONFIG_PACKET_MMAP is not set
+-CONFIG_UNIX=y
+-CONFIG_XFRM=y
+-# CONFIG_XFRM_USER is not set
+-# CONFIG_NET_KEY is not set
+-CONFIG_INET=y
+-# CONFIG_IP_MULTICAST is not set
+-# CONFIG_IP_ADVANCED_ROUTER is not set
+-CONFIG_IP_FIB_HASH=y
+-CONFIG_IP_PNP=y
+-CONFIG_IP_PNP_DHCP=y
+-# CONFIG_IP_PNP_BOOTP is not set
+-# CONFIG_IP_PNP_RARP is not set
+-# CONFIG_NET_IPIP is not set
+-# CONFIG_NET_IPGRE is not set
+-# CONFIG_ARPD is not set
+-# CONFIG_SYN_COOKIES is not set
+-# CONFIG_INET_AH is not set
+-# CONFIG_INET_ESP is not set
+-# CONFIG_INET_IPCOMP is not set
+-# CONFIG_INET_XFRM_TUNNEL is not set
+-# CONFIG_INET_TUNNEL is not set
+-CONFIG_INET_XFRM_MODE_TRANSPORT=y
+-CONFIG_INET_XFRM_MODE_TUNNEL=y
+-CONFIG_INET_DIAG=y
+-CONFIG_INET_TCP_DIAG=y
+-# CONFIG_TCP_CONG_ADVANCED is not set
+-CONFIG_TCP_CONG_BIC=y
+-# CONFIG_IPV6 is not set
+-# CONFIG_INET6_XFRM_TUNNEL is not set
+-# CONFIG_INET6_TUNNEL is not set
+-# CONFIG_NETWORK_SECMARK is not set
+-# CONFIG_NETFILTER is not set
+-
+-#
+-# DCCP Configuration (EXPERIMENTAL)
+-#
+-CONFIG_IP_DCCP=m
+-CONFIG_INET_DCCP_DIAG=m
+-CONFIG_IP_DCCP_ACKVEC=y
+-
+-#
+-# DCCP CCIDs Configuration (EXPERIMENTAL)
+-#
+-CONFIG_IP_DCCP_CCID2=m
+-CONFIG_IP_DCCP_CCID3=m
+-CONFIG_IP_DCCP_TFRC_LIB=m
+-
+-#
+-# DCCP Kernel Hacking
+-#
+-# CONFIG_IP_DCCP_DEBUG is not set
+-
+-#
+-# SCTP Configuration (EXPERIMENTAL)
+-#
+-# CONFIG_IP_SCTP is not set
+-
+-#
+-# TIPC Configuration (EXPERIMENTAL)
+-#
+-# CONFIG_TIPC is not set
+-# CONFIG_ATM is not set
+-# CONFIG_BRIDGE is not set
+-# CONFIG_VLAN_8021Q is not set
+-# CONFIG_DECNET is not set
+-# CONFIG_LLC2 is not set
+-# CONFIG_IPX is not set
+-# CONFIG_ATALK is not set
+-# CONFIG_X25 is not set
+-# CONFIG_LAPB is not set
+-# CONFIG_ECONET is not set
+-# CONFIG_WAN_ROUTER is not set
+-
+-#
+-# QoS and/or fair queueing
+-#
+-# CONFIG_NET_SCHED is not set
+-
+-#
+-# Network testing
+-#
+-# CONFIG_NET_PKTGEN is not set
+-# CONFIG_HAMRADIO is not set
+-# CONFIG_IRDA is not set
+-# CONFIG_BT is not set
+-# CONFIG_IEEE80211 is not set
+-
+-#
+-# Device Drivers
+-#
+-
+-#
+-# Generic Driver Options
+-#
+-# CONFIG_STANDALONE is not set
+-CONFIG_PREVENT_FIRMWARE_BUILD=y
+-CONFIG_FW_LOADER=y
+-# CONFIG_DEBUG_DRIVER is not set
+-# CONFIG_SYS_HYPERVISOR is not set
+-
+-#
+-# Connector - unified userspace <-> kernelspace linker
+-#
+-# CONFIG_CONNECTOR is not set
+-
+-#
+-# Memory Technology Devices (MTD)
+-#
+-# CONFIG_MTD is not set
+-
+-#
+-# Parallel port support
+-#
+-# CONFIG_PARPORT is not set
+-
+-#
+-# Plug and Play support
+-#
+-
+-#
+-# Block devices
+-#
+-# CONFIG_BLK_DEV_FD is not set
+-# CONFIG_BLK_CPQ_DA is not set
+-# CONFIG_BLK_CPQ_CISS_DA is not set
+-# CONFIG_BLK_DEV_DAC960 is not set
+-# CONFIG_BLK_DEV_UMEM is not set
+-# CONFIG_BLK_DEV_COW_COMMON is not set
+-CONFIG_BLK_DEV_LOOP=y
+-# CONFIG_BLK_DEV_CRYPTOLOOP is not set
+-# CONFIG_BLK_DEV_NBD is not set
+-# CONFIG_BLK_DEV_SX8 is not set
+-CONFIG_BLK_DEV_RAM=y
+-CONFIG_BLK_DEV_RAM_COUNT=16
+-CONFIG_BLK_DEV_RAM_SIZE=4096
+-CONFIG_BLK_DEV_RAM_BLOCKSIZE=1024
+-CONFIG_BLK_DEV_INITRD=y
+-# CONFIG_CDROM_PKTCDVD is not set
+-# CONFIG_ATA_OVER_ETH is not set
+-
+-#
+-# ATA/ATAPI/MFM/RLL support
+-#
+-CONFIG_IDE=y
+-CONFIG_BLK_DEV_IDE=y
+-
+-#
+-# Please see Documentation/ide.txt for help/info on IDE drives
+-#
+-# CONFIG_BLK_DEV_IDE_SATA is not set
+-CONFIG_BLK_DEV_IDEDISK=y
+-CONFIG_IDEDISK_MULTI_MODE=y
+-# CONFIG_BLK_DEV_IDECS is not set
+-# CONFIG_BLK_DEV_IDECD is not set
+-# CONFIG_BLK_DEV_IDETAPE is not set
+-# CONFIG_BLK_DEV_IDEFLOPPY is not set
+-# CONFIG_IDE_TASK_IOCTL is not set
+-
+-#
+-# IDE chipset support/bugfixes
+-#
+-CONFIG_IDE_GENERIC=y
+-CONFIG_BLK_DEV_IDEPCI=y
+-# CONFIG_IDEPCI_SHARE_IRQ is not set
+-# CONFIG_BLK_DEV_OFFBOARD is not set
+-# CONFIG_BLK_DEV_GENERIC is not set
+-# CONFIG_BLK_DEV_OPTI621 is not set
+-CONFIG_BLK_DEV_SL82C105=y
+-CONFIG_BLK_DEV_IDEDMA_PCI=y
+-# CONFIG_BLK_DEV_IDEDMA_FORCED is not set
+-# CONFIG_IDEDMA_PCI_AUTO is not set
+-# CONFIG_BLK_DEV_AEC62XX is not set
+-# CONFIG_BLK_DEV_ALI15X3 is not set
+-# CONFIG_BLK_DEV_AMD74XX is not set
+-# CONFIG_BLK_DEV_CMD64X is not set
+-# CONFIG_BLK_DEV_TRIFLEX is not set
+-# CONFIG_BLK_DEV_CY82C693 is not set
+-# CONFIG_BLK_DEV_CS5520 is not set
+-# CONFIG_BLK_DEV_CS5530 is not set
+-# CONFIG_BLK_DEV_HPT34X is not set
+-# CONFIG_BLK_DEV_HPT366 is not set
+-# CONFIG_BLK_DEV_SC1200 is not set
+-# CONFIG_BLK_DEV_PIIX is not set
+-# CONFIG_BLK_DEV_IT821X is not set
+-# CONFIG_BLK_DEV_NS87415 is not set
+-# CONFIG_BLK_DEV_PDC202XX_OLD is not set
+-# CONFIG_BLK_DEV_PDC202XX_NEW is not set
+-# CONFIG_BLK_DEV_SVWKS is not set
+-# CONFIG_BLK_DEV_SIIMAGE is not set
+-# CONFIG_BLK_DEV_SLC90E66 is not set
+-# CONFIG_BLK_DEV_TRM290 is not set
+-# CONFIG_BLK_DEV_VIA82CXXX is not set
+-# CONFIG_IDE_ARM is not set
+-CONFIG_BLK_DEV_IDEDMA=y
+-# CONFIG_IDEDMA_IVB is not set
+-# CONFIG_IDEDMA_AUTO is not set
+-# CONFIG_BLK_DEV_HD is not set
+-
+-#
+-# SCSI device support
+-#
+-# CONFIG_RAID_ATTRS is not set
+-# CONFIG_SCSI is not set
+-
+-#
+-# Multi-device support (RAID and LVM)
+-#
+-# CONFIG_MD is not set
+-
+-#
+-# Fusion MPT device support
+-#
+-# CONFIG_FUSION is not set
+-
+-#
+-# IEEE 1394 (FireWire) support
+-#
+-# CONFIG_IEEE1394 is not set
+-
+-#
+-# I2O device support
+-#
+-# CONFIG_I2O is not set
+-
+-#
+-# Macintosh device drivers
+-#
+-# CONFIG_WINDFARM is not set
+-
+-#
+-# Network device support
+-#
+-CONFIG_NETDEVICES=y
+-# CONFIG_DUMMY is not set
+-# CONFIG_BONDING is not set
+-# CONFIG_EQUALIZER is not set
+-# CONFIG_TUN is not set
+-
+-#
+-# ARCnet devices
+-#
+-# CONFIG_ARCNET is not set
+-
+-#
+-# PHY device support
+-#
+-# CONFIG_PHYLIB is not set
+-
+-#
+-# Ethernet (10 or 100Mbit)
+-#
+-CONFIG_NET_ETHERNET=y
+-CONFIG_MII=y
+-# CONFIG_HAPPYMEAL is not set
+-# CONFIG_SUNGEM is not set
+-# CONFIG_CASSINI is not set
+-# CONFIG_NET_VENDOR_3COM is not set
+-
+-#
+-# Tulip family network device support
+-#
+-CONFIG_NET_TULIP=y
+-# CONFIG_DE2104X is not set
+-CONFIG_TULIP=y
+-# CONFIG_TULIP_MWI is not set
+-# CONFIG_TULIP_MMIO is not set
+-# CONFIG_TULIP_NAPI is not set
+-# CONFIG_DE4X5 is not set
+-# CONFIG_WINBOND_840 is not set
+-# CONFIG_DM9102 is not set
+-# CONFIG_ULI526X is not set
+-# CONFIG_PCMCIA_XIRCOM is not set
+-# CONFIG_PCMCIA_XIRTULIP is not set
+-# CONFIG_HP100 is not set
+-CONFIG_NET_PCI=y
+-CONFIG_PCNET32=y
+-# CONFIG_AMD8111_ETH is not set
+-# CONFIG_ADAPTEC_STARFIRE is not set
+-# CONFIG_B44 is not set
+-# CONFIG_FORCEDETH is not set
+-# CONFIG_DGRS is not set
+-# CONFIG_EEPRO100 is not set
+-CONFIG_E100=y
+-# CONFIG_FEALNX is not set
+-# CONFIG_NATSEMI is not set
+-# CONFIG_NE2K_PCI is not set
+-# CONFIG_8139CP is not set
+-CONFIG_8139TOO=y
+-CONFIG_8139TOO_PIO=y
+-# CONFIG_8139TOO_TUNE_TWISTER is not set
+-# CONFIG_8139TOO_8129 is not set
+-# CONFIG_8139_OLD_RX_RESET is not set
+-# CONFIG_SIS900 is not set
+-# CONFIG_EPIC100 is not set
+-# CONFIG_SUNDANCE is not set
+-# CONFIG_TLAN is not set
+-# CONFIG_VIA_RHINE is not set
+-
+-#
+-# Ethernet (1000 Mbit)
+-#
+-# CONFIG_ACENIC is not set
+-# CONFIG_DL2K is not set
+-# CONFIG_E1000 is not set
+-# CONFIG_NS83820 is not set
+-# CONFIG_HAMACHI is not set
+-# CONFIG_YELLOWFIN is not set
+-# CONFIG_R8169 is not set
+-# CONFIG_SIS190 is not set
+-# CONFIG_SKGE is not set
+-# CONFIG_SKY2 is not set
+-# CONFIG_SK98LIN is not set
+-# CONFIG_VIA_VELOCITY is not set
+-# CONFIG_TIGON3 is not set
+-# CONFIG_BNX2 is not set
+-
+-#
+-# Ethernet (10000 Mbit)
+-#
+-# CONFIG_CHELSIO_T1 is not set
+-# CONFIG_IXGB is not set
+-# CONFIG_S2IO is not set
+-# CONFIG_MYRI10GE is not set
+-
+-#
+-# Token Ring devices
+-#
+-# CONFIG_TR is not set
+-
+-#
+-# Wireless LAN (non-hamradio)
+-#
+-# CONFIG_NET_RADIO is not set
+-
+-#
+-# PCMCIA network device support
+-#
+-# CONFIG_NET_PCMCIA is not set
+-
+-#
+-# Wan interfaces
+-#
+-# CONFIG_WAN is not set
+-# CONFIG_FDDI is not set
+-# CONFIG_HIPPI is not set
+-# CONFIG_PPP is not set
+-# CONFIG_SLIP is not set
+-# CONFIG_SHAPER is not set
+-# CONFIG_NETCONSOLE is not set
+-# CONFIG_NETPOLL is not set
+-# CONFIG_NET_POLL_CONTROLLER is not set
+-
+-#
+-# ISDN subsystem
+-#
+-# CONFIG_ISDN is not set
+-
+-#
+-# Telephony Support
+-#
+-# CONFIG_PHONE is not set
+-
+-#
+-# Input device support
+-#
+-CONFIG_INPUT=y
+-
+-#
+-# Userland interfaces
+-#
+-CONFIG_INPUT_MOUSEDEV=y
+-# CONFIG_INPUT_MOUSEDEV_PSAUX is not set
+-CONFIG_INPUT_MOUSEDEV_SCREEN_X=1024
+-CONFIG_INPUT_MOUSEDEV_SCREEN_Y=768
+-# CONFIG_INPUT_JOYDEV is not set
+-# CONFIG_INPUT_TSDEV is not set
+-# CONFIG_INPUT_EVDEV is not set
+-# CONFIG_INPUT_EVBUG is not set
+-
+-#
+-# Input Device Drivers
+-#
+-# CONFIG_INPUT_KEYBOARD is not set
+-# CONFIG_INPUT_MOUSE is not set
+-# CONFIG_INPUT_JOYSTICK is not set
+-# CONFIG_INPUT_TOUCHSCREEN is not set
+-# CONFIG_INPUT_MISC is not set
+-
+-#
+-# Hardware I/O ports
+-#
+-# CONFIG_SERIO is not set
+-# CONFIG_GAMEPORT is not set
+-
+-#
+-# Character devices
+-#
+-# CONFIG_VT is not set
+-# CONFIG_SERIAL_NONSTANDARD is not set
+-
+-#
+-# Serial drivers
+-#
+-CONFIG_SERIAL_8250=y
+-CONFIG_SERIAL_8250_CONSOLE=y
+-CONFIG_SERIAL_8250_PCI=y
+-# CONFIG_SERIAL_8250_CS is not set
+-CONFIG_SERIAL_8250_NR_UARTS=4
+-CONFIG_SERIAL_8250_RUNTIME_UARTS=4
+-# CONFIG_SERIAL_8250_EXTENDED is not set
+-
+-#
+-# Non-8250 serial port support
+-#
+-CONFIG_SERIAL_CORE=y
+-CONFIG_SERIAL_CORE_CONSOLE=y
+-# CONFIG_SERIAL_JSM is not set
+-CONFIG_UNIX98_PTYS=y
+-CONFIG_LEGACY_PTYS=y
+-CONFIG_LEGACY_PTY_COUNT=256
+-
+-#
+-# IPMI
+-#
+-# CONFIG_IPMI_HANDLER is not set
+-
+-#
+-# Watchdog Cards
+-#
+-# CONFIG_WATCHDOG is not set
+-CONFIG_HW_RANDOM=y
+-CONFIG_NVRAM=y
+-CONFIG_GEN_RTC=y
+-# CONFIG_GEN_RTC_X is not set
+-# CONFIG_DTLK is not set
+-# CONFIG_R3964 is not set
+-# CONFIG_APPLICOM is not set
+-
+-#
+-# Ftape, the floppy tape device driver
+-#
+-# CONFIG_AGP is not set
+-# CONFIG_DRM is not set
+-
+-#
+-# PCMCIA character devices
+-#
+-# CONFIG_SYNCLINK_CS is not set
+-# CONFIG_CARDMAN_4000 is not set
+-# CONFIG_CARDMAN_4040 is not set
+-# CONFIG_RAW_DRIVER is not set
+-
+-#
+-# TPM devices
+-#
+-# CONFIG_TCG_TPM is not set
+-# CONFIG_TELCLOCK is not set
+-
+-#
+-# I2C support
+-#
+-CONFIG_I2C=y
+-CONFIG_I2C_CHARDEV=y
+-
+-#
+-# I2C Algorithms
+-#
+-CONFIG_I2C_ALGOBIT=y
+-# CONFIG_I2C_ALGOPCF is not set
+-# CONFIG_I2C_ALGOPCA is not set
+-
+-#
+-# I2C Hardware Bus support
+-#
+-# CONFIG_I2C_ALI1535 is not set
+-# CONFIG_I2C_ALI1563 is not set
+-# CONFIG_I2C_ALI15X3 is not set
+-# CONFIG_I2C_AMD756 is not set
+-# CONFIG_I2C_AMD8111 is not set
+-# CONFIG_I2C_I801 is not set
+-# CONFIG_I2C_I810 is not set
+-# CONFIG_I2C_PIIX4 is not set
+-CONFIG_I2C_MPC=y
+-# CONFIG_I2C_NFORCE2 is not set
+-# CONFIG_I2C_OCORES is not set
+-# CONFIG_I2C_PARPORT_LIGHT is not set
+-# CONFIG_I2C_PROSAVAGE is not set
+-# CONFIG_I2C_SAVAGE4 is not set
+-# CONFIG_I2C_SIS5595 is not set
+-# CONFIG_I2C_SIS630 is not set
+-# CONFIG_I2C_SIS96X is not set
+-# CONFIG_I2C_STUB is not set
+-# CONFIG_I2C_VIA is not set
+-# CONFIG_I2C_VIAPRO is not set
+-# CONFIG_I2C_VOODOO3 is not set
+-# CONFIG_I2C_PCA_ISA is not set
+-
+-#
+-# Miscellaneous I2C Chip support
+-#
+-# CONFIG_SENSORS_DS1337 is not set
+-# CONFIG_SENSORS_DS1374 is not set
+-# CONFIG_SENSORS_EEPROM is not set
+-# CONFIG_SENSORS_PCF8574 is not set
+-# CONFIG_SENSORS_PCA9539 is not set
+-# CONFIG_SENSORS_PCF8591 is not set
+-# CONFIG_SENSORS_M41T00 is not set
+-# CONFIG_SENSORS_MAX6875 is not set
+-# CONFIG_I2C_DEBUG_CORE is not set
+-# CONFIG_I2C_DEBUG_ALGO is not set
+-# CONFIG_I2C_DEBUG_BUS is not set
+-# CONFIG_I2C_DEBUG_CHIP is not set
+-
+-#
+-# SPI support
+-#
+-# CONFIG_SPI is not set
+-# CONFIG_SPI_MASTER is not set
+-
+-#
+-# Dallas's 1-wire bus
+-#
+-
+-#
+-# Hardware Monitoring support
+-#
+-# CONFIG_HWMON is not set
+-# CONFIG_HWMON_VID is not set
+-
+-#
+-# Misc devices
+-#
+-
+-#
+-# Multimedia devices
+-#
+-# CONFIG_VIDEO_DEV is not set
+-CONFIG_VIDEO_V4L2=y
+-
+-#
+-# Digital Video Broadcasting Devices
+-#
+-# CONFIG_DVB is not set
+-
+-#
+-# Graphics support
+-#
+-CONFIG_FIRMWARE_EDID=y
+-# CONFIG_FB is not set
+-# CONFIG_BACKLIGHT_LCD_SUPPORT is not set
+-
+-#
+-# Sound
+-#
+-# CONFIG_SOUND is not set
+-
+-#
+-# USB support
+-#
+-CONFIG_USB_ARCH_HAS_HCD=y
+-CONFIG_USB_ARCH_HAS_OHCI=y
+-CONFIG_USB_ARCH_HAS_EHCI=y
+-# CONFIG_USB is not set
+-
+-#
+-# NOTE: USB_STORAGE enables SCSI, and 'SCSI disk support'
+-#
+-
+-#
+-# USB Gadget Support
+-#
+-# CONFIG_USB_GADGET is not set
+-
+-#
+-# MMC/SD Card support
+-#
+-# CONFIG_MMC is not set
+-
+-#
+-# LED devices
+-#
+-# CONFIG_NEW_LEDS is not set
+-
+-#
+-# LED drivers
+-#
+-
+-#
+-# LED Triggers
+-#
+-
+-#
+-# InfiniBand support
+-#
+-# CONFIG_INFINIBAND is not set
+-
+-#
+-# EDAC - error detection and reporting (RAS) (EXPERIMENTAL)
+-#
+-
+-#
+-# Real Time Clock
+-#
+-# CONFIG_RTC_CLASS is not set
+-
+-#
+-# DMA Engine support
+-#
+-# CONFIG_DMA_ENGINE is not set
+-
+-#
+-# DMA Clients
+-#
+-
+-#
+-# DMA Devices
+-#
+-
+-#
+-# File systems
+-#
+-CONFIG_EXT2_FS=y
+-# CONFIG_EXT2_FS_XATTR is not set
+-# CONFIG_EXT2_FS_XIP is not set
+-CONFIG_EXT3_FS=y
+-CONFIG_EXT3_FS_XATTR=y
+-# CONFIG_EXT3_FS_POSIX_ACL is not set
+-# CONFIG_EXT3_FS_SECURITY is not set
+-CONFIG_JBD=y
+-# CONFIG_JBD_DEBUG is not set
+-CONFIG_FS_MBCACHE=y
+-# CONFIG_REISERFS_FS is not set
+-# CONFIG_JFS_FS is not set
+-CONFIG_FS_POSIX_ACL=y
+-# CONFIG_XFS_FS is not set
+-# CONFIG_OCFS2_FS is not set
+-# CONFIG_MINIX_FS is not set
+-# CONFIG_ROMFS_FS is not set
+-# CONFIG_INOTIFY is not set
+-# CONFIG_QUOTA is not set
+-CONFIG_DNOTIFY=y
+-# CONFIG_AUTOFS_FS is not set
+-# CONFIG_AUTOFS4_FS is not set
+-# CONFIG_FUSE_FS is not set
+-
+-#
+-# CD-ROM/DVD Filesystems
+-#
+-# CONFIG_ISO9660_FS is not set
+-# CONFIG_UDF_FS is not set
+-
+-#
+-# DOS/FAT/NT Filesystems
+-#
+-# CONFIG_MSDOS_FS is not set
+-# CONFIG_VFAT_FS is not set
+-# CONFIG_NTFS_FS is not set
+-
+-#
+-# Pseudo filesystems
+-#
+-CONFIG_PROC_FS=y
+-CONFIG_PROC_KCORE=y
+-CONFIG_SYSFS=y
+-CONFIG_TMPFS=y
+-# CONFIG_HUGETLB_PAGE is not set
+-CONFIG_RAMFS=y
+-# CONFIG_CONFIGFS_FS is not set
+-
+-#
+-# Miscellaneous filesystems
+-#
+-# CONFIG_ADFS_FS is not set
+-# CONFIG_AFFS_FS is not set
+-# CONFIG_HFS_FS is not set
+-# CONFIG_HFSPLUS_FS is not set
+-# CONFIG_BEFS_FS is not set
+-# CONFIG_BFS_FS is not set
+-# CONFIG_EFS_FS is not set
+-# CONFIG_CRAMFS is not set
+-# CONFIG_VXFS_FS is not set
+-# CONFIG_HPFS_FS is not set
+-# CONFIG_QNX4FS_FS is not set
+-# CONFIG_SYSV_FS is not set
+-# CONFIG_UFS_FS is not set
+-
+-#
+-# Network File Systems
+-#
+-CONFIG_NFS_FS=y
+-CONFIG_NFS_V3=y
+-CONFIG_NFS_V3_ACL=y
+-CONFIG_NFS_V4=y
+-# CONFIG_NFS_DIRECTIO is not set
+-# CONFIG_NFSD is not set
+-CONFIG_ROOT_NFS=y
+-CONFIG_LOCKD=y
+-CONFIG_LOCKD_V4=y
+-CONFIG_NFS_ACL_SUPPORT=y
+-CONFIG_NFS_COMMON=y
+-CONFIG_SUNRPC=y
+-CONFIG_SUNRPC_GSS=y
+-CONFIG_RPCSEC_GSS_KRB5=y
+-# CONFIG_RPCSEC_GSS_SPKM3 is not set
+-# CONFIG_SMB_FS is not set
+-# CONFIG_CIFS is not set
+-# CONFIG_NCP_FS is not set
+-# CONFIG_CODA_FS is not set
+-# CONFIG_AFS_FS is not set
+-# CONFIG_9P_FS is not set
+-
+-#
+-# Partition Types
+-#
+-# CONFIG_PARTITION_ADVANCED is not set
+-CONFIG_MSDOS_PARTITION=y
+-
+-#
+-# Native Language Support
+-#
+-CONFIG_NLS=y
+-CONFIG_NLS_DEFAULT="iso8859-1"
+-# CONFIG_NLS_CODEPAGE_437 is not set
+-# CONFIG_NLS_CODEPAGE_737 is not set
+-# CONFIG_NLS_CODEPAGE_775 is not set
+-# CONFIG_NLS_CODEPAGE_850 is not set
+-# CONFIG_NLS_CODEPAGE_852 is not set
+-# CONFIG_NLS_CODEPAGE_855 is not set
+-# CONFIG_NLS_CODEPAGE_857 is not set
+-# CONFIG_NLS_CODEPAGE_860 is not set
+-# CONFIG_NLS_CODEPAGE_861 is not set
+-# CONFIG_NLS_CODEPAGE_862 is not set
+-# CONFIG_NLS_CODEPAGE_863 is not set
+-# CONFIG_NLS_CODEPAGE_864 is not set
+-# CONFIG_NLS_CODEPAGE_865 is not set
+-# CONFIG_NLS_CODEPAGE_866 is not set
+-# CONFIG_NLS_CODEPAGE_869 is not set
+-# CONFIG_NLS_CODEPAGE_936 is not set
+-# CONFIG_NLS_CODEPAGE_950 is not set
+-# CONFIG_NLS_CODEPAGE_932 is not set
+-# CONFIG_NLS_CODEPAGE_949 is not set
+-# CONFIG_NLS_CODEPAGE_874 is not set
+-# CONFIG_NLS_ISO8859_8 is not set
+-# CONFIG_NLS_CODEPAGE_1250 is not set
+-# CONFIG_NLS_CODEPAGE_1251 is not set
+-# CONFIG_NLS_ASCII is not set
+-# CONFIG_NLS_ISO8859_1 is not set
+-# CONFIG_NLS_ISO8859_2 is not set
+-# CONFIG_NLS_ISO8859_3 is not set
+-# CONFIG_NLS_ISO8859_4 is not set
+-# CONFIG_NLS_ISO8859_5 is not set
+-# CONFIG_NLS_ISO8859_6 is not set
+-# CONFIG_NLS_ISO8859_7 is not set
+-# CONFIG_NLS_ISO8859_9 is not set
+-# CONFIG_NLS_ISO8859_13 is not set
+-# CONFIG_NLS_ISO8859_14 is not set
+-# CONFIG_NLS_ISO8859_15 is not set
+-# CONFIG_NLS_KOI8_R is not set
+-# CONFIG_NLS_KOI8_U is not set
+-# CONFIG_NLS_UTF8 is not set
+-
+-#
+-# Library routines
+-#
+-CONFIG_CRC_CCITT=y
+-CONFIG_CRC16=y
+-CONFIG_CRC32=y
+-# CONFIG_LIBCRC32C is not set
+-CONFIG_PLIST=y
+-
+-#
+-# Instrumentation Support
+-#
+-# CONFIG_PROFILING is not set
+-
+-#
+-# Kernel hacking
+-#
+-# CONFIG_PRINTK_TIME is not set
+-# CONFIG_MAGIC_SYSRQ is not set
+-# CONFIG_UNUSED_SYMBOLS is not set
+-CONFIG_DEBUG_KERNEL=y
+-CONFIG_LOG_BUF_SHIFT=14
+-CONFIG_DETECT_SOFTLOCKUP=y
+-# CONFIG_SCHEDSTATS is not set
+-# CONFIG_TIMER_STATS is not set
+-# CONFIG_DEBUG_SLAB is not set
+-# CONFIG_DEBUG_RT_MUTEXES is not set
+-# CONFIG_RT_MUTEX_TESTER is not set
+-# CONFIG_DEBUG_SPINLOCK is not set
+-# CONFIG_DEBUG_MUTEXES is not set
+-# CONFIG_DEBUG_RWSEMS is not set
+-# CONFIG_DEBUG_SPINLOCK_SLEEP is not set
+-# CONFIG_DEBUG_LOCKING_API_SELFTESTS is not set
+-CONFIG_WAKEUP_TIMING=y
+-# CONFIG_WAKEUP_LATENCY_HIST is not set
+-# CONFIG_CRITICAL_IRQSOFF_TIMING is not set
+-CONFIG_LATENCY_TIMING=y
+-# CONFIG_LATENCY_TRACE is not set
+-# CONFIG_DEBUG_KOBJECT is not set
+-# CONFIG_DEBUG_INFO is not set
+-# CONFIG_DEBUG_FS is not set
+-# CONFIG_DEBUG_VM is not set
+-CONFIG_FORCED_INLINING=y
+-# CONFIG_RCU_TORTURE_TEST is not set
+-CONFIG_TRACE_IRQFLAGS_SUPPORT=y
+-# CONFIG_DEBUGGER is not set
+-CONFIG_BDI_SWITCH=y
+-# CONFIG_BOOTX_TEXT is not set
+-# CONFIG_SERIAL_TEXT_DEBUG is not set
+-# CONFIG_PPC_EARLY_DEBUG is not set
+-
+-#
+-# Security options
+-#
+-# CONFIG_KEYS is not set
+-# CONFIG_SECURITY is not set
+-
+-#
+-# Cryptographic options
+-#
+-CONFIG_CRYPTO=y
+-# CONFIG_CRYPTO_HMAC is not set
+-# CONFIG_CRYPTO_NULL is not set
+-# CONFIG_CRYPTO_MD4 is not set
+-CONFIG_CRYPTO_MD5=y
+-# CONFIG_CRYPTO_SHA1 is not set
+-# CONFIG_CRYPTO_SHA256 is not set
+-# CONFIG_CRYPTO_SHA512 is not set
+-# CONFIG_CRYPTO_WP512 is not set
+-# CONFIG_CRYPTO_TGR192 is not set
+-CONFIG_CRYPTO_DES=y
+-# CONFIG_CRYPTO_BLOWFISH is not set
+-# CONFIG_CRYPTO_TWOFISH is not set
+-# CONFIG_CRYPTO_SERPENT is not set
+-# CONFIG_CRYPTO_AES is not set
+-# CONFIG_CRYPTO_CAST5 is not set
+-# CONFIG_CRYPTO_CAST6 is not set
+-# CONFIG_CRYPTO_TEA is not set
+-# CONFIG_CRYPTO_ARC4 is not set
+-# CONFIG_CRYPTO_KHAZAD is not set
+-# CONFIG_CRYPTO_ANUBIS is not set
+-# CONFIG_CRYPTO_DEFLATE is not set
+-# CONFIG_CRYPTO_MICHAEL_MIC is not set
+-# CONFIG_CRYPTO_CRC32C is not set
+-# CONFIG_CRYPTO_TEST is not set
+-
+-#
+-# Hardware crypto devices
+-#
+Index: linux-2.6.18/arch/powerpc/platforms/embedded6xx/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/embedded6xx/Kconfig
++++ linux-2.6.18/arch/powerpc/platforms/embedded6xx/Kconfig
+@@ -69,9 +69,7 @@ config PRPMC800
+ 
+ config SANDPOINT
+ 	bool "Motorola-Sandpoint"
+-	select MPIC
+ 	select PPC_I8259
+-	select PPC_UDBG_16550
+ 	help
+ 	  Select SANDPOINT if configuring for a Motorola Sandpoint X3
+ 	  (any flavor).
+Index: linux-2.6.18/arch/powerpc/platforms/embedded6xx/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/embedded6xx/Makefile
++++ linux-2.6.18/arch/powerpc/platforms/embedded6xx/Makefile
+@@ -3,4 +3,3 @@
+ #
+ obj-$(CONFIG_MPC7448HPC2)	+= mpc7448_hpc2.o
+ obj-$(CONFIG_LINKSTATION)	+= linkstation.o ls_uart.o
+-obj-$(CONFIG_SANDPOINT)		+= sandpoint.o
+Index: linux-2.6.18/arch/powerpc/platforms/embedded6xx/sandpoint.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/embedded6xx/sandpoint.c
++++ /dev/null
+@@ -1,385 +0,0 @@
+-/*
+- * Board setup routines for the Freescale Sandpoint Test Platform.
+- *
+- * Author: Mark A. Greer <mgreer@mvista.com>
+- *
+- * 2000-2003 (c) MontaVista Software, Inc.  This file is licensed under
+- * the terms of the GNU General Public License version 2.  This program
+- * is licensed "as is" without any warranty of any kind, whether express
+- * or implied.
+- */
+-
+-/*
+- * This file adds support for the Freescale Sandpoint Test Platform.
+- * These boards have a PPMC slot for the processor so any combination
+- * of cpu and host bridge can be attached.  This port is for an 8240 PPMC
+- * module from Freescale and other closely related cpu/host bridge
+- * combinations (e.g., 750/755/7400 with MPC107 host bridge).
+- * The sandpoint itself has a Windbond 83c553 (PCI-ISA bridge, 2 DMA ctlrs, 2
+- * cascaded 8259 interrupt ctlrs, 8254 Timer/Counter, and an IDE ctlr), a
+- * National 87308 (RTC, 2 UARTs, Keyboard & mouse ctlrs, and a floppy ctlr),
+- * and 4 PCI slots (only 2 of which are usable; the other 2 are keyed for 3.3V
+- * but are really 5V).
+- *
+- * The firmware on the sandpoint is called DINK (not my acronym :).  This port
+- * depends on DINK to do some basic initialization (e.g., initialize the memory
+- * ctlr) and to ensure that the processor is using MAP B (CHRP map).
+- *
+- * Since Freescale listened to our suggestions for improvement, we now have
+- * the Sandpoint X3 board.  All of the PCI slots are available, it uses
+- * the serial interrupt interface (just a hardware thing we need to
+- * configure properly).
+- *
+- * Use the default X3 switch settings.  The interrupts are then:
+- *		EPIC	Source
+- *		  0	SIOINT 		(8259, active low)
+- *		  1	PCI #1
+- *		  2	PCI #2
+- *		  3	PCI #3
+- *		  4	PCI #4
+- *		  7	Winbond INTC	(IDE interrupt)
+- *		  8	Winbond INTD	(IDE interrupt)
+- *
+- *
+- * Freescale has finally released a version of DINK32 that correctly
+- * (seemingly) initalizes the memory controller correctly, regardless
+- * of the amount of memory in the system.  Once a method of determining
+- * what version of DINK initializes the system for us, if applicable, is
+- * found, we can hopefully stop hardcoding 32MB of RAM.
+- */
+-
+-#include <linux/initrd.h>
+-#include <linux/delay.h>
+-#include <linux/ide.h>
+-#include <linux/root_dev.h>
+-
+-#include <asm/time.h>
+-#include <asm/i8259.h>
+-#include <asm/udbg.h>
+-#include <asm/todc.h>
+-#include <asm/mpic.h>
+-#include <asm/todc.h>
+-
+-/*
+- * Interrupt setup and service.  Interrrupts on the Sandpoint come
+- * from the four PCI slots plus the 8259 in the Winbond Super I/O (SIO).
+- * The 8259 is cascaded from EPIC IRQ0, IRQ1-4 map to PCI slots 1-4,
+- * IDE is on EPIC 7 and 8.
+- */
+-static void sandpoint_8259_cascade(unsigned int irq, struct irq_desc *desc,
+-		struct pt_regs *regs)
+-{
+-	unsigned int cascade_irq = i8259_irq(regs);
+-
+-	if (cascade_irq != NO_IRQ)
+-		generic_handle_irq(cascade_irq, regs);
+-	desc->chip->eoi(irq);
+-}
+-
+-static void __init
+-sandpoint_init_irq(void)
+-{
+-	struct mpic *mpic;
+-	struct device_node *dnp, *cascade_node = NULL;
+-	void *prop;
+-	int size;
+-	unsigned int cascade_irq;
+-	phys_addr_t paddr;
+-
+-	dnp = of_find_node_by_type(NULL, "open-pic");
+-	if (dnp == NULL)
+-		return;
+-
+-	prop = (struct device_node *)get_property(dnp, "reg", &size);
+-	paddr = (phys_addr_t)of_translate_address(dnp, prop);
+-
+-	mpic = mpic_alloc(dnp, paddr, MPIC_PRIMARY, 0, 0, " EPIC     ");
+-
+-	prop = (struct device_node *)get_property(dnp, "clock-ratio", &size);
+-	if (prop != NULL)
+-		mpic_set_clk_ratio(mpic, *(u32 *)prop);
+-
+-	prop = (struct device_node *)get_property(dnp, "serial-mode", &size);
+-	if (prop != NULL)
+-		mpic_set_serial_int(mpic, *(u32 *)prop);
+-
+-	mpic_assign_isu(mpic, 0, paddr + 0x10200);
+-	mpic_init(mpic);
+-
+-	for_each_node_by_type(dnp, "interrupt-controller")
+-		if (device_is_compatible(dnp, "chrp,iic")) {
+-			cascade_node = dnp;
+-			break;
+-		}
+-
+-	if (cascade_node == NULL)
+-		return;
+-
+-	cascade_irq = irq_of_parse_and_map(cascade_node, 0);
+-
+-	if (cascade_irq == NO_IRQ)
+-		return;
+-
+-	i8259_init(cascade_node, 0);
+-	set_irq_chained_handler(cascade_irq, sandpoint_8259_cascade);
+-}
+-
+-static int __init
+-add_bridge(struct device_node *dev)
+-{
+-	int len;
+-	struct pci_controller *hose;
+-	int *bus_range;
+-
+-	printk("Adding PCI host bridge %s\n", dev->full_name);
+-
+-	bus_range = (int *) get_property(dev, "bus-range", &len);
+-	if (bus_range == NULL || len < 2 * sizeof(int))
+-		printk(KERN_WARNING "Can't get bus-range for %s, assume"
+-				" bus 0\n", dev->full_name);
+-
+-	hose = pcibios_alloc_controller();
+-	if (hose == NULL)
+-		return -ENOMEM;
+-	hose->first_busno = bus_range ? bus_range[0] : 0;
+-	hose->last_busno = bus_range ? bus_range[1] : 0xff;
+-	setup_indirect_pci(hose, 0xfec00000, 0xfee00000);
+-
+-	/* Interpret the "ranges" property */
+-	/* This also maps the I/O region and sets isa_io/mem_base */
+-	pci_process_bridge_OF_ranges(hose, dev, 1);
+-	return 0;
+-}
+-
+-/*
+- * Freescale Sandpoint interrupt routing.
+- */
+-static inline int
+-x3_map_irq(struct pci_dev *dev, unsigned char idsel, unsigned char pin)
+-{
+-	static char pci_irq_table[][4] =
+-	/*
+-	 *	PCI IDSEL/INTPIN->INTLINE
+-	 * 	   A   B   C   D
+-	 */
+-	{
+-		{ 0, 0, 0, 0 },	/* IDSEL 11 - i8259 on Winbond */
+-		{ 0, 0, 0, 0 },	/* IDSEL 12 - unused */
+-		{ 2, 5, 4, 3 },	/* IDSEL 13 - PCI slot 1 */
+-		{ 3, 2, 5, 4 },	/* IDSEL 14 - PCI slot 2 */
+-		{ 4, 3, 2, 5 },	/* IDSEL 15 - PCI slot 3 */
+-		{ 5, 4, 3, 2 },	/* IDSEL 16 - PCI slot 4 */
+-	};
+-
+-	const long min_idsel = 11, max_idsel = 16, irqs_per_slot = 4;
+-	return PCI_IRQ_TABLE_LOOKUP;
+-}
+-
+-#ifdef CONFIG_PPC_TODC
+-TODC_ALLOC()
+-#endif
+-
+-static void __init
+-sandpoint_setup_arch(void)
+-{
+-	struct device_node *dnp;
+-
+-#ifdef CONFIG_BLK_DEV_INITRD
+-	if (initrd_start)
+-		ROOT_DEV = Root_RAM0;
+-	else
+-#endif
+-#ifdef	CONFIG_ROOT_NFS
+-		ROOT_DEV = Root_NFS;
+-#else
+-		ROOT_DEV = Root_HDA1;
+-#endif
+-
+-	for (dnp = NULL; (dnp=of_find_node_by_type(dnp,"pci")) != NULL;)
+-		add_bridge(dnp);
+-	ppc_md.pci_swizzle = common_swizzle;
+-	ppc_md.pci_map_irq = x3_map_irq;
+-
+-	printk(KERN_INFO "Port by MontaVista Software, Inc. <source@mvista.com>\n");
+-
+-#ifdef CONFIG_PPC_TODC
+-	TODC_INIT(TODC_TYPE_PC97307, 0x70, 0x00, 0x71, 8);
+-
+-	ppc_md.nvram_read_val = todc_mc146818_read_val;
+-	ppc_md.nvram_write_val = todc_mc146818_write_val;
+-
+-	ppc_md.time_init = todc_time_init;
+-	ppc_md.set_rtc_time = todc_set_rtc_time;
+-	ppc_md.get_rtc_time = todc_get_rtc_time;
+-#endif
+-
+-	/* DINK32 12.3 and below do not correctly enable any caches.
+-	 * We will do this now with good known values.  Future versions
+-	 * of DINK32 are supposed to get this correct.
+-	 */
+-	if (cpu_has_feature(CPU_FTR_SPEC7450))
+-		/* 745x is different.  We only want to pass along enable. */
+-		_set_L2CR(L2CR_L2E);
+-	else if (cpu_has_feature(CPU_FTR_L2CR))
+-		/* All modules have 1MB of L2.  We also assume that an
+-		 * L2 divisor of 3 will work.
+-		 */
+-		_set_L2CR(L2CR_L2E | L2CR_L2SIZ_1MB | L2CR_L2CLK_DIV3
+-				| L2CR_L2RAM_PIPE | L2CR_L2OH_1_0 | L2CR_L2DF);
+-#if 0
+-	/* Untested right now. */
+-	if (cpu_has_feature(CPU_FTR_L3CR)) {
+-		/* Magic value. */
+-		_set_L3CR(0x8f032000);
+-	}
+-#endif
+-}
+-
+-static void
+-sandpoint_restart(char *cmd)
+-{
+-	void _nmask_and_or_msr(unsigned long nmask, unsigned long or_val);
+-
+-	local_irq_disable();
+-	_nmask_and_or_msr(0, MSR_IP); /* Set exception prefix high - firmware */
+-
+-	/* Reset system via Port 92 */
+-	outb(0x00, 0x92);
+-	outb(0x01, 0x92);
+-
+-	for(;;);	/* Spin until reset happens */
+-}
+-
+-static void
+-sandpoint_power_off(void)
+-{
+-	local_irq_disable();
+-	for(;;);	/* No way to shut power off with software */
+-	/* NOTREACHED */
+-}
+-
+-static void
+-sandpoint_halt(void)
+-{
+-	sandpoint_power_off();
+-	/* NOTREACHED */
+-}
+-
+-#if defined(CONFIG_BLK_DEV_IDE) || defined(CONFIG_BLK_DEV_IDE_MODULE)
+-/*
+- * IDE support.
+- */
+-static int		sandpoint_ide_ports_known = 0;
+-static unsigned long	sandpoint_ide_regbase[MAX_HWIFS];
+-static unsigned long	sandpoint_ide_ctl_regbase[MAX_HWIFS];
+-static unsigned long	sandpoint_idedma_regbase;
+-
+-static void
+-sandpoint_ide_probe(void)
+-{
+-	struct pci_dev *pdev = pci_get_device(PCI_VENDOR_ID_WINBOND,
+-			PCI_DEVICE_ID_WINBOND_82C105, NULL);
+-
+-	if (pdev) {
+-		sandpoint_ide_regbase[0]=pdev->resource[0].start;
+-		sandpoint_ide_regbase[1]=pdev->resource[2].start;
+-		sandpoint_ide_ctl_regbase[0]=pdev->resource[1].start;
+-		sandpoint_ide_ctl_regbase[1]=pdev->resource[3].start;
+-		sandpoint_idedma_regbase=pdev->resource[4].start;
+-		pci_dev_put(pdev);
+-	}
+-
+-	sandpoint_ide_ports_known = 1;
+-}
+-
+-static unsigned long
+-sandpoint_ide_default_io_base(int index)
+-{
+-	if (sandpoint_ide_ports_known == 0)
+-		sandpoint_ide_probe();
+-
+-	return sandpoint_ide_regbase[index];
+-}
+-
+-static void __init
+-sandpoint_ide_init_hwif_ports(hw_regs_t *hw, unsigned long data_port,
+-		unsigned long ctrl_port, int *irq)
+-{
+-	unsigned long reg = data_port;
+-	uint	alt_status_base;
+-	int	i;
+-
+-	for (i = IDE_DATA_OFFSET; i <= IDE_STATUS_OFFSET; i++) {
+-		hw->io_ports[i] = reg++;
+-	}
+-
+-	if (data_port == sandpoint_ide_regbase[0]) {
+-		alt_status_base = sandpoint_ide_ctl_regbase[0] + 2;
+-		hw->irq = 14;
+-	}
+-	else if (data_port == sandpoint_ide_regbase[1]) {
+-		alt_status_base = sandpoint_ide_ctl_regbase[1] + 2;
+-		hw->irq = 15;
+-	}
+-	else {
+-		alt_status_base = 0;
+-		hw->irq = 0;
+-	}
+-
+-	if (ctrl_port) {
+-		hw->io_ports[IDE_CONTROL_OFFSET] = ctrl_port;
+-	} else {
+-		hw->io_ports[IDE_CONTROL_OFFSET] = alt_status_base;
+-	}
+-
+-	if (irq != NULL) {
+-		*irq = hw->irq;
+-	}
+-}
+-
+-static int __init
+-sandpoint_ide_init(void)
+-{
+-	/* doesn't find hda without this */
+-	ppc_ide_md.default_io_base = sandpoint_ide_default_io_base;
+-	/* get error msgs without this */
+-	ppc_ide_md.ide_init_hwif = sandpoint_ide_init_hwif_ports;
+-	return 0;
+-}
+-arch_initcall(sandpoint_ide_init);
+-#endif
+-
+-void __init
+-sandpoint_pcibios_fixup(void)
+-{
+-	struct pci_dev *dev = NULL;
+-
+-	for_each_pci_dev(dev)
+-		pci_read_irq_line(dev);
+-}
+-
+-#define	PLATFORM_NAME	"Freescale Sandpoint"
+-
+-static int __init
+-sandpoint_probe(void)
+-{
+-	unsigned long root = of_get_flat_dt_root();
+-
+-	if (of_flat_dt_is_compatible(root, "Sandpoint"))
+-		return 1;
+-	return 0;
+-}
+-
+-define_machine(sandpoint) {
+-	.name		= PLATFORM_NAME,
+-	.probe		= sandpoint_probe,
+-	.setup_arch	= sandpoint_setup_arch,
+-	.init_IRQ	= sandpoint_init_irq,
+-	.pcibios_fixup	= sandpoint_pcibios_fixup,
+-	.get_irq	= mpic_get_irq,
+-	.restart	= sandpoint_restart,
+-	.power_off	= sandpoint_power_off,
+-	.halt		= sandpoint_halt,
+-	.calibrate_decr	= generic_calibrate_decr,
+-	.progress	= udbg_progress,
+-};
+Index: linux-2.6.18/mvl_patches/pro50-0220.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0220.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(220);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

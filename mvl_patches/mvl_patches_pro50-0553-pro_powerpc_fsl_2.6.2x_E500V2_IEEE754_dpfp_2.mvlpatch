@@ -1,0 +1,1148 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_fsl_2.6.2x_E500V2_IEEE754_dpfp_2
+# Date: Fri Oct 26 08:42:51 2007
+# Source: Freescale Semiconductor
+# MR: 25195
+# Type: Enhancement
+# Disposition: merged from Freescale Semiconductor
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# Add the implementations to handle DPFP instruction exceptions
+# complying with IEEE-754.
+# 
+# Signed-off-by:Ebony Zhu <ebony.zhu@freescale.com>
+
+PATCHNUM=553
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Freescale Semiconductor
+MR: 25195
+Type: Enhancement
+Disposition: merged from Freescale Semiconductor
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+Add the implementations to handle DPFP instruction exceptions
+complying with IEEE-754.
+
+Signed-off-by:Ebony Zhu <ebony.zhu@freescale.com>
+Index: linux-2.6.18/arch/powerpc/math-emu/efdadd.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdadd.c
+@@ -0,0 +1,52 @@
++/*
++ * arch/powerpc/math-emu/efdadd.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdadd"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "double.h"
++
++int
++efdadd(void *rD, void *rA, void *rB)
++{
++	FP_DECL_D(A);
++	FP_DECL_D(B);
++	FP_DECL_D(R);
++	int ret = 0;
++
++#ifdef DEBUG
++	printk("%s: %p %p %p\n", __FUNCTION__, rD, rA, rB);
++#endif
++
++	__FP_UNPACK_D(A, rA);
++	__FP_UNPACK_D(B, rB);
++
++#ifdef DEBUG
++	printk("A: %ld %lu %lu %ld (%ld)\n", A_s, A_f1, A_f0, A_e, A_c);
++	printk("B: %ld %lu %lu %ld (%ld)\n", B_s, B_f1, B_f0, B_e, B_c);
++#endif
++
++	FP_ADD_D(R, A, B);
++
++#ifdef DEBUG
++	printk("D: %ld %lu %lu %ld (%ld)\n", R_s, R_f1, R_f0, R_e, R_c);
++#endif
++
++	return (ret | __FP_PACK_D(rD, R));
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efdcfs.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdcfs.c
+@@ -0,0 +1,47 @@
++/*
++ * arch/powerpc/math-emu/efdcfs.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdcfs"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "double.h"
++#include "single.h"
++
++int
++efdcfs(void *rD, u32 *rB)
++{
++	FP_DECL_S(B);
++	FP_DECL_D(R);
++	int ret;
++	rB[0]=rB[1];
++
++	__FP_UNPACK_S(B, rB);
++
++#ifdef DEBUG
++	printk("B: %ld %lu %ld (%ld)\n", B_s, B_f, B_e, B_c);
++#endif
++
++	FP_CONV(D, S, 2, 1, R, B);
++
++#ifdef DEBUG
++	printk("R: %ld %lu %lu %ld (%ld)\n", R_s, R_f1, R_f0, R_e, R_c);
++#endif
++	
++	return (ret | __FP_PACK_D(rD, R));
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efdcmpeq.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdcmpeq.c
+@@ -0,0 +1,61 @@
++/*
++ * arch/powerpc/math-emu/efdcmpeq.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdcmpeq"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "double.h"
++
++int
++efdcmpeq(u32 *ccr, int crD, void *rA, void *rB)
++{
++	FP_DECL_D(A);
++	FP_DECL_D(B);
++	long cmp;
++	int ret = 0;
++
++#ifdef DEBUG
++	printk("%s: %p (%08x) %d %p %p\n", __FUNCTION__, ccr, *ccr, crD, rA, rB);
++#endif
++
++	__FP_UNPACK_D(A, rA);
++	__FP_UNPACK_D(B, rB);
++
++#ifdef DEBUG
++	printk("A: %ld %lu %lu %ld (%ld)\n", A_s, A_f1, A_f0, A_e, A_c);
++	printk("B: %ld %lu %lu %ld (%ld)\n", B_s, B_f1, B_f0, B_e, B_c);
++#endif
++
++	FP_CMP_D(cmp, A, B, 2);
++	
++	if (cmp == 0) {
++		cmp = 0x4;
++	} else {
++		cmp = 0;
++	}
++
++	*ccr &= ~(15 << ((7 - crD) << 2));
++	*ccr |= (cmp << ((7 - crD) << 2));
++
++#ifdef DEBUG
++	printk("CR: %08x\n", *ccr);
++#endif
++
++	return ret;
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efdcmpgt.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdcmpgt.c
+@@ -0,0 +1,61 @@
++/*
++ * arch/powerpc/math-emu/efdcmpgt.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdcmpgt"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "double.h"
++
++int
++efdcmpgt(u32 *ccr, int crD, void *rA, void *rB)
++{
++	FP_DECL_D(A);
++	FP_DECL_D(B);
++	long cmp;
++	int ret = 0;
++
++#ifdef DEBUG
++	printk("%s: %p (%08x) %d %p %p\n", __FUNCTION__, ccr, *ccr, crD, rA, rB);
++#endif
++
++	__FP_UNPACK_D(A, rA);
++	__FP_UNPACK_D(B, rB);
++
++#ifdef DEBUG
++	printk("A: %ld %lu %lu %ld (%ld)\n", A_s, A_f1, A_f0, A_e, A_c);
++	printk("B: %ld %lu %lu %ld (%ld)\n", B_s, B_f1, B_f0, B_e, B_c);
++#endif
++
++	FP_CMP_D(cmp, A, B, 2);
++	
++	if (cmp == 1) {
++		cmp = 0x4;
++	} else {
++		cmp = 0;
++	}
++	
++	*ccr &= ~(15 << ((7 - crD) << 2));
++	*ccr |= (cmp << ((7 - crD) << 2));
++
++#ifdef DEBUG
++	printk("CR: %08x\n", *ccr);
++#endif
++
++	return ret;
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efdcmplt.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdcmplt.c
+@@ -0,0 +1,61 @@
++/*
++ * arch/powerpc/math-emu/efdcmplt.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdcmplt"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "double.h"
++
++int
++efdcmplt(u32 *ccr, int crD, void *rA, void *rB)
++{
++	FP_DECL_D(A);
++	FP_DECL_D(B);
++	long cmp;
++	int ret = 0;
++
++#ifdef DEBUG
++	printk("%s: %p (%08x) %d %p %p\n", __FUNCTION__, ccr, *ccr, crD, rA, rB);
++#endif
++
++	__FP_UNPACK_D(A, rA);
++	__FP_UNPACK_D(B, rB);
++
++#ifdef DEBUG
++	printk("A: %ld %lu %lu %ld (%ld)\n", A_s, A_f1, A_f0, A_e, A_c);
++	printk("B: %ld %lu %lu %ld (%ld)\n", B_s, B_f1, B_f0, B_e, B_c);
++#endif
++
++	FP_CMP_D(cmp, A, B, 2);
++	
++	if (cmp == -1) {
++		cmp = 0x4;
++	} else {
++		cmp = 0;
++	}
++	
++	*ccr &= ~(15 << ((7 - crD) << 2));
++	*ccr |= (cmp << ((7 - crD) << 2));
++
++#ifdef DEBUG
++	printk("CR: %08x\n", *ccr);
++#endif
++
++	return ret;
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efdctsf.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdctsf.c
+@@ -0,0 +1,46 @@
++/*
++ * arch/powerpc/math-emu/efdctsf.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdctsf"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "single.h"
++#include "double.h"
++
++int
++efdctsf(u32 *rD, u32 *rB)
++{
++	if (!((rB[0] >> 20) == 0x7ff && ((rB[0] & 0xfffff) > 0 || (rB[1] > 0)))) {/* Not an NaN */
++		if (((rB[0] >> 20) & 0x7ff) == 0 ) { /* rB is Denorm */
++			rD[1] = 0x0;
++		} else if ((rB[0] >> 31) == 0) { /* rB is positive normal */
++			rD[1] = 0x7fffffff;
++		} else { /* rB is negative normal */
++			rD[1] = 0x80000000;
++		}
++	} else { /* rB is NaN */
++		rD[1] = 0x0;	
++	}
++#ifdef DEBUG
++	printk("%s: D %p, B %p: ", __FUNCTION__, rD, rB);
++	printk("\n");
++#endif
++
++	return 0;
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efdctsi.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdctsi.c
+@@ -0,0 +1,43 @@
++/*
++ * arch/powerpc/math-emu/efdctsi.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdctsi"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "double.h"
++
++int
++efdctsi(u32 *rD, void *rB)
++{
++	FP_DECL_D(B);
++	unsigned int r;
++
++	__FP_UNPACK_D(B, rB);
++	_FP_ROUND(2, B);
++	FP_TO_INT_D(r, B, 32, 1);
++	rD[1] = r;
++
++#ifdef DEBUG
++	printk("%s: D %p, B %p: ", __FUNCTION__, rD, rB);
++	dump_double(rD);
++	printk("\n");
++#endif
++
++	return 0;
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efdctsidz.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdctsidz.c
+@@ -0,0 +1,45 @@
++/*
++ * arch/powerpc/math-emu/efdctsidz.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdctsidz"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "double.h"
++
++int
++efdctsidz(u32 *rD, void *rB)
++{
++	FP_DECL_D(B);
++	u32 spefscr;
++	u64 r;
++
++	__FP_UNPACK_D(B, rB);
++	_FP_ROUND_ZERO(2, B);
++	FP_TO_INT_D(r, B, 64, 1);
++	rD[1] = r;
++	rD[0] = r >> 32;
++
++#ifdef DEBUG
++	printk("%s: D %p, B %p: ", __FUNCTION__, rD, rB);
++	dump_double(rD);
++	printk("\n");
++#endif
++
++	return 0;
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efdctsiz.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdctsiz.c
+@@ -0,0 +1,43 @@
++/*
++ * arch/powerpc/math-emu/efdctsiz.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdctsiz"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "double.h"
++
++int
++efdctsiz(u32 *rD, void *rB)
++{
++	FP_DECL_D(B);
++	unsigned int r;
++
++	__FP_UNPACK_D(B, rB);
++	_FP_ROUND_ZERO(2, B);
++	FP_TO_INT_D(r, B, 32, 1);
++	rD[1] = r;
++
++#ifdef DEBUG
++	printk("%s: D %p, B %p: ", __FUNCTION__, rD, rB);
++	dump_double(rD);
++	printk("\n");
++#endif
++
++	return 0;
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efdctuf.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdctuf.c
+@@ -0,0 +1,45 @@
++/*
++ * arch/powerpc/math-emu/efdctuf.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdctuf"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "single.h"
++#include "double.h"
++
++int
++efdctuf(u32 *rD, u32 *rB)
++{
++	if (!((rB[0] >> 20) == 0x7ff && ((rB[0] & 0xfffff) > 0 || (rB[1] > 0))) /* Not an NaN */
++	    && (rB[0] >> 31) == 0) { /* rB is positive */
++		if (((rB[0] >> 20) & 0x7ff) == 0 ) { /* rB is Denorm */
++			rD[1] = 0x0;
++		} else { /* rB is normal */
++			rD[1] = 0xffffffff;
++		}
++	} else { /* rB < 0 or rB is NaN */
++		rD[1] = 0x0;	
++	}
++#ifdef DEBUG
++	printk("%s: D %p, B %p: ", __FUNCTION__, rD, rB);
++	printk("\n");
++#endif
++
++	return 0;
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efdctui.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdctui.c
+@@ -0,0 +1,43 @@
++/*
++ * arch/powerpc/math-emu/efdctui.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdctui"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "double.h"
++
++int
++efdctui(u32 *rD, void *rB)
++{
++	FP_DECL_D(B);
++	unsigned int r;
++
++	__FP_UNPACK_D(B, rB);
++	_FP_ROUND(2, B);
++	FP_TO_INT_D(r, B, 32, 0);
++	rD[1] = r;
++
++#ifdef DEBUG
++	printk("%s: D %p, B %p: ", __FUNCTION__, rD, rB);
++	dump_double(rD);
++	printk("\n");
++#endif
++
++	return 0;
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efdctuidz.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdctuidz.c
+@@ -0,0 +1,44 @@
++/*
++ * arch/powerpc/math-emu/efdctuidz.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdctuidz"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "double.h"
++
++int
++efdctuidz(u32 *rD, void *rB)
++{
++	FP_DECL_D(B);
++	u64 r;
++
++	__FP_UNPACK_D(B, rB);
++	_FP_ROUND_ZERO(2, B);
++	FP_TO_INT_D(r, B, 64, 0);
++	rD[1] = r;
++	rD[0] = r >> 32;
++
++#ifdef DEBUG
++	printk("%s: D %p, B %p: ", __FUNCTION__, rD, rB);
++	dump_double(rD);
++	printk("\n");
++#endif
++
++	return 0;
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efdctuiz.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdctuiz.c
+@@ -0,0 +1,43 @@
++/*
++ * arch/powerpc/math-emu/efdctuiz.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdctuiz"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "double.h"
++
++int
++efdctuiz(u32 *rD, void *rB)
++{
++	FP_DECL_D(B);
++	unsigned int r;
++
++	__FP_UNPACK_D(B, rB);
++	_FP_ROUND_ZERO(2, B);
++	FP_TO_INT_D(r, B, 32, 0);
++	rD[1] = r;
++
++#ifdef DEBUG
++	printk("%s: D %p, B %p: ", __FUNCTION__, rD, rB);
++	dump_double(rD);
++	printk("\n");
++#endif
++
++	return 0;
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efddiv.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efddiv.c
+@@ -0,0 +1,52 @@
++/*
++ * arch/powerpc/math-emu/efddiv.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efddiv"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "double.h"
++
++int
++efddiv(void *rD, void *rA, void *rB)
++{
++	FP_DECL_D(A);
++	FP_DECL_D(B);
++	FP_DECL_D(R);
++	int ret = 0;
++
++#ifdef DEBUG
++	printk("%s: %p %p %p\n", __FUNCTION__, rD, rA, rB);
++#endif
++
++	__FP_UNPACK_D(A, rA);
++	__FP_UNPACK_D(B, rB);
++
++#ifdef DEBUG
++	printk("A: %ld %lu %lu %ld (%ld)\n", A_s, A_f1, A_f0, A_e, A_c);
++	printk("B: %ld %lu %lu %ld (%ld)\n", B_s, B_f1, B_f0, B_e, B_c);
++#endif
++
++	FP_DIV_D(R, A, B);
++
++#ifdef DEBUG
++	printk("D: %ld %lu %lu %ld (%ld)\n", R_s, R_f1, R_f0, R_e, R_c);
++#endif
++
++	return (ret | __FP_PACK_D(rD, R));
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efdmul.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdmul.c
+@@ -0,0 +1,55 @@
++/*
++ * arch/powerpc/math-emu/efdmul.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdmul"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "double.h"
++
++int
++efdmul(void *rD, void *rA, void *rB)
++{
++	FP_DECL_D(A);
++	FP_DECL_D(B);
++	FP_DECL_D(R);
++	int ret = 0;
++
++#ifdef DEBUG
++	printk("%s: %p %p %p\n", __FUNCTION__, rD, rA, rB);
++#endif
++
++	__FP_UNPACK_D(A, rA);
++	__FP_UNPACK_D(B, rB);
++
++#ifdef DEBUG
++	printk("A: %ld %lu %lu %ld (%ld) [%08lx.%08lx %lx]\n",
++	       A_s, A_f1, A_f0, A_e, A_c, A_f1, A_f0, A_e + 1023);
++	printk("B: %ld %lu %lu %ld (%ld) [%08lx.%08lx %lx]\n",
++	       B_s, B_f1, B_f0, B_e, B_c, B_f1, B_f0, B_e + 1023);
++#endif
++
++	FP_MUL_D(R, A, B);
++
++#ifdef DEBUG
++	printk("D: %ld %lu %lu %ld (%ld) [%08lx.%08lx %lx]\n",
++	       R_s, R_f1, R_f0, R_e, R_c, R_f1, R_f0, R_e + 1023);
++#endif
++
++	return (ret | __FP_PACK_D(rD, R));
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efdnabs.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdnabs.c
+@@ -0,0 +1,34 @@
++/*
++ * arch/powerpc/math-emu/efdnabs.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdnabs"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++int
++efdnabs(u32 *rD, u32 *rA)
++{
++	rD[0] = rA[0] | 0x80000000;
++	rD[1] = rA[1];
++
++#ifdef DEBUG
++	printk("%s: D %p, A %p: ", __FUNCTION__, rD, rA);
++	dump_double(rD);
++	printk("\n");
++#endif
++
++	return 0;
++}
+Index: linux-2.6.18/arch/powerpc/math-emu/efdsub.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/math-emu/efdsub.c
+@@ -0,0 +1,55 @@
++/*
++ * arch/powerpc/math-emu/efdsub.c
++ *
++ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Ebony Zhu, ebony.zhu@freescale.com
++ *
++ * Description:
++ * This file is the implementation of SPE instruction "efdsub"
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */    
++
++#include <linux/types.h>
++#include <linux/errno.h>
++#include <asm/uaccess.h>
++
++#include "spe.h"
++#include "soft-fp.h"
++#include "double.h"
++
++int
++efdsub(void *rD, void *rA, void *rB)
++{
++	FP_DECL_D(A);
++	FP_DECL_D(B);
++	FP_DECL_D(R);
++	int ret = 0;
++
++#ifdef DEBUG
++	printk("%s: %p %p %p\n", __FUNCTION__, rD, rA, rB);
++#endif
++
++	__FP_UNPACK_D(A, rA);
++	__FP_UNPACK_D(B, rB);
++
++#ifdef DEBUG
++	printk("A: %ld %lu %lu %ld (%ld)\n", A_s, A_f1, A_f0, A_e, A_c);
++	printk("B: %ld %lu %lu %ld (%ld)\n", B_s, B_f1, B_f0, B_e, B_c);
++#endif
++
++	if (B_c != FP_CLS_NAN)
++		B_s ^= 1;
++
++	FP_ADD_D(R, A, B);
++
++#ifdef DEBUG
++	printk("D: %ld %lu %lu %ld (%ld)\n", R_s, R_f1, R_f0, R_e, R_c);
++#endif
++
++	return (ret | __FP_PACK_D(rD, R));
++}
+Index: linux-2.6.18/mvl_patches/pro50-0553.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0553.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(553);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

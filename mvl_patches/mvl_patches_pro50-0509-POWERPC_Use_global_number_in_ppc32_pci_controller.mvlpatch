@@ -1,0 +1,450 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Use_global_number_in_ppc32_pci_controller
+# Date: Fri Oct 26 08:39:10 2007
+# Source: Kernel.org
+# MR: 25195
+# Type: Enhancement
+# Disposition: merged from Kernel.org
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# From 5516b540e98de6f7474a4e7149470ad6a0bbc54a Mon Sep 17 00:00:00 2001
+# From: Kumar Gala <galak@kernel.crashing.org>
+# Date: Wed, 27 Jun 2007 01:17:57 -0500
+# Subject: [PATCH] [POWERPC] Use global_number in ppc32 pci_controller
+# 
+# Make the pci_controller struct use global_number for the PHB domain number
+# instead of index to match what ppc64 does and reuse its pci_domain_nr code.
+# 
+# Introduced a pci-common.c to handle shared code between ppc32 & ppc64.
+# 
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+PATCHNUM=509
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Kernel.org
+MR: 25195
+Type: Enhancement
+Disposition: merged from Kernel.org
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+From 5516b540e98de6f7474a4e7149470ad6a0bbc54a Mon Sep 17 00:00:00 2001
+From: Kumar Gala <galak@kernel.crashing.org>
+Date: Wed, 27 Jun 2007 01:17:57 -0500
+Subject: [PATCH] [POWERPC] Use global_number in ppc32 pci_controller
+
+Make the pci_controller struct use global_number for the PHB domain number
+instead of index to match what ppc64 does and reuse its pci_domain_nr code.
+
+Introduced a pci-common.c to handle shared code between ppc32 & ppc64.
+
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+Index: linux-2.6.18/arch/powerpc/kernel/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/Makefile
++++ linux-2.6.18/arch/powerpc/kernel/Makefile
+@@ -68,7 +68,7 @@ obj-$(CONFIG_MODULES)		+= $(module-y)
+ pci64-$(CONFIG_PPC64)		+= pci_64.o pci_dn.o pci_iommu.o \
+ 				   pci_direct_iommu.o
+ pci32-$(CONFIG_PPC32)		:= pci_32.o
+-obj-$(CONFIG_PCI)		+= $(pci64-y) $(pci32-y)
++obj-$(CONFIG_PCI)		+= $(pci64-y) $(pci32-y) pci-common.o
+ kexec-$(CONFIG_PPC64)		:= machine_kexec_64.o
+ kexec-$(CONFIG_PPC32)		:= machine_kexec_32.o
+ obj-$(CONFIG_KEXEC)		+= machine_kexec.o crash.o $(kexec-y)
+Index: linux-2.6.18/arch/powerpc/kernel/pci-common.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/kernel/pci-common.c
+@@ -0,0 +1,53 @@
++/*
++ * Contains common pci routines for ALL ppc platform
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */
++
++#undef DEBUG
++
++#include <linux/kernel.h>
++#include <linux/pci.h>
++#include <linux/string.h>
++#include <linux/init.h>
++#include <linux/bootmem.h>
++#include <linux/mm.h>
++#include <linux/list.h>
++#include <linux/syscalls.h>
++#include <linux/irq.h>
++#include <linux/vmalloc.h>
++
++#include <asm/processor.h>
++#include <asm/io.h>
++#include <asm/prom.h>
++#include <asm/pci-bridge.h>
++#include <asm/byteorder.h>
++#include <asm/machdep.h>
++#include <asm/ppc-pci.h>
++#include <asm/firmware.h>
++
++#ifdef DEBUG
++#include <asm/udbg.h>
++#define DBG(fmt...) printk(fmt)
++#else
++#define DBG(fmt...)
++#endif
++
++/*
++ * Return the domain number for this bus.
++ */
++int pci_domain_nr(struct pci_bus *bus)
++{
++	if (firmware_has_feature(FW_FEATURE_ISERIES))
++		return 0;
++	else {
++		struct pci_controller *hose = pci_bus_to_host(bus);
++
++		return hose->global_number;
++	}
++}
++
++EXPORT_SYMBOL(pci_domain_nr);
+Index: linux-2.6.18/arch/powerpc/kernel/pci_32.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_32.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_32.c
+@@ -640,7 +640,7 @@ pcibios_alloc_controller(void)
+ 	*hose_tail = hose;
+ 	hose_tail = &hose->next;
+ 
+-	hose->index = next_controller_index++;
++	hose->global_number = next_controller_index++;
+ 
+ 	return hose;
+ }
+@@ -1368,7 +1368,7 @@ void __init pcibios_fixup_bus(struct pci
+ 		if (!res->flags) {
+ 			if (io_offset)
+ 				printk(KERN_ERR "I/O resource not set for host"
+-				       " bridge %d\n", hose->index);
++				       " bridge %d\n", hose->global_number);
+ 			res->start = 0;
+ 			res->end = IO_SPACE_LIMIT;
+ 			res->flags = IORESOURCE_IO;
+@@ -1382,7 +1382,7 @@ void __init pcibios_fixup_bus(struct pci
+ 				if (i > 0)
+ 					continue;
+ 				printk(KERN_ERR "Memory resource not set for "
+-				       "host bridge %d\n", hose->index);
++				       "host bridge %d\n", hose->global_number);
+ 				res->start = hose->pci_mem_offset;
+ 				res->end = ~0U;
+ 				res->flags = IORESOURCE_MEM;
+Index: linux-2.6.18/arch/powerpc/kernel/pci_64.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_64.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_64.c
+@@ -638,22 +638,6 @@ int pcibios_enable_device(struct pci_dev
+ 	return 0;
+ }
+ 
+-/*
+- * Return the domain number for this bus.
+- */
+-int pci_domain_nr(struct pci_bus *bus)
+-{
+-	if (firmware_has_feature(FW_FEATURE_ISERIES))
+-		return 0;
+-	else {
+-		struct pci_controller *hose = pci_bus_to_host(bus);
+-
+-		return hose->global_number;
+-	}
+-}
+-
+-EXPORT_SYMBOL(pci_domain_nr);
+-
+ /* Decide whether to display the domain number in /proc */
+ int pci_proc_domain(struct pci_bus *bus)
+ {
+Index: linux-2.6.18/arch/powerpc/platforms/chrp/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/chrp/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/chrp/pci.c
+@@ -100,7 +100,7 @@ int rtas_read_config(struct pci_bus *bus
+ 	struct pci_controller *hose = bus->sysdata;
+ 	unsigned long addr = (offset & 0xff) | ((devfn & 0xff) << 8)
+ 		| (((bus->number - hose->first_busno) & 0xff) << 16)
+-		| (hose->index << 24);
++		| (hose->global_number << 24);
+         int ret = -1;
+ 	int rval;
+ 
+@@ -115,7 +115,7 @@ int rtas_write_config(struct pci_bus *bu
+ 	struct pci_controller *hose = bus->sysdata;
+ 	unsigned long addr = (offset & 0xff) | ((devfn & 0xff) << 8)
+ 		| (((bus->number - hose->first_busno) & 0xff) << 16)
+-		| (hose->index << 24);
++		| (hose->global_number << 24);
+ 	int rval;
+ 
+ 	rval = rtas_call(rtas_token("write-pci-config"), 3, 1, NULL,
+Index: linux-2.6.18/include/asm-powerpc/pci-bridge.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pci-bridge.h
++++ linux-2.6.18/include/asm-powerpc/pci-bridge.h
+@@ -21,7 +21,6 @@ extern struct pci_controller* pci_bus_to
+ struct pci_controller {
+ 	struct pci_bus *bus;
+ 	void *arch_data;
+-	int index;			/* PCI domain number */
+ 	struct pci_controller *next;
+ 	struct device *parent;
+ 
+@@ -60,6 +59,7 @@ struct pci_controller {
+ 	 */
+ 	struct resource	io_resource;
+ 	struct resource mem_resources[3];
++	int global_number;		/* PCI domain number */
+ };
+ 
+ static inline struct pci_controller *pci_bus_to_host(struct pci_bus *bus)
+Index: linux-2.6.18/include/asm-powerpc/pci.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pci.h
++++ linux-2.6.18/include/asm-powerpc/pci.h
+@@ -107,8 +107,6 @@ static inline void pci_dma_burst_advice(
+ }
+ #endif
+ 
+-extern int pci_domain_nr(struct pci_bus *bus);
+-
+ /* Decide whether to display the domain number in /proc */
+ extern int pci_proc_domain(struct pci_bus *bus);
+ 
+@@ -130,9 +128,6 @@ static inline void pci_dma_burst_advice(
+  */
+ #define pci_dac_dma_supported(pci_dev, mask)	(0)
+ 
+-/* Return the index of the PCI controller for device PDEV. */
+-#define pci_domain_nr(bus) ((struct pci_controller *)(bus)->sysdata)->index
+-
+ /* Set the name of the bus as it appears in /proc/bus/pci */
+ static inline int pci_proc_domain(struct pci_bus *bus)
+ {
+@@ -141,6 +136,8 @@ static inline int pci_proc_domain(struct
+ 
+ #endif /* CONFIG_PPC64 */
+ 
++extern int pci_domain_nr(struct pci_bus *bus);
++
+ struct vm_area_struct;
+ /* Map a range of PCI memory or I/O space for a device into user space */
+ int pci_mmap_page_range(struct pci_dev *pdev, struct vm_area_struct *vma,
+Index: linux-2.6.18/mvl_patches/pro50-0509.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0509.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(509);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

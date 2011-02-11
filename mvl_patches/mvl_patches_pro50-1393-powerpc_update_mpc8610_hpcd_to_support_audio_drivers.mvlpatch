@@ -1,0 +1,630 @@
+#! /usr/bin/env bash
+# Patch: -powerpc_update_mpc8610_hpcd_to_support_audio_drivers
+# Date: Mon Jul 21 10:30:33 2008
+# Source: kernel.org
+# MR: 28288
+# Type: Enhancement
+# Disposition: backport from 2.6.25-rc1 (c7d24a2dd02b9fe736e13931ee3e4a1f4f89cb47)
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# 
+# commit c7d24a2dd02b9fe736e13931ee3e4a1f4f89cb47
+# Author: Timur Tabi <timur@freescale.com>
+# Date:   Fri Jan 18 09:24:53 2008 -0600
+# 
+#     [POWERPC] Update MPC8610 HPCD to support audio drivers
+#     
+#     Update the MPC8610 HPCD files to support the audio driver.  Update
+#     booting-without-of.txt with information on the SSI device.
+#     
+#     Signed-off-by: Timur Tabi <timur@freescale.com>
+#     Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+#  arch/powerpc/boot/dts/mpc8610_hpcd.dts      |  113 ++++++++++++++++++
+#  arch/powerpc/configs/mpc8610_hpcd_defconfig |  171 +++++++++++++++++++++++++++
+#  arch/powerpc/platforms/86xx/mpc8610_hpcd.c  |   14 ++
+#  3 files changed, 294 insertions(+), 4 deletions(-)
+# 
+# 
+
+PATCHNUM=1393
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: kernel.org
+MR: 28288
+Type: Enhancement
+Disposition: backport from 2.6.25-rc1 (c7d24a2dd02b9fe736e13931ee3e4a1f4f89cb47)
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+
+commit c7d24a2dd02b9fe736e13931ee3e4a1f4f89cb47
+Author: Timur Tabi <timur@freescale.com>
+Date:   Fri Jan 18 09:24:53 2008 -0600
+
+    [POWERPC] Update MPC8610 HPCD to support audio drivers
+    
+    Update the MPC8610 HPCD files to support the audio driver.  Update
+    booting-without-of.txt with information on the SSI device.
+    
+    Signed-off-by: Timur Tabi <timur@freescale.com>
+    Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+ arch/powerpc/boot/dts/mpc8610_hpcd.dts      |  113 ++++++++++++++++++
+ arch/powerpc/configs/mpc8610_hpcd_defconfig |  171 +++++++++++++++++++++++++++-
+ arch/powerpc/platforms/86xx/mpc8610_hpcd.c  |   14 ++
+ mvl_patches/pro50-1393.c                    |   16 ++
+ 4 files changed, 310 insertions(+), 4 deletions(-)
+
+
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8610_hpcd.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8610_hpcd.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8610_hpcd.dts
+@@ -1,7 +1,7 @@
+ /*
+  * MPC8610 HPCD Device Tree Source
+  *
+- * Copyright 2007 Freescale Semiconductor Inc.
++ * Copyright 2007-2008 Freescale Semiconductor Inc.
+  *
+  * This program is free software; you can redistribute  it and/or modify it
+  * under the terms of the GNU General Public License Version 2 as published
+@@ -49,6 +49,7 @@
+ 		#size-cells = <1>;
+ 		#interrupt-cells = <2>;
+ 		device_type = "soc";
++		compatible = "fsl,mpc8610-immr", "simple-bus";
+ 		ranges = <0 e0000000 00100000>;
+ 		reg = <e0000000 1000>;
+ 		bus-frequency = <0>;
+@@ -62,6 +63,13 @@
+ 			interrupts = <2b 2>;
+ 			interrupt-parent = <&mpic>;
+ 			dfsrr;
++
++                        cs4270:codec@4f {
++				compatible = "cirrus,cs4270";
++                                reg = <4f>;
++				/* MCLK source is a stand-alone oscillator */
++				clock-frequency = <bb8000>;
++                        };
+ 		};
+ 
+ 		i2c@3100 {
+@@ -111,6 +119,109 @@
+ 			reg = <e0000 1000>;
+ 			fsl,has-rstcr;
+ 		};
++
++		i2s@16000 {
++			compatible = "fsl,mpc8610-ssi";
++			cell-index = <0>;
++			reg = <16000 100>;
++			interrupt-parent = <&mpic>;
++			interrupts = <3e 2>;
++			fsl,mode = "i2s-slave";
++			codec-handle = <&cs4270>;
++		};
++
++		ssi@16100 {
++			compatible = "fsl,mpc8610-ssi";
++			cell-index = <1>;
++			reg = <16100 100>;
++			interrupt-parent = <&mpic>;
++			interrupts = <3f 2>;
++		};
++
++                dma@21300 {
++                        #address-cells = <1>;
++                        #size-cells = <1>;
++                        compatible = "fsl,mpc8610-dma", "fsl,eloplus-dma";
++                        cell-index = <0>;
++                        reg = <21300 4>; /* DMA general status register */
++                        ranges = <0 21100 200>;
++
++                        dma-channel@0 {
++				compatible = "fsl,mpc8610-dma-channel",
++					"fsl,eloplus-dma-channel";
++				cell-index = <0>;
++				reg = <0 80>;
++				interrupt-parent = <&mpic>;
++				interrupts = <14 2>;
++                        };
++                        dma-channel@1 {
++				compatible = "fsl,mpc8610-dma-channel",
++					"fsl,eloplus-dma-channel";
++				cell-index = <1>;
++				reg = <80 80>;
++				interrupt-parent = <&mpic>;
++				interrupts = <15 2>;
++                        };
++                        dma-channel@2 {
++				compatible = "fsl,mpc8610-dma-channel",
++					"fsl,eloplus-dma-channel";
++				cell-index = <2>;
++				reg = <100 80>;
++				interrupt-parent = <&mpic>;
++				interrupts = <16 2>;
++                        };
++                        dma-channel@3 {
++				compatible = "fsl,mpc8610-dma-channel",
++					"fsl,eloplus-dma-channel";
++				cell-index = <3>;
++				reg = <180 80>;
++				interrupt-parent = <&mpic>;
++				interrupts = <17 2>;
++                        };
++                };
++
++                dma@c300 {
++                        #address-cells = <1>;
++                        #size-cells = <1>;
++                        compatible = "fsl,mpc8610-dma", "fsl,mpc8540-dma";
++                        cell-index = <1>;
++                        reg = <c300 4>; /* DMA general status register */
++                        ranges = <0 c100 200>;
++
++                        dma-channel@0 {
++				compatible = "fsl,mpc8610-dma-channel",
++					"fsl,mpc8540-dma-channel";
++				cell-index = <0>;
++				reg = <0 80>;
++				interrupt-parent = <&mpic>;
++				interrupts = <3c 2>;
++                        };
++                        dma-channel@1 {
++				compatible = "fsl,mpc8610-dma-channel",
++					"fsl,mpc8540-dma-channel";
++				cell-index = <1>;
++				reg = <80 80>;
++				interrupt-parent = <&mpic>;
++				interrupts = <3d 2>;
++                        };
++                        dma-channel@2 {
++				compatible = "fsl,mpc8610-dma-channel",
++					"fsl,mpc8540-dma-channel";
++				cell-index = <2>;
++				reg = <100 80>;
++				interrupt-parent = <&mpic>;
++				interrupts = <3e 2>;
++                        };
++                        dma-channel@3 {
++				compatible = "fsl,mpc8610-dma-channel",
++					"fsl,mpc8540-dma-channel";
++				cell-index = <3>;
++				reg = <180 80>;
++				interrupt-parent = <&mpic>;
++				interrupts = <3f 2>;
++                        };
++                };
++
+ 	};
+ 
+ 	pci0: pci@e0008000 {
+Index: linux-2.6.18/arch/powerpc/configs/mpc8610_hpcd_defconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/configs/mpc8610_hpcd_defconfig
++++ linux-2.6.18/arch/powerpc/configs/mpc8610_hpcd_defconfig
+@@ -683,7 +683,7 @@ CONFIG_SERIAL_8250_RSA=y
+ CONFIG_SERIAL_CORE=y
+ CONFIG_SERIAL_CORE_CONSOLE=y
+ # CONFIG_SERIAL_JSM is not set
+-CONFIG_SERIAL_OF_PLATFORM=y
++# CONFIG_SERIAL_OF_PLATFORM is not set
+ CONFIG_UNIX98_PTYS=y
+ # CONFIG_LEGACY_PTYS is not set
+ # CONFIG_IPMI_HANDLER is not set
+@@ -698,7 +698,60 @@ CONFIG_UNIX98_PTYS=y
+ # CONFIG_RAW_DRIVER is not set
+ # CONFIG_TCG_TPM is not set
+ CONFIG_DEVPORT=y
+-# CONFIG_I2C is not set
++CONFIG_I2C=y
++CONFIG_I2C_BOARDINFO=y
++# CONFIG_I2C_CHARDEV is not set
++
++#
++# I2C Algorithms
++#
++# CONFIG_I2C_ALGOBIT is not set
++# CONFIG_I2C_ALGOPCF is not set
++# CONFIG_I2C_ALGOPCA is not set
++
++#
++# I2C Hardware Bus support
++#
++# CONFIG_I2C_ALI1535 is not set
++# CONFIG_I2C_ALI1563 is not set
++# CONFIG_I2C_ALI15X3 is not set
++# CONFIG_I2C_AMD756 is not set
++# CONFIG_I2C_AMD8111 is not set
++# CONFIG_I2C_I801 is not set
++# CONFIG_I2C_I810 is not set
++# CONFIG_I2C_PIIX4 is not set
++CONFIG_I2C_MPC=y
++# CONFIG_I2C_NFORCE2 is not set
++# CONFIG_I2C_OCORES is not set
++# CONFIG_I2C_PARPORT_LIGHT is not set
++# CONFIG_I2C_PROSAVAGE is not set
++# CONFIG_I2C_SAVAGE4 is not set
++# CONFIG_I2C_SIMTEC is not set
++# CONFIG_I2C_SIS5595 is not set
++# CONFIG_I2C_SIS630 is not set
++# CONFIG_I2C_SIS96X is not set
++# CONFIG_I2C_TAOS_EVM is not set
++# CONFIG_I2C_VIA is not set
++# CONFIG_I2C_VIAPRO is not set
++# CONFIG_I2C_VOODOO3 is not set
++
++#
++# Miscellaneous I2C Chip support
++#
++# CONFIG_SENSORS_DS1337 is not set
++# CONFIG_SENSORS_DS1374 is not set
++# CONFIG_DS1682 is not set
++# CONFIG_SENSORS_EEPROM is not set
++# CONFIG_SENSORS_PCF8574 is not set
++# CONFIG_SENSORS_PCA9539 is not set
++# CONFIG_SENSORS_PCF8591 is not set
++# CONFIG_SENSORS_M41T00 is not set
++# CONFIG_SENSORS_MAX6875 is not set
++# CONFIG_SENSORS_TSL2550 is not set
++# CONFIG_I2C_DEBUG_CORE is not set
++# CONFIG_I2C_DEBUG_ALGO is not set
++# CONFIG_I2C_DEBUG_BUS is not set
++# CONFIG_I2C_DEBUG_CHIP is not set
+ 
+ #
+ # SPI support
+@@ -745,7 +798,119 @@ CONFIG_DUMMY_CONSOLE=y
+ #
+ # Sound
+ #
+-# CONFIG_SOUND is not set
++CONFIG_SOUND=y
++
++#
++# Advanced Linux Sound Architecture
++#
++CONFIG_SND=y
++CONFIG_SND_TIMER=y
++CONFIG_SND_PCM=y
++# CONFIG_SND_SEQUENCER is not set
++CONFIG_SND_OSSEMUL=y
++CONFIG_SND_MIXER_OSS=y
++CONFIG_SND_PCM_OSS=y
++# CONFIG_SND_PCM_OSS_PLUGINS is not set
++# CONFIG_SND_DYNAMIC_MINORS is not set
++# CONFIG_SND_SUPPORT_OLD_API is not set
++CONFIG_SND_VERBOSE_PROCFS=y
++# CONFIG_SND_VERBOSE_PRINTK is not set
++# CONFIG_SND_DEBUG is not set
++
++#
++# Generic devices
++#
++# CONFIG_SND_DUMMY is not set
++# CONFIG_SND_MTPAV is not set
++# CONFIG_SND_SERIAL_U16550 is not set
++# CONFIG_SND_MPU401 is not set
++
++#
++# PCI devices
++#
++# CONFIG_SND_AD1889 is not set
++# CONFIG_SND_ALS300 is not set
++# CONFIG_SND_ALS4000 is not set
++# CONFIG_SND_ALI5451 is not set
++# CONFIG_SND_ATIIXP is not set
++# CONFIG_SND_ATIIXP_MODEM is not set
++# CONFIG_SND_AU8810 is not set
++# CONFIG_SND_AU8820 is not set
++# CONFIG_SND_AU8830 is not set
++# CONFIG_SND_AZT3328 is not set
++# CONFIG_SND_BT87X is not set
++# CONFIG_SND_CA0106 is not set
++# CONFIG_SND_CMIPCI is not set
++# CONFIG_SND_CS4281 is not set
++# CONFIG_SND_CS46XX is not set
++# CONFIG_SND_CS5530 is not set
++# CONFIG_SND_DARLA20 is not set
++# CONFIG_SND_GINA20 is not set
++# CONFIG_SND_LAYLA20 is not set
++# CONFIG_SND_DARLA24 is not set
++# CONFIG_SND_GINA24 is not set
++# CONFIG_SND_LAYLA24 is not set
++# CONFIG_SND_MONA is not set
++# CONFIG_SND_MIA is not set
++# CONFIG_SND_ECHO3G is not set
++# CONFIG_SND_INDIGO is not set
++# CONFIG_SND_INDIGOIO is not set
++# CONFIG_SND_INDIGODJ is not set
++# CONFIG_SND_EMU10K1 is not set
++# CONFIG_SND_EMU10K1X is not set
++# CONFIG_SND_ENS1370 is not set
++# CONFIG_SND_ENS1371 is not set
++# CONFIG_SND_ES1938 is not set
++# CONFIG_SND_ES1968 is not set
++# CONFIG_SND_FM801 is not set
++# CONFIG_SND_HDA_INTEL is not set
++# CONFIG_SND_HDSP is not set
++# CONFIG_SND_HDSPM is not set
++# CONFIG_SND_ICE1712 is not set
++# CONFIG_SND_ICE1724 is not set
++# CONFIG_SND_INTEL8X0 is not set
++# CONFIG_SND_INTEL8X0M is not set
++# CONFIG_SND_KORG1212 is not set
++# CONFIG_SND_MAESTRO3 is not set
++# CONFIG_SND_MIXART is not set
++# CONFIG_SND_NM256 is not set
++# CONFIG_SND_PCXHR is not set
++# CONFIG_SND_RIPTIDE is not set
++# CONFIG_SND_RME32 is not set
++# CONFIG_SND_RME96 is not set
++# CONFIG_SND_RME9652 is not set
++# CONFIG_SND_SONICVIBES is not set
++# CONFIG_SND_TRIDENT is not set
++# CONFIG_SND_VIA82XX is not set
++# CONFIG_SND_VIA82XX_MODEM is not set
++# CONFIG_SND_VX222 is not set
++# CONFIG_SND_YMFPCI is not set
++
++#
++# ALSA PowerMac devices
++#
++
++#
++# ALSA PowerPC devices
++#
++
++#
++# System on Chip audio support
++#
++CONFIG_SND_SOC=y
++
++#
++# SoC Audio support for SuperH
++#
++
++#
++# ALSA SoC audio for Freescale SOCs
++#
++CONFIG_SND_SOC_MPC8610=y
++CONFIG_SND_SOC_MPC8610_HPCD=y
++CONFIG_SND_SOC_CS4270=y
++CONFIG_SND_SOC_CS4270_VD33_ERRATA=y
++
+ CONFIG_HID_SUPPORT=y
+ CONFIG_HID=y
+ # CONFIG_HID_DEBUG is not set
+Index: linux-2.6.18/arch/powerpc/platforms/86xx/mpc8610_hpcd.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/86xx/mpc8610_hpcd.c
++++ linux-2.6.18/arch/powerpc/platforms/86xx/mpc8610_hpcd.c
+@@ -37,6 +37,20 @@
+ #include <sysdev/fsl_pci.h>
+ #include <sysdev/fsl_soc.h>
+ 
++static struct of_device_id __initdata mpc8610_ids[] = {
++	{ .compatible = "fsl,mpc8610-immr", },
++	{}
++};
++
++static int __init mpc8610_declare_of_platform_devices(void)
++{
++	/* Without this call, the SSI device driver won't get probed. */
++	of_platform_bus_probe(NULL, mpc8610_ids, NULL);
++
++	return 0;
++}
++machine_device_initcall(mpc86xx_hpcd, mpc8610_declare_of_platform_devices);
++
+ void __init
+ mpc86xx_hpcd_init_irq(void)
+ {
+Index: linux-2.6.18/mvl_patches/pro50-1393.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1393.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1393);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

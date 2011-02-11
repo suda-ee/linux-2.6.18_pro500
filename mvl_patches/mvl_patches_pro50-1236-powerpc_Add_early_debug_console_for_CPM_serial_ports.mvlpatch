@@ -1,0 +1,448 @@
+#! /usr/bin/env bash
+# Patch: -powerpc_Add_early_debug_console_for_CPM_serial_ports
+# Date: Thu Jun 26 14:12:20 2008
+# Source: Scott Wood <scottwood@freescale.com>
+# 	backport from 2.6.24-rc1(c374e00e17f1c10768d5af922a1ff33e43df2eb0)
+# MR: 27582
+# Type: Enhancement
+# Disposition: local
+# Signed-off-by: Gennadiy Kurtsman <gkurtsman@ru.mvista.com>
+# Description:
+# commit c374e00e17f1c10768d5af922a1ff33e43df2eb0
+# 
+# Author: Scott Wood <scottwood@freescale.com>
+# Date:   07/16/2007 08:43:43 PM
+# 
+# 
+#     [POWERPC] Add early debug console for CPM serial ports.
+#     
+#     This code assumes that the ports have been previously set up, with
+#     buffers in DPRAM.
+#     
+#     Signed-off-by: Scott Wood <scottwood@freescale.com>
+#     Acked-by: David Gibson <david@gibson.dropbear.id.au>
+#     Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+
+PATCHNUM=1236
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Scott Wood <scottwood@freescale.com>
+	backport from 2.6.24-rc1(c374e00e17f1c10768d5af922a1ff33e43df2eb0)
+MR: 27582
+Type: Enhancement
+Disposition: local
+Signed-off-by: Gennadiy Kurtsman <gkurtsman@ru.mvista.com>
+Description:
+commit c374e00e17f1c10768d5af922a1ff33e43df2eb0
+
+Author: Scott Wood <scottwood@freescale.com>
+Date:   07/16/2007 08:43:43 PM
+
+
+    [POWERPC] Add early debug console for CPM serial ports.
+    
+    This code assumes that the ports have been previously set up, with
+    buffers in DPRAM.
+    
+    Signed-off-by: Scott Wood <scottwood@freescale.com>
+    Acked-by: David Gibson <david@gibson.dropbear.id.au>
+    Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+Index: linux-2.6.18/arch/powerpc/Kconfig.debug
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/Kconfig.debug
++++ linux-2.6.18/arch/powerpc/Kconfig.debug
+@@ -191,6 +191,15 @@ config PPC_EARLY_DEBUG_40x
+ 	  inbuilt serial port. This works on chips with a 16550 compatible
+ 	  UART. Xilinx chips with uartlite cannot use this option.
+ 
++config PPC_EARLY_DEBUG_CPM
++	bool "Early serial debugging for Freescale CPM-based serial ports"
++	depends on SERIAL_CPM
++	select PIN_TLB if PPC_8xx
++	help
++	  Select this to enable early debugging for Freescale chips
++	  using a CPM-based serial port.  This assumes that the bootwrapper
++	  has run, and set up the CPM in a particular way.
++
+ endchoice
+ 
+ config PPC_EARLY_DEBUG_44x_PHYSLOW
+@@ -211,4 +220,16 @@ config PPC_EARLY_DEBUG_40x_PHYSADDR
+ 	depends on PPC_EARLY_DEBUG_40x
+ 	default "0xef600300"
+ 
++config PPC_EARLY_DEBUG_CPM_ADDR
++	hex "CPM UART early debug transmit descriptor address"
++	depends on PPC_EARLY_DEBUG_CPM
++	default "0xfa202808" if PPC_EP88XC
++	default "0xf0000808" if CPM2
++	default "0xff002808" if CPM1
++	help
++	  This specifies the address of the transmit descriptor
++	  used for early debug output.  Because it is needed before
++	  platform probing is done, all platforms selected must
++	  share the same address.
++
+ endmenu
+Index: linux-2.6.18/arch/powerpc/kernel/head_32.S
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/head_32.S
++++ linux-2.6.18/arch/powerpc/kernel/head_32.S
+@@ -149,6 +149,9 @@ __after_mmu_off:
+ #if defined(CONFIG_BOOTX_TEXT)
+ 	bl	setup_disp_bat
+ #endif
++#ifdef CONFIG_PPC_EARLY_DEBUG_CPM
++	bl	setup_cpm_bat
++#endif
+ 
+ /*
+  * Call setup_cpu for CPU 0 and initialize 6xx Idle
+@@ -1250,6 +1253,19 @@ setup_disp_bat:
+ 	blr
+ #endif /* CONFIG_BOOTX_TEXT */
+ 
++#ifdef CONFIG_PPC_EARLY_DEBUG_CPM
++setup_cpm_bat:
++	lis	r8, 0xf000
++	ori	r8, r8,	0x002a
++	mtspr	SPRN_DBAT1L, r8
++
++	lis	r11, 0xf000
++	ori	r11, r11, (BL_1M << 2) | 2
++	mtspr	SPRN_DBAT1U, r11
++
++	blr
++#endif
++
+ #ifdef CONFIG_8260
+ /* Jump into the system reset for the rom.
+  * We first disable the MMU, and then jump to the ROM reset address.
+Index: linux-2.6.18/arch/powerpc/kernel/udbg.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/udbg.c
++++ linux-2.6.18/arch/powerpc/kernel/udbg.c
+@@ -55,6 +55,8 @@ void __init udbg_early_init(void)
+ #elif defined(CONFIG_PPC_EARLY_DEBUG_40x)
+ 	/* PPC40x debug */
+ 	udbg_init_40x_realmode();
++#elif defined(CONFIG_PPC_EARLY_DEBUG_CPM)
++	udbg_init_cpm();
+ #endif
+ 
+ #ifdef CONFIG_PPC_EARLY_DEBUG
+Index: linux-2.6.18/arch/powerpc/platforms/8xx/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/8xx/Kconfig
++++ linux-2.6.18/arch/powerpc/platforms/8xx/Kconfig
+@@ -3,6 +3,7 @@ config FADS
+ 
+ config CPM1
+ 	bool
++	select CPM
+ 
+ choice
+ 	prompt "8xx Machine Type"
+Index: linux-2.6.18/arch/powerpc/platforms/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/Kconfig
++++ linux-2.6.18/arch/powerpc/platforms/Kconfig
+@@ -380,6 +380,7 @@ config TAU_AVERAGE
+ config CPM2
+ 	bool
+ 	default n
++	select CPM
+ 	help
+ 	  The CPM2 (Communications Processor Module) is a coprocessor on
+ 	  embedded CPUs made by Freescale.  Selecting this option means that
+@@ -401,4 +402,7 @@ config OF_RTC
+ 	  Uses information from the OF or flattened device tree to instatiate
+ 	  platform devices for direct mapped RTC chips like the DS1742 or DS1743.
+ 
++config CPM
++	bool
++
+ endmenu
+Index: linux-2.6.18/arch/powerpc/sysdev/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/Makefile
++++ linux-2.6.18/arch/powerpc/sysdev/Makefile
+@@ -34,6 +34,7 @@ endif
+ 
+ # Temporary hack until we have migrated to asm-powerpc
+ ifeq ($(ARCH),powerpc)
++obj-$(CONFIG_CPM)		+= cpm_common.o
+ obj-$(CONFIG_CPM2)		+= cpm2_common.o cpm2_pic.o
+ obj-$(CONFIG_8xx)		+= mpc8xx_pic.o commproc.o
+ obj-$(CONFIG_UCODE_PATCH)	+= micropatch.o
+Index: linux-2.6.18/arch/powerpc/sysdev/cpm_common.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/sysdev/cpm_common.c
+@@ -0,0 +1,46 @@
++/*
++ * Common CPM code
++ *
++ * Author: Scott Wood <scottwood@freescale.com>
++ *
++ * Copyright 2007 Freescale Semiconductor, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of version 2 of the GNU General Public License as
++ * published by the Free Software Foundation.
++ */
++
++#include <linux/init.h>
++#include <asm/udbg.h>
++#include <asm/io.h>
++#include <asm/system.h>
++#include <mm/mmu_decl.h>
++
++#ifdef CONFIG_PPC_EARLY_DEBUG_CPM
++static u32 __iomem *cpm_udbg_txdesc =
++	(u32 __iomem __force *)CONFIG_PPC_EARLY_DEBUG_CPM_ADDR;
++
++static void udbg_putc_cpm(char c)
++{
++	u8 __iomem *txbuf = (u8 __iomem __force *)in_be32(&cpm_udbg_txdesc[1]);
++
++	if (c == '\n')
++		udbg_putc('\r');
++
++	while (in_be32(&cpm_udbg_txdesc[0]) & 0x80000000)
++		;
++
++	out_8(txbuf, c);
++	out_be32(&cpm_udbg_txdesc[0], 0xa0000001);
++}
++
++void __init udbg_init_cpm(void)
++{
++	if (cpm_udbg_txdesc) {
++#ifdef CONFIG_CPM2
++		setbat(1, 0xf0000000, 0xf0000000, 1024*1024, _PAGE_IO);
++#endif
++		udbg_putc = udbg_putc_cpm;
++	}
++}
++#endif
+Index: linux-2.6.18/include/asm-powerpc/udbg.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/udbg.h
++++ linux-2.6.18/include/asm-powerpc/udbg.h
+@@ -48,6 +48,7 @@ extern void __init udbg_init_debug_beat(
+ extern void __init udbg_init_btext(void);
+ extern void __init udbg_init_44x_as1(void);
+ extern void __init udbg_init_40x_realmode(void);
++extern void __init udbg_init_cpm(void);
+ 
+ #endif /* __KERNEL__ */
+ #endif /* _ASM_POWERPC_UDBG_H */
+Index: linux-2.6.18/mvl_patches/pro50-1236.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1236.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1236);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

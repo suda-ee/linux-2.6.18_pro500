@@ -1,0 +1,566 @@
+#! /usr/bin/env bash
+# Patch: -ohci_Add_support_for_OHCI_controller_on_the_of_plat
+# Date: Fri Oct 26 08:36:45 2007
+# MR: 24856
+# From 495a678fc62e850d15f860d39faee07ba0a8910c Mon Sep 17 00:00:00 2001
+# From: Sylvain Munaut <tnt@246tNt.com>
+# Date: Wed, 13 Dec 2006 21:09:55 +0100
+# Subject: [PATCH] ohci: Add support for OHCI controller on the of_platform bus
+# 
+# PPC embedded systems can have a ohci controller builtin. In the
+# new model, it will end up as a driver on the of_platform bus,
+# this patches takes care of them.
+# 
+# Signed-off-by: Sylvain Munaut <tnt@246tNt.com>
+# Acked-by: David Brownell <dbrownell@users.sourceforge.net>
+# Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+
+PATCHNUM=469
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From 495a678fc62e850d15f860d39faee07ba0a8910c Mon Sep 17 00:00:00 2001
+From: Sylvain Munaut <tnt@246tNt.com>
+Date: Wed, 13 Dec 2006 21:09:55 +0100
+Subject: [PATCH] ohci: Add support for OHCI controller on the of_platform bus
+
+PPC embedded systems can have a ohci controller builtin. In the
+new model, it will end up as a driver on the of_platform bus,
+this patches takes care of them.
+
+Signed-off-by: Sylvain Munaut <tnt@246tNt.com>
+Acked-by: David Brownell <dbrownell@users.sourceforge.net>
+Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+Index: linux-2.6.18/drivers/usb/host/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/Kconfig
++++ linux-2.6.18/drivers/usb/host/Kconfig
+@@ -131,9 +131,30 @@ config USB_OHCI_HCD_PPC_SOC
+ 	  Enables support for the USB controller on the MPC52xx or
+ 	  STB03xxx processor chip.  If unsure, say Y.
+ 
++config USB_OHCI_HCD_PPC_OF
++	bool "OHCI support for PPC USB controller on OF platform bus"
++	depends on USB_OHCI_HCD && PPC_OF
++	default y
++	---help---
++	  Enables support for the USB controller PowerPC present on the
++	  OpenFirmware platform bus.
++
++config USB_OHCI_HCD_PPC_OF_BE
++	bool "Support big endian HC"
++	depends on USB_OHCI_HCD_PPC_OF
++	default y
++	select USB_OHCI_BIG_ENDIAN_DESC
++	select USB_OHCI_BIG_ENDIAN_MMIO
++
++config USB_OHCI_HCD_PPC_OF_LE
++	bool "Support little endian HC"
++	depends on USB_OHCI_HCD_PPC_OF
++	default n
++	select USB_OHCI_LITTLE_ENDIAN
++
+ config USB_OHCI_HCD_PCI
+ 	bool "OHCI support for PCI-bus USB controllers"
+-	depends on USB_OHCI_HCD && PCI && (STB03xxx || PPC_MPC52xx)
++	depends on USB_OHCI_HCD && PCI && (STB03xxx || PPC_MPC52xx || USB_OHCI_HCD_PPC_OF)
+ 	default y
+ 	select USB_OHCI_LITTLE_ENDIAN
+ 	---help---
+Index: linux-2.6.18/drivers/usb/host/ohci-hcd.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-hcd.c
++++ linux-2.6.18/drivers/usb/host/ohci-hcd.c
+@@ -947,8 +947,14 @@ MODULE_LICENSE ("GPL");
+ #endif
+ 
+ 
++#ifdef CONFIG_USB_OHCI_HCD_PPC_OF
++#include "ohci-ppc-of.c"
++#define OF_PLATFORM_DRIVER	ohci_hcd_ppc_of_driver
++#endif
++
+ #if	!defined(PCI_DRIVER) &&		\
+ 	!defined(PLATFORM_DRIVER) &&	\
++	!defined(OF_PLATFORM_DRIVER) &&	\
+ 	!defined(SA1111_DRIVER)
+ #error "missing bus glue for ohci-hcd"
+ #endif
+@@ -972,6 +978,13 @@ static int __init ohci_hcd_mod_init(void
+ 	ls++;
+ #endif
+ 
++#ifdef OF_PLATFORM_DRIVER
++	retval = of_register_platform_driver(&OF_PLATFORM_DRIVER);
++	if (retval < 0)
++		goto error;
++	ls++;
++#endif
++
+ #ifdef SA1111_DRIVER
+ 	retval = sa1111_driver_register(&SA1111_DRIVER);
+ 	if (retval < 0)
+@@ -994,6 +1007,10 @@ error:
+ 	if (ls--)
+ 		platform_driver_unregister(&PLATFORM_DRIVER);
+ #endif
++#ifdef OF_PLATFORM_DRIVER
++	if (ls--)
++		of_unregister_platform_driver(&OF_PLATFORM_DRIVER);
++#endif
+ #ifdef SA1111_DRIVER
+ 	if (ls--)
+ 		sa1111_driver_unregister(&SA1111_DRIVER);
+@@ -1010,6 +1027,9 @@ static void __exit ohci_hcd_mod_exit(voi
+ #ifdef SA1111_DRIVER
+ 	sa1111_driver_unregister(&SA1111_DRIVER);
+ #endif
++#ifdef OF_PLATFORM_DRIVER
++	of_unregister_platform_driver(&OF_PLATFORM_DRIVER);
++#endif
+ #ifdef PLATFORM_DRIVER
+ 	platform_driver_unregister(&PLATFORM_DRIVER);
+ #endif
+Index: linux-2.6.18/drivers/usb/host/ohci-ppc-of.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/usb/host/ohci-ppc-of.c
+@@ -0,0 +1,232 @@
++/*
++ * OHCI HCD (Host Controller Driver) for USB.
++ *
++ * (C) Copyright 1999 Roman Weissgaerber <weissg@vienna.at>
++ * (C) Copyright 2000-2002 David Brownell <dbrownell@users.sourceforge.net>
++ * (C) Copyright 2002 Hewlett-Packard Company
++ * (C) Copyright 2006 Sylvain Munaut <tnt@246tNt.com>
++ *
++ * Bus glue for OHCI HC on the of_platform bus
++ *
++ * Modified for of_platform bus from ohci-sa1111.c
++ *
++ * This file is licenced under the GPL.
++ */
++
++#include <linux/signal.h>
++
++#include <asm/of_platform.h>
++#include <asm/prom.h>
++
++
++static int __devinit
++ohci_ppc_of_start(struct usb_hcd *hcd)
++{
++	struct ohci_hcd	*ohci = hcd_to_ohci(hcd);
++	int		ret;
++
++	if ((ret = ohci_init(ohci)) < 0)
++		return ret;
++
++	if ((ret = ohci_run(ohci)) < 0) {
++		err("can't start %s", ohci_to_hcd(ohci)->self.bus_name);
++		ohci_stop(hcd);
++		return ret;
++	}
++
++	return 0;
++}
++
++static const struct hc_driver ohci_ppc_of_hc_driver = {
++	.description =		hcd_name,
++	.product_desc =		"OF OHCI",
++	.hcd_priv_size =	sizeof(struct ohci_hcd),
++
++	/*
++	 * generic hardware linkage
++	 */
++	.irq =			ohci_irq,
++	.flags =		HCD_USB11 | HCD_MEMORY,
++
++	/*
++	 * basic lifecycle operations
++	 */
++	.start =		ohci_ppc_of_start,
++	.stop =			ohci_stop,
++	.shutdown = 		ohci_shutdown,
++
++	/*
++	 * managing i/o requests and associated device resources
++	 */
++	.urb_enqueue =		ohci_urb_enqueue,
++	.urb_dequeue =		ohci_urb_dequeue,
++	.endpoint_disable =	ohci_endpoint_disable,
++
++	/*
++	 * scheduling support
++	 */
++	.get_frame_number =	ohci_get_frame,
++
++	/*
++	 * root hub support
++	 */
++	.hub_status_data =	ohci_hub_status_data,
++	.hub_control =		ohci_hub_control,
++	.hub_irq_enable =	ohci_rhsc_enable,
++#ifdef	CONFIG_PM
++	.bus_suspend =		ohci_bus_suspend,
++	.bus_resume =		ohci_bus_resume,
++#endif
++	.start_port_reset =	ohci_start_port_reset,
++};
++
++
++static int __devinit
++ohci_hcd_ppc_of_probe(struct of_device *op, const struct of_device_id *match)
++{
++	struct device_node *dn = op->node;
++	struct usb_hcd *hcd;
++	struct ohci_hcd	*ohci;
++	struct resource res;
++	int irq;
++
++	int rv;
++	int is_bigendian;
++
++	if (usb_disabled())
++		return -ENODEV;
++
++	is_bigendian =
++		device_is_compatible(dn, "ohci-bigendian") ||
++		device_is_compatible(dn, "ohci-be");
++
++	dev_dbg(&op->dev, "initializing PPC-OF USB Controller\n");
++
++	rv = of_address_to_resource(dn, 0, &res);
++	if (rv)
++		return rv;
++
++	hcd = usb_create_hcd(&ohci_ppc_of_hc_driver, &op->dev, "PPC-OF USB");
++	if (!hcd)
++		return -ENOMEM;
++
++	hcd->rsrc_start = res.start;
++	hcd->rsrc_len = res.end - res.start + 1;
++
++	if (!request_mem_region(hcd->rsrc_start, hcd->rsrc_len, hcd_name)) {
++		printk(KERN_ERR __FILE__ ": request_mem_region failed\n");
++		rv = -EBUSY;
++		goto err_rmr;
++	}
++
++	irq = irq_of_parse_and_map(dn, 0);
++	if (irq == NO_IRQ) {
++		printk(KERN_ERR __FILE__ ": irq_of_parse_and_map failed\n");
++		rv = -EBUSY;
++		goto err_irq;
++	}
++
++	hcd->regs = ioremap(hcd->rsrc_start, hcd->rsrc_len);
++	if (!hcd->regs) {
++		printk(KERN_ERR __FILE__ ": ioremap failed\n");
++		rv = -ENOMEM;
++		goto err_ioremap;
++	}
++
++	ohci = hcd_to_ohci(hcd);
++	if (is_bigendian)
++		ohci->flags |= OHCI_QUIRK_BE_MMIO | OHCI_QUIRK_BE_DESC;
++
++	ohci_hcd_init(ohci);
++
++	rv = usb_add_hcd(hcd, irq, 0);
++	if (rv == 0)
++		return 0;
++
++	iounmap(hcd->regs);
++err_ioremap:
++	irq_dispose_mapping(irq);
++err_irq:
++	release_mem_region(hcd->rsrc_start, hcd->rsrc_len);
++err_rmr:
++ 	usb_put_hcd(hcd);
++
++	return rv;
++}
++
++static int ohci_hcd_ppc_of_remove(struct of_device *op)
++{
++	struct usb_hcd *hcd = dev_get_drvdata(&op->dev);
++	dev_set_drvdata(&op->dev, NULL);
++
++	dev_dbg(&op->dev, "stopping PPC-OF USB Controller\n");
++
++	usb_remove_hcd(hcd);
++
++	iounmap(hcd->regs);
++	irq_dispose_mapping(hcd->irq);
++	release_mem_region(hcd->rsrc_start, hcd->rsrc_len);
++
++	usb_put_hcd(hcd);
++
++	return 0;
++}
++
++static int ohci_hcd_ppc_of_shutdown(struct of_device *op)
++{
++	struct usb_hcd *hcd = dev_get_drvdata(&op->dev);
++
++        if (hcd->driver->shutdown)
++                hcd->driver->shutdown(hcd);
++
++	return 0;
++}
++
++
++static struct of_device_id ohci_hcd_ppc_of_match[] = {
++#ifdef CONFIG_USB_OHCI_HCD_PPC_OF_BE
++	{
++		.name = "usb",
++		.compatible = "ohci-bigendian",
++	},
++	{
++		.name = "usb",
++		.compatible = "ohci-be",
++	},
++#endif
++#ifdef CONFIG_USB_OHCI_HCD_PPC_OF_LE
++	{
++		.name = "usb",
++		.compatible = "ohci-littledian",
++	},
++	{
++		.name = "usb",
++		.compatible = "ohci-le",
++	},
++#endif
++	{},
++};
++MODULE_DEVICE_TABLE(of, ohci_hcd_ppc_of_match);
++
++#if	!defined(CONFIG_USB_OHCI_HCD_PPC_OF_BE) && \
++	!defined(CONFIG_USB_OHCI_HCD_PPC_OF_LE)
++#error "No endianess selected for ppc-of-ohci"
++#endif
++
++
++static struct of_platform_driver ohci_hcd_ppc_of_driver = {
++	.name		= "ppc-of-ohci",
++	.match_table	= ohci_hcd_ppc_of_match,
++	.probe		= ohci_hcd_ppc_of_probe,
++	.remove		= ohci_hcd_ppc_of_remove,
++	.shutdown 	= ohci_hcd_ppc_of_shutdown,
++#ifdef CONFIG_PM
++	/*.suspend	= ohci_hcd_ppc_soc_drv_suspend,*/
++	/*.resume	= ohci_hcd_ppc_soc_drv_resume,*/
++#endif
++	.driver		= {
++		.name	= "ppc-of-ohci",
++		.owner	= THIS_MODULE,
++	},
++};
++
+Index: linux-2.6.18/mvl_patches/pro50-0469.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0469.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(469);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

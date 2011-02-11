@@ -1,0 +1,1507 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Rename_get_property_to_of_get_property_arch_powerpc
+# Date: Thu Sep  6 08:27:41 2007
+# MR: 23896
+# 
+# From mainsteram's patch the following files were removed:
+# arch/powerpc/kernel/ibmebus.c
+# arch/powerpc/kernel/legacy_serial.c
+# arch/powerpc/kernel/vio.c
+# arch/powerpc/sysdev/mpic.c
+# 
+# From e2eb63927bfcb54232163bfec32440246fd44457 Mon Sep 17 00:00:00 2001
+# From: Stephen Rothwell <sfr@canb.auug.org.au>
+# Date: Tue, 3 Apr 2007 22:26:41 +1000
+# Subject: [PATCH] [POWERPC] Rename get_property to of_get_property: arch/powerpc
+# 
+# Signed-off-by: Stephen Rothwell <sfr@canb.auug.org.au>
+# Acked-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+# 
+
+PATCHNUM=170
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 23896
+
+From mainsteram's patch the following files were removed:
+arch/powerpc/kernel/ibmebus.c
+arch/powerpc/kernel/legacy_serial.c
+arch/powerpc/kernel/vio.c
+arch/powerpc/sysdev/mpic.c
+
+From e2eb63927bfcb54232163bfec32440246fd44457 Mon Sep 17 00:00:00 2001
+From: Stephen Rothwell <sfr@canb.auug.org.au>
+Date: Tue, 3 Apr 2007 22:26:41 +1000
+Subject: [PATCH] [POWERPC] Rename get_property to of_get_property: arch/powerpc
+
+Signed-off-by: Stephen Rothwell <sfr@canb.auug.org.au>
+Acked-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+Index: linux-2.6.18/arch/powerpc/kernel/btext.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/btext.c
++++ linux-2.6.18/arch/powerpc/kernel/btext.c
+@@ -160,33 +160,33 @@ int btext_initialize(struct device_node 
+ 	unsigned long address = 0;
+ 	const u32 *prop;
+ 
+-	prop = get_property(np, "linux,bootx-width", NULL);
++	prop = of_get_property(np, "linux,bootx-width", NULL);
+ 	if (prop == NULL)
+-		prop = get_property(np, "width", NULL);
++		prop = of_get_property(np, "width", NULL);
+ 	if (prop == NULL)
+ 		return -EINVAL;
+ 	width = *prop;
+-	prop = get_property(np, "linux,bootx-height", NULL);
++	prop = of_get_property(np, "linux,bootx-height", NULL);
+ 	if (prop == NULL)
+-		prop = get_property(np, "height", NULL);
++		prop = of_get_property(np, "height", NULL);
+ 	if (prop == NULL)
+ 		return -EINVAL;
+ 	height = *prop;
+-	prop = get_property(np, "linux,bootx-depth", NULL);
++	prop = of_get_property(np, "linux,bootx-depth", NULL);
+ 	if (prop == NULL)
+-		prop = get_property(np, "depth", NULL);
++		prop = of_get_property(np, "depth", NULL);
+ 	if (prop == NULL)
+ 		return -EINVAL;
+ 	depth = *prop;
+ 	pitch = width * ((depth + 7) / 8);
+-	prop = get_property(np, "linux,bootx-linebytes", NULL);
++	prop = of_get_property(np, "linux,bootx-linebytes", NULL);
+ 	if (prop == NULL)
+-		prop = get_property(np, "linebytes", NULL);
++		prop = of_get_property(np, "linebytes", NULL);
+ 	if (prop && *prop != 0xffffffffu)
+ 		pitch = *prop;
+ 	if (pitch == 1)
+ 		pitch = 0x1000;
+-	prop = get_property(np, "address", NULL);
++	prop = of_get_property(np, "address", NULL);
+ 	if (prop)
+ 		address = *prop;
+ 
+@@ -218,7 +218,7 @@ int __init btext_find_display(int allow_
+ 	struct device_node *np = NULL; 
+ 	int rc = -ENODEV;
+ 
+-	name = get_property(of_chosen, "linux,stdout-path", NULL);
++	name = of_get_property(of_chosen, "linux,stdout-path", NULL);
+ 	if (name != NULL) {
+ 		np = of_find_node_by_path(name);
+ 		if (np != NULL) {
+@@ -235,7 +235,7 @@ int __init btext_find_display(int allow_
+ 		return rc;
+ 
+ 	for (np = NULL; (np = of_find_node_by_type(np, "display"));) {
+-		if (get_property(np, "linux,opened", NULL)) {
++		if (of_get_property(np, "linux,opened", NULL)) {
+ 			printk("trying %s ...\n", np->full_name);
+ 			rc = btext_initialize(np);
+ 			printk("result: %d\n", rc);
+Index: linux-2.6.18/arch/powerpc/kernel/lparcfg.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/lparcfg.c
++++ linux-2.6.18/arch/powerpc/kernel/lparcfg.c
+@@ -323,7 +323,7 @@ static int pseries_lparcfg_data(struct s
+ 
+ 	rtas_node = find_path_device("/rtas");
+ 	if (rtas_node)
+-		lrdrp = get_property(rtas_node, "ibm,lrdr-capacity", NULL);
++		lrdrp = of_get_property(rtas_node, "ibm,lrdr-capacity", NULL);
+ 
+ 	if (lrdrp == NULL) {
+ 		partition_potential_processors = vdso_data->processorCount;
+@@ -535,21 +535,22 @@ static int lparcfg_data(struct seq_file 
+ 
+ 	rootdn = find_path_device("/");
+ 	if (rootdn) {
+-		tmp = get_property(rootdn, "model", NULL);
++		tmp = of_get_property(rootdn, "model", NULL);
+ 		if (tmp) {
+ 			model = tmp;
+ 			/* Skip "IBM," - see platforms/iseries/dt.c */
+ 			if (firmware_has_feature(FW_FEATURE_ISERIES))
+ 				model += 4;
+ 		}
+-		tmp = get_property(rootdn, "system-id", NULL);
++		tmp = of_get_property(rootdn, "system-id", NULL);
+ 		if (tmp) {
+ 			system_id = tmp;
+ 			/* Skip "IBM," - see platforms/iseries/dt.c */
+ 			if (firmware_has_feature(FW_FEATURE_ISERIES))
+ 				system_id += 4;
+ 		}
+-		lp_index_ptr = get_property(rootdn, "ibm,partition-no", NULL);
++		lp_index_ptr = of_get_property(rootdn, "ibm,partition-no",
++					NULL);
+ 		if (lp_index_ptr)
+ 			lp_index = *lp_index_ptr;
+ 	}
+Index: linux-2.6.18/arch/powerpc/kernel/machine_kexec_64.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/machine_kexec_64.c
++++ linux-2.6.18/arch/powerpc/kernel/machine_kexec_64.c
+@@ -72,8 +72,8 @@ int default_machine_kexec_prepare(struct
+ 	/* We also should not overwrite the tce tables */
+ 	for (node = of_find_node_by_type(NULL, "pci"); node != NULL;
+ 			node = of_find_node_by_type(node, "pci")) {
+-		basep = get_property(node, "linux,tce-base", NULL);
+-		sizep = get_property(node, "linux,tce-size", NULL);
++		basep = of_get_property(node, "linux,tce-base", NULL);
++		sizep = of_get_property(node, "linux,tce-size", NULL);
+ 		if (basep == NULL || sizep == NULL)
+ 			continue;
+ 
+Index: linux-2.6.18/arch/powerpc/kernel/of_platform.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/of_platform.c
++++ linux-2.6.18/arch/powerpc/kernel/of_platform.c
+@@ -176,7 +176,7 @@ static void of_platform_make_bus_id(stru
+ 	 * and 'D' for MMIO DCRs.
+ 	 */
+ #ifdef CONFIG_PPC_DCR
+-	reg = get_property(node, "dcr-reg", NULL);
++	reg = of_get_property(node, "dcr-reg", NULL);
+ 	if (reg) {
+ #ifdef CONFIG_PPC_DCR_NATIVE
+ 		snprintf(name, BUS_ID_SIZE, "d%x.%s",
+@@ -196,7 +196,7 @@ static void of_platform_make_bus_id(stru
+ 	/*
+ 	 * For MMIO, get the physical address
+ 	 */
+-	reg = get_property(node, "reg", NULL);
++	reg = of_get_property(node, "reg", NULL);
+ 	if (reg) {
+ 		addr = of_translate_address(node, reg);
+ 		if (addr != OF_BAD_ADDR) {
+Index: linux-2.6.18/arch/powerpc/kernel/pci_32.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_32.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_32.c
+@@ -657,7 +657,7 @@ make_one_node_map(struct device_node* no
+ 
+ 	if (pci_bus >= pci_bus_count)
+ 		return;
+-	bus_range = get_property(node, "bus-range", &len);
++	bus_range = of_get_property(node, "bus-range", &len);
+ 	if (bus_range == NULL || len < 2 * sizeof(int)) {
+ 		printk(KERN_WARNING "Can't get bus-range for %s, "
+ 		       "assuming it starts at 0\n", node->full_name);
+@@ -669,11 +669,11 @@ make_one_node_map(struct device_node* no
+ 		struct pci_dev* dev;
+ 		const unsigned int *class_code, *reg;
+ 	
+-		class_code = get_property(node, "class-code", NULL);
++		class_code = of_get_property(node, "class-code", NULL);
+ 		if (!class_code || ((*class_code >> 8) != PCI_CLASS_BRIDGE_PCI &&
+ 			(*class_code >> 8) != PCI_CLASS_BRIDGE_CARDBUS))
+ 			continue;
+-		reg = get_property(node, "reg", NULL);
++		reg = of_get_property(node, "reg", NULL);
+ 		if (!reg)
+ 			continue;
+ 		dev = pci_find_slot(pci_bus, ((reg[0] >> 8) & 0xff));
+@@ -744,7 +744,7 @@ scan_OF_pci_childs(struct device_node* n
+ 		 * a fake root for all functions of a multi-function device,
+ 		 * we go down them as well.
+ 		 */
+-		class_code = get_property(node, "class-code", NULL);
++		class_code = of_get_property(node, "class-code", NULL);
+ 		if ((!class_code || ((*class_code >> 8) != PCI_CLASS_BRIDGE_PCI &&
+ 			(*class_code >> 8) != PCI_CLASS_BRIDGE_CARDBUS)) &&
+ 			strcmp(node->name, "multifunc-device"))
+@@ -764,7 +764,7 @@ static struct device_node *scan_OF_for_p
+ 	unsigned int psize;
+ 
+ 	while ((np = of_get_next_child(parent, np)) != NULL) {
+-		reg = get_property(np, "reg", &psize);
++		reg = of_get_property(np, "reg", &psize);
+ 		if (reg == NULL || psize < 4)
+ 			continue;
+ 		if (((reg[0] >> 8) & 0xff) == devfn)
+@@ -879,7 +879,7 @@ pci_device_from_OF_node(struct device_no
+ 	if (!scan_OF_pci_childs(((struct device_node*)hose->arch_data)->child,
+ 			find_OF_pci_device_filter, (void *)node))
+ 		return -ENODEV;
+-	reg = get_property(node, "reg", NULL);
++	reg = of_get_property(node, "reg", NULL);
+ 	if (!reg)
+ 		return -ENODEV;
+ 	*bus = (reg[0] >> 16) & 0xff;
+@@ -922,7 +922,7 @@ pci_process_bridge_OF_ranges(struct pci_
+ 	 * that can have more than 3 ranges, fortunately using contiguous
+ 	 * addresses -- BenH
+ 	 */
+-	dt_ranges = get_property(dev, "ranges", &rlen);
++	dt_ranges = of_get_property(dev, "ranges", &rlen);
+ 	if (!dt_ranges)
+ 		return;
+ 	/* Sanity check, though hopefully that never happens */
+Index: linux-2.6.18/arch/powerpc/kernel/pci_64.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_64.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_64.c
+@@ -258,7 +258,7 @@ static u32 get_int_prop(struct device_no
+ 	const u32 *prop;
+ 	int len;
+ 
+-	prop = get_property(np, name, &len);
++	prop = of_get_property(np, name, &len);
+ 	if (prop && len >= 4)
+ 		return *prop;
+ 	return def;
+@@ -291,7 +291,7 @@ static void pci_parse_of_addrs(struct de
+ 	u32 i;
+ 	int proplen;
+ 
+-	addrs = get_property(node, "assigned-addresses", &proplen);
++	addrs = of_get_property(node, "assigned-addresses", &proplen);
+ 	if (!addrs)
+ 		return;
+ 	DBG("    parse addresses (%d bytes) @ %p\n", proplen, addrs);
+@@ -333,7 +333,7 @@ struct pci_dev *of_create_pci_dev(struct
+ 	dev = kzalloc(sizeof(struct pci_dev), GFP_KERNEL);
+ 	if (!dev)
+ 		return NULL;
+-	type = get_property(node, "device_type", NULL);
++	type = of_get_property(node, "device_type", NULL);
+ 	if (type == NULL)
+ 		type = "";
+ 
+@@ -399,7 +399,7 @@ void __devinit of_scan_bus(struct device
+ 
+ 	while ((child = of_get_next_child(node, child)) != NULL) {
+ 		DBG("  * %s\n", child->full_name);
+-		reg = get_property(child, "reg", &reglen);
++		reg = of_get_property(child, "reg", &reglen);
+ 		if (reg == NULL || reglen < 20)
+ 			continue;
+ 		devfn = (reg[0] >> 8) & 0xff;
+@@ -432,13 +432,13 @@ void __devinit of_scan_pci_bridge(struct
+ 	DBG("of_scan_pci_bridge(%s)\n", node->full_name);
+ 
+ 	/* parse bus-range property */
+-	busrange = get_property(node, "bus-range", &len);
++	busrange = of_get_property(node, "bus-range", &len);
+ 	if (busrange == NULL || len != 8) {
+ 		printk(KERN_DEBUG "Can't get bus-range for PCI-PCI bridge %s\n",
+ 		       node->full_name);
+ 		return;
+ 	}
+-	ranges = get_property(node, "ranges", &len);
++	ranges = of_get_property(node, "ranges", &len);
+ 	if (ranges == NULL) {
+ 		printk(KERN_DEBUG "Can't get ranges for PCI-PCI bridge %s\n",
+ 		       node->full_name);
+@@ -902,7 +902,7 @@ static void __devinit pci_process_ISA_OF
+ 	unsigned int size;
+ 	int rlen = 0;
+ 
+-	range = get_property(isa_node, "ranges", &rlen);
++	range = of_get_property(isa_node, "ranges", &rlen);
+ 	if (range == NULL || (rlen < sizeof(struct isa_range))) {
+ 		printk(KERN_ERR "no ISA ranges or unexpected isa range size,"
+ 		       "mapping 64k\n");
+@@ -962,7 +962,7 @@ void __devinit pci_process_bridge_OF_ran
+ 	 *			(size depending on dev->n_addr_cells)
+ 	 *   cells 4+5 or 5+6:	the size of the range
+ 	 */
+-	ranges = get_property(dev, "ranges", &rlen);
++	ranges = of_get_property(dev, "ranges", &rlen);
+ 	if (ranges == NULL)
+ 		return;
+ 	hose->io_base_phys = 0;
+Index: linux-2.6.18/arch/powerpc/kernel/pci_dn.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_dn.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_dn.c
+@@ -40,7 +40,8 @@
+ static void * __devinit update_dn_pci_info(struct device_node *dn, void *data)
+ {
+ 	struct pci_controller *phb = data;
+-	const int *type = get_property(dn, "ibm,pci-config-space-type", NULL);
++	const int *type =
++		of_get_property(dn, "ibm,pci-config-space-type", NULL);
+ 	const u32 *regs;
+ 	struct pci_dn *pdn;
+ 
+@@ -54,14 +55,14 @@ static void * __devinit update_dn_pci_in
+ 	dn->data = pdn;
+ 	pdn->node = dn;
+ 	pdn->phb = phb;
+-	regs = get_property(dn, "reg", NULL);
++	regs = of_get_property(dn, "reg", NULL);
+ 	if (regs) {
+ 		/* First register entry is addr (00BBSS00)  */
+ 		pdn->busno = (regs[0] >> 16) & 0xff;
+ 		pdn->devfn = (regs[0] >> 8) & 0xff;
+ 	}
+ 	if (firmware_has_feature(FW_FEATURE_ISERIES)) {
+-		const u32 *busp = get_property(dn, "linux,subbus", NULL);
++		const u32 *busp = of_get_property(dn, "linux,subbus", NULL);
+ 		if (busp)
+ 			pdn->bussubno = *busp;
+ 	}
+@@ -100,7 +101,7 @@ void *traverse_pci_devices(struct device
+ 		u32 class;
+ 
+ 		nextdn = NULL;
+-		classp = get_property(dn, "class-code", NULL);
++		classp = of_get_property(dn, "class-code", NULL);
+ 		class = classp ? *classp : 0;
+ 
+ 		if (pre && ((ret = pre(dn, data)) != NULL))
+Index: linux-2.6.18/arch/powerpc/kernel/prom_parse.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/prom_parse.c
++++ linux-2.6.18/arch/powerpc/kernel/prom_parse.c
+@@ -196,7 +196,7 @@ const u32 *of_get_pci_address(struct dev
+ 		return NULL;
+ 
+ 	/* Get "reg" or "assigned-addresses" property */
+-	prop = get_property(dev, bus->addresses, &psize);
++	prop = of_get_property(dev, bus->addresses, &psize);
+ 	if (prop == NULL)
+ 		return NULL;
+ 	psize /= 4;
+@@ -438,7 +438,7 @@ static int of_translate_one(struct devic
+ 	 * to translate addresses that aren't supposed to be translated in
+ 	 * the first place. --BenH.
+ 	 */
+-	ranges = get_property(parent, "ranges", &rlen);
++	ranges = of_get_property(parent, "ranges", &rlen);
+ 	if (ranges == NULL || rlen == 0) {
+ 		offset = of_read_number(addr, na);
+ 		memset(addr, 0, pna * 4);
+@@ -578,7 +578,7 @@ const u32 *of_get_address(struct device_
+ 		return NULL;
+ 
+ 	/* Get "reg" or "assigned-addresses" property */
+-	prop = get_property(dev, bus->addresses, &psize);
++	prop = of_get_property(dev, bus->addresses, &psize);
+ 	if (prop == NULL)
+ 		return NULL;
+ 	psize /= 4;
+@@ -650,16 +650,16 @@ void of_parse_dma_window(struct device_n
+ 	/* busno is always one cell */
+ 	*busno = *(dma_window++);
+ 
+-	prop = get_property(dn, "ibm,#dma-address-cells", NULL);
++	prop = of_get_property(dn, "ibm,#dma-address-cells", NULL);
+ 	if (!prop)
+-		prop = get_property(dn, "#address-cells", NULL);
++		prop = of_get_property(dn, "#address-cells", NULL);
+ 
+ 	cells = prop ? *(u32 *)prop : of_n_addr_cells(dn);
+ 	*phys = of_read_number(dma_window, cells);
+ 
+ 	dma_window += cells;
+ 
+-	prop = get_property(dn, "ibm,#dma-size-cells", NULL);
++	prop = of_get_property(dn, "ibm,#dma-size-cells", NULL);
+ 	cells = prop ? *(u32 *)prop : of_n_size_cells(dn);
+ 	*size = of_read_number(dma_window, cells);
+ }
+@@ -680,7 +680,7 @@ static struct device_node *of_irq_find_p
+ 		return NULL;
+ 
+ 	do {
+-		parp = get_property(child, "interrupt-parent", NULL);
++		parp = of_get_property(child, "interrupt-parent", NULL);
+ 		if (parp == NULL)
+ 			p = of_get_parent(child);
+ 		else {
+@@ -691,7 +691,7 @@ static struct device_node *of_irq_find_p
+ 		}
+ 		of_node_put(child);
+ 		child = p;
+-	} while (p && get_property(p, "#interrupt-cells", NULL) == NULL);
++	} while (p && of_get_property(p, "#interrupt-cells", NULL) == NULL);
+ 
+ 	return p;
+ }
+@@ -716,7 +716,7 @@ void of_irq_map_init(unsigned int flags)
+ 		struct device_node *np;
+ 
+ 		for(np = NULL; (np = of_find_all_nodes(np)) != NULL;) {
+-			if (get_property(np, "interrupt-controller", NULL)
++			if (of_get_property(np, "interrupt-controller", NULL)
+ 			    == NULL)
+ 				continue;
+ 			/* Skip /chosen/interrupt-controller */
+@@ -755,7 +755,7 @@ int of_irq_map_raw(struct device_node *p
+ 	 * is none, we are nice and just walk up the tree
+ 	 */
+ 	do {
+-		tmp = get_property(ipar, "#interrupt-cells", NULL);
++		tmp = of_get_property(ipar, "#interrupt-cells", NULL);
+ 		if (tmp != NULL) {
+ 			intsize = *tmp;
+ 			break;
+@@ -779,7 +779,7 @@ int of_irq_map_raw(struct device_node *p
+ 	 */
+ 	old = of_node_get(ipar);
+ 	do {
+-		tmp = get_property(old, "#address-cells", NULL);
++		tmp = of_get_property(old, "#address-cells", NULL);
+ 		tnode = of_get_parent(old);
+ 		of_node_put(old);
+ 		old = tnode;
+@@ -795,7 +795,8 @@ int of_irq_map_raw(struct device_node *p
+ 		/* Now check if cursor is an interrupt-controller and if it is
+ 		 * then we are done
+ 		 */
+-		if (get_property(ipar, "interrupt-controller", NULL) != NULL) {
++		if (of_get_property(ipar, "interrupt-controller", NULL) !=
++				NULL) {
+ 			DBG(" -> got it !\n");
+ 			memcpy(out_irq->specifier, intspec,
+ 			       intsize * sizeof(u32));
+@@ -806,7 +807,7 @@ int of_irq_map_raw(struct device_node *p
+ 		}
+ 
+ 		/* Now look for an interrupt-map */
+-		imap = get_property(ipar, "interrupt-map", &imaplen);
++		imap = of_get_property(ipar, "interrupt-map", &imaplen);
+ 		/* No interrupt map, check for an interrupt parent */
+ 		if (imap == NULL) {
+ 			DBG(" -> no map, getting parent\n");
+@@ -816,7 +817,7 @@ int of_irq_map_raw(struct device_node *p
+ 		imaplen /= sizeof(u32);
+ 
+ 		/* Look for a mask */
+-		imask = get_property(ipar, "interrupt-map-mask", NULL);
++		imask = of_get_property(ipar, "interrupt-map-mask", NULL);
+ 
+ 		/* If we were passed no "reg" property and we attempt to parse
+ 		 * an interrupt-map, then #address-cells must be 0.
+@@ -863,15 +864,13 @@ int of_irq_map_raw(struct device_node *p
+ 			/* Get #interrupt-cells and #address-cells of new
+ 			 * parent
+ 			 */
+-			tmp = get_property(newpar, "#interrupt-cells",
+-						  NULL);
++			tmp = of_get_property(newpar, "#interrupt-cells", NULL);
+ 			if (tmp == NULL) {
+ 				DBG(" -> parent lacks #interrupt-cells !\n");
+ 				goto fail;
+ 			}
+ 			newintsize = *tmp;
+-			tmp = get_property(newpar, "#address-cells",
+-						  NULL);
++			tmp = of_get_property(newpar, "#address-cells", NULL);
+ 			newaddrsize = (tmp == NULL) ? 0 : *tmp;
+ 
+ 			DBG(" -> newintsize=%d, newaddrsize=%d\n",
+@@ -928,7 +927,7 @@ static int of_irq_map_oldworld(struct de
+ 	 * everything together on these)
+ 	 */
+ 	while (device) {
+-		ints = get_property(device, "AAPL,interrupts", &intlen);
++		ints = of_get_property(device, "AAPL,interrupts", &intlen);
+ 		if (ints != NULL)
+ 			break;
+ 		device = device->parent;
+@@ -970,13 +969,13 @@ int of_irq_map_one(struct device_node *d
+ 		return of_irq_map_oldworld(device, index, out_irq);
+ 
+ 	/* Get the interrupts property */
+-	intspec = get_property(device, "interrupts", &intlen);
++	intspec = of_get_property(device, "interrupts", &intlen);
+ 	if (intspec == NULL)
+ 		return -EINVAL;
+ 	intlen /= sizeof(u32);
+ 
+ 	/* Get the reg property (if any) */
+-	addr = get_property(device, "reg", NULL);
++	addr = of_get_property(device, "reg", NULL);
+ 
+ 	/* Look for the interrupt parent. */
+ 	p = of_irq_find_parent(device);
+@@ -984,7 +983,7 @@ int of_irq_map_one(struct device_node *d
+ 		return -EINVAL;
+ 
+ 	/* Get size of interrupt specifier */
+-	tmp = get_property(p, "#interrupt-cells", NULL);
++	tmp = of_get_property(p, "#interrupt-cells", NULL);
+ 	if (tmp == NULL) {
+ 		of_node_put(p);
+ 		return -EINVAL;
+Index: linux-2.6.18/arch/powerpc/kernel/rtas-proc.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/rtas-proc.c
++++ linux-2.6.18/arch/powerpc/kernel/rtas-proc.c
+@@ -450,7 +450,7 @@ static int ppc_rtas_sensors_show(struct 
+ 		int llen, offs;
+ 
+ 		sprintf (rstr, SENSOR_PREFIX"%04d", p->token);
+-		loc = get_property(rtas_node, rstr, &llen);
++		loc = of_get_property(rtas_node, rstr, &llen);
+ 
+ 		/* A sensor may have multiple instances */
+ 		for (j = 0, offs = 0; j <= p->quant; j++) {
+@@ -477,7 +477,7 @@ static int ppc_rtas_find_all_sensors(voi
+ 	const unsigned int *utmp;
+ 	int len, i;
+ 
+-	utmp = get_property(rtas_node, "rtas-sensors", &len);
++	utmp = of_get_property(rtas_node, "rtas-sensors", &len);
+ 	if (utmp == NULL) {
+ 		printk (KERN_ERR "error: could not get rtas-sensors\n");
+ 		return 1;
+Index: linux-2.6.18/arch/powerpc/kernel/rtas.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/rtas.c
++++ linux-2.6.18/arch/powerpc/kernel/rtas.c
+@@ -193,16 +193,16 @@ void rtas_progress(char *s, unsigned sho
+ 	if (display_width == 0) {
+ 		display_width = 0x10;
+ 		if ((root = find_path_device("/rtas"))) {
+-			if ((p = get_property(root,
++			if ((p = of_get_property(root,
+ 					"ibm,display-line-length", NULL)))
+ 				display_width = *p;
+-			if ((p = get_property(root,
++			if ((p = of_get_property(root,
+ 					"ibm,form-feed", NULL)))
+ 				form_feed = *p;
+-			if ((p = get_property(root,
++			if ((p = of_get_property(root,
+ 					"ibm,display-number-of-lines", NULL)))
+ 				display_lines = *p;
+-			row_width = get_property(root,
++			row_width = of_get_property(root,
+ 					"ibm,display-truncation-length", NULL);
+ 		}
+ 		display_character = rtas_token("display-character");
+@@ -298,7 +298,7 @@ int rtas_token(const char *service)
+ 	const int *tokp;
+ 	if (rtas.dev == NULL)
+ 		return RTAS_UNKNOWN_SERVICE;
+-	tokp = get_property(rtas.dev, service, NULL);
++	tokp = of_get_property(rtas.dev, service, NULL);
+ 	return tokp ? *tokp : RTAS_UNKNOWN_SERVICE;
+ }
+ EXPORT_SYMBOL(rtas_token);
+@@ -832,12 +832,12 @@ void __init rtas_initialize(void)
+ 	if (rtas.dev) {
+ 		const u32 *basep, *entryp, *sizep;
+ 
+-		basep = get_property(rtas.dev, "linux,rtas-base", NULL);
+-		sizep = get_property(rtas.dev, "rtas-size", NULL);
++		basep = of_get_property(rtas.dev, "linux,rtas-base", NULL);
++		sizep = of_get_property(rtas.dev, "rtas-size", NULL);
+ 		if (basep != NULL && sizep != NULL) {
+ 			rtas.base = *basep;
+ 			rtas.size = *sizep;
+-			entryp = get_property(rtas.dev,
++			entryp = of_get_property(rtas.dev,
+ 					"linux,rtas-entry", NULL);
+ 			if (entryp == NULL) /* Ugh */
+ 				rtas.entry = rtas.base;
+Index: linux-2.6.18/arch/powerpc/kernel/rtas_pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/rtas_pci.c
++++ linux-2.6.18/arch/powerpc/kernel/rtas_pci.c
+@@ -59,7 +59,7 @@ static int of_device_available(struct de
+ {
+         const char *status;
+ 
+-        status = get_property(dn, "status", NULL);
++        status = of_get_property(dn, "status", NULL);
+ 
+         if (!status)
+                 return 1;
+@@ -176,7 +176,7 @@ struct pci_ops rtas_pci_ops = {
+ 
+ int is_python(struct device_node *dev)
+ {
+-	const char *model = get_property(dev, "model", NULL);
++	const char *model = of_get_property(dev, "model", NULL);
+ 
+ 	if (model && strstr(model, "Python"))
+ 		return 1;
+@@ -246,7 +246,7 @@ static int phb_set_bus_ranges(struct dev
+ 	const int *bus_range;
+ 	unsigned int len;
+ 
+-	bus_range = get_property(dev, "bus-range", &len);
++	bus_range = of_get_property(dev, "bus-range", &len);
+ 	if (bus_range == NULL || len < 2 * sizeof(int)) {
+ 		return 1;
+  	}
+@@ -308,12 +308,12 @@ unsigned long __init find_and_init_phbs(
+ 	if (of_chosen) {
+ 		const int *prop;
+ 
+-		prop = get_property(of_chosen,
++		prop = of_get_property(of_chosen,
+ 				"linux,pci-probe-only", NULL);
+ 		if (prop)
+ 			pci_probe_only = *prop;
+ 
+-		prop = get_property(of_chosen,
++		prop = of_get_property(of_chosen,
+ 				"linux,pci-assign-all-buses", NULL);
+ 		if (prop)
+ 			pci_assign_all_buses = *prop;
+Index: linux-2.6.18/arch/powerpc/kernel/setup-common.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/setup-common.c
++++ linux-2.6.18/arch/powerpc/kernel/setup-common.c
+@@ -371,11 +371,12 @@ void __init smp_setup_cpu_maps(void)
+ 		const int *intserv;
+ 		int j, len = sizeof(u32), nthreads = 1;
+ 
+-		intserv = get_property(dn, "ibm,ppc-interrupt-server#s", &len);
++		intserv = of_get_property(dn, "ibm,ppc-interrupt-server#s",
++				&len);
+ 		if (intserv)
+ 			nthreads = len / sizeof(int);
+ 		else {
+-			intserv = get_property(dn, "reg", NULL);
++			intserv = of_get_property(dn, "reg", NULL);
+ 			if (!intserv)
+ 				intserv = &cpu;	/* assume logical == phys */
+ 		}
+@@ -401,7 +402,7 @@ void __init smp_setup_cpu_maps(void)
+ 		num_addr_cell = of_n_addr_cells(dn);
+ 		num_size_cell = of_n_size_cells(dn);
+ 
+-		ireg = get_property(dn, "ibm,lrdr-capacity", NULL);
++		ireg = of_get_property(dn, "ibm,lrdr-capacity", NULL);
+ 
+ 		if (!ireg)
+ 			goto out;
+Index: linux-2.6.18/arch/powerpc/kernel/setup_64.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/setup_64.c
++++ linux-2.6.18/arch/powerpc/kernel/setup_64.c
+@@ -114,7 +114,7 @@ static void check_smt_enabled(void)
+ 	dn = of_find_node_by_path("/options");
+ 
+ 	if (dn) {
+-		smt_option = get_property(dn, "ibm,smt-enabled", NULL);
++		smt_option = of_get_property(dn, "ibm,smt-enabled", NULL);
+ 
+                 if (smt_option) {
+ 			if (!strcmp(smt_option, "on"))
+@@ -309,10 +309,10 @@ static void __init initialize_cache_info
+ 
+ 			size = 0;
+ 			lsize = cur_cpu_spec->dcache_bsize;
+-			sizep = get_property(np, "d-cache-size", NULL);
++			sizep = of_get_property(np, "d-cache-size", NULL);
+ 			if (sizep != NULL)
+ 				size = *sizep;
+-			lsizep = get_property(np, dc, NULL);
++			lsizep = of_get_property(np, dc, NULL);
+ 			if (lsizep != NULL)
+ 				lsize = *lsizep;
+ 			if (sizep == 0 || lsizep == 0)
+@@ -326,10 +326,10 @@ static void __init initialize_cache_info
+ 
+ 			size = 0;
+ 			lsize = cur_cpu_spec->icache_bsize;
+-			sizep = get_property(np, "i-cache-size", NULL);
++			sizep = of_get_property(np, "i-cache-size", NULL);
+ 			if (sizep != NULL)
+ 				size = *sizep;
+-			lsizep = get_property(np, ic, NULL);
++			lsizep = of_get_property(np, ic, NULL);
+ 			if (lsizep != NULL)
+ 				lsize = *lsizep;
+ 			if (sizep == 0 || lsizep == 0)
+Index: linux-2.6.18/arch/powerpc/kernel/sysfs.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/sysfs.c
++++ linux-2.6.18/arch/powerpc/kernel/sysfs.c
+@@ -70,7 +70,7 @@ static int __init smt_setup(void)
+ 	if (!options)
+ 		return -ENODEV;
+ 
+-	val = get_property(options, "ibm,smt-snooze-delay", NULL);
++	val = of_get_property(options, "ibm,smt-snooze-delay", NULL);
+ 	if (!smt_snooze_cmdline && val) {
+ 		for_each_possible_cpu(cpu)
+ 			per_cpu(smt_snooze_delay, cpu) = *val;
+Index: linux-2.6.18/arch/powerpc/kernel/time.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/time.c
++++ linux-2.6.18/arch/powerpc/kernel/time.c
+@@ -715,7 +715,7 @@ static int __init get_freq(char *name, i
+ 	cpu = of_find_node_by_type(NULL, "cpu");
+ 
+ 	if (cpu) {
+-		fp = get_property(cpu, name, NULL);
++		fp = of_get_property(cpu, name, NULL);
+ 		if (fp) {
+ 			found = 1;
+ 			*val = of_read_ulong(fp, cells);
+Index: linux-2.6.18/arch/powerpc/mm/hash_native_64.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/hash_native_64.c
++++ linux-2.6.18/arch/powerpc/mm/hash_native_64.c
+@@ -505,7 +505,7 @@ static inline int tlb_batching_enabled(v
+ 	int enabled = 1;
+ 
+ 	if (root) {
+-		const char *model = get_property(root, "model", NULL);
++		const char *model = of_get_property(root, "model", NULL);
+ 		if (model && !strcmp(model, "IBM,9076-N81"))
+ 			enabled = 0;
+ 		of_node_put(root);
+Index: linux-2.6.18/arch/powerpc/mm/numa.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/numa.c
++++ linux-2.6.18/arch/powerpc/mm/numa.c
+@@ -164,7 +164,7 @@ static struct device_node * __cpuinit fi
+ 
+ 	while ((cpu_node = of_find_node_by_type(cpu_node, "cpu")) != NULL) {
+ 		/* Try interrupt server first */
+-		interrupt_server = get_property(cpu_node,
++		interrupt_server = of_get_property(cpu_node,
+ 					"ibm,ppc-interrupt-server#s", &len);
+ 
+ 		len = len / sizeof(u32);
+@@ -175,7 +175,7 @@ static struct device_node * __cpuinit fi
+ 					return cpu_node;
+ 			}
+ 		} else {
+-			reg = get_property(cpu_node, "reg", &len);
++			reg = of_get_property(cpu_node, "reg", &len);
+ 			if (reg && (len > 0) && (reg[0] == hw_cpuid))
+ 				return cpu_node;
+ 		}
+@@ -187,7 +187,7 @@ static struct device_node * __cpuinit fi
+ /* must hold reference to node during call */
+ static const int *of_get_associativity(struct device_node *dev)
+ {
+-	return get_property(dev, "ibm,associativity", NULL);
++	return of_get_property(dev, "ibm,associativity", NULL);
+ }
+ 
+ /* Returns nid in the range [0..MAX_NUMNODES-1], or -1 if no useful numa
+@@ -269,7 +269,7 @@ static int __init find_min_common_depth(
+ 	 * configuration (should be all 0's) and the second is for a normal
+ 	 * NUMA configuration.
+ 	 */
+-	ref_points = get_property(rtas_root,
++	ref_points = of_get_property(rtas_root,
+ 			"ibm,associativity-reference-points", &len);
+ 
+ 	if ((len >= 1) && ref_points) {
+@@ -398,9 +398,9 @@ static void __init parse_drconf_memory(s
+ 	int nid, default_nid = 0;
+ 	unsigned int start, ai, flags;
+ 
+-	lm = get_property(memory, "ibm,lmb-size", &ls);
+-	dm = get_property(memory, "ibm,dynamic-memory", &ld);
+-	aa = get_property(memory, "ibm,associativity-lookup-arrays", &la);
++	lm = of_get_property(memory, "ibm,lmb-size", &ls);
++	dm = of_get_property(memory, "ibm,dynamic-memory", &ld);
++	aa = of_get_property(memory, "ibm,associativity-lookup-arrays", &la);
+ 	if (!lm || !dm || !aa ||
+ 	    ls < sizeof(unsigned int) || ld < sizeof(unsigned int) ||
+ 	    la < 2 * sizeof(unsigned int))
+@@ -494,10 +494,10 @@ static int __init parse_numa_properties(
+ 		const unsigned int *memcell_buf;
+ 		unsigned int len;
+ 
+-		memcell_buf = get_property(memory,
++		memcell_buf = of_get_property(memory,
+ 			"linux,usable-memory", &len);
+ 		if (!memcell_buf || len <= 0)
+-			memcell_buf = get_property(memory, "reg", &len);
++			memcell_buf = of_get_property(memory, "reg", &len);
+ 		if (!memcell_buf || len <= 0)
+ 			continue;
+ 
+@@ -852,7 +852,7 @@ int hot_add_scn_to_nid(unsigned long scn
+ 		const unsigned int *memcell_buf;
+ 		unsigned int len;
+ 
+-		memcell_buf = get_property(memory, "reg", &len);
++		memcell_buf = of_get_property(memory, "reg", &len);
+ 		if (!memcell_buf || len <= 0)
+ 			continue;
+ 
+Index: linux-2.6.18/arch/powerpc/sysdev/dcr.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/dcr.c
++++ linux-2.6.18/arch/powerpc/sysdev/dcr.c
+@@ -26,7 +26,7 @@
+ unsigned int dcr_resource_start(struct device_node *np, unsigned int index)
+ {
+ 	unsigned int ds;
+-	const u32 *dr = get_property(np, "dcr-reg", &ds);
++	const u32 *dr = of_get_property(np, "dcr-reg", &ds);
+ 
+ 	if (dr == NULL || ds & 1 || index >= (ds / 8))
+ 		return 0;
+@@ -37,7 +37,7 @@ unsigned int dcr_resource_start(struct d
+ unsigned int dcr_resource_len(struct device_node *np, unsigned int index)
+ {
+ 	unsigned int ds;
+-	const u32 *dr = get_property(np, "dcr-reg", &ds);
++	const u32 *dr = of_get_property(np, "dcr-reg", &ds);
+ 
+ 	if (dr == NULL || ds & 1 || index >= (ds / 8))
+ 		return 0;
+@@ -53,9 +53,9 @@ static struct device_node * find_dcr_par
+ 	const u32 *p;
+ 
+ 	for (par = of_node_get(node); par;) {
+-		if (get_property(par, "dcr-controller", NULL))
++		if (of_get_property(par, "dcr-controller", NULL))
+ 			break;
+-		p = get_property(par, "dcr-parent", NULL);
++		p = of_get_property(par, "dcr-parent", NULL);
+ 		tmp = par;
+ 		if (p == NULL)
+ 			par = of_get_parent(par);
+@@ -80,13 +80,13 @@ u64 of_translate_dcr_address(struct devi
+ 		return OF_BAD_ADDR;
+ 
+ 	/* Stride is not properly defined yet, default to 0x10 for Axon */
+-	p = get_property(dp, "dcr-mmio-stride", NULL);
++	p = of_get_property(dp, "dcr-mmio-stride", NULL);
+ 	stride = (p == NULL) ? 0x10 : *p;
+ 
+ 	/* XXX FIXME: Which property name is to use of the 2 following ? */
+-	p = get_property(dp, "dcr-mmio-range", NULL);
++	p = of_get_property(dp, "dcr-mmio-range", NULL);
+ 	if (p == NULL)
+-		p = get_property(dp, "dcr-mmio-space", NULL);
++		p = of_get_property(dp, "dcr-mmio-space", NULL);
+ 	if (p == NULL)
+ 		return OF_BAD_ADDR;
+ 
+Index: linux-2.6.18/arch/powerpc/sysdev/fsl_soc.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/fsl_soc.c
++++ linux-2.6.18/arch/powerpc/sysdev/fsl_soc.c
+@@ -52,7 +52,7 @@ phys_addr_t get_immrbase(void)
+ 	soc = of_find_node_by_type(NULL, "soc");
+ 	if (soc) {
+ 		unsigned int size;
+-		const void *prop = get_property(soc, "reg", &size);
++		const void *prop = of_get_property(soc, "reg", &size);
+ 
+ 		if (prop)
+ 			immrbase = of_translate_address(soc, prop);
+@@ -78,8 +78,8 @@ u32 get_brgfreq(void)
+ 	node = of_find_node_by_type(NULL, "cpm");
+ 	if (node) {
+ 		unsigned int size;
+-		const unsigned int *prop = get_property(node, "brg-frequency",
+-					&size);
++		const unsigned int *prop = of_get_property(node,
++					"brg-frequency", &size);
+ 
+ 		if (prop)
+ 			brgfreq = *prop;
+@@ -103,8 +103,8 @@ u32 get_baudrate(void)
+ 	node = of_find_node_by_type(NULL, "serial");
+ 	if (node) {
+ 		unsigned int size;
+-		const unsigned int *prop = get_property(node, "current-speed",
+-				&size);
++		const unsigned int *prop = of_get_property(node,
++				"current-speed", &size);
+ 
+ 		if (prop)
+ 			fs_baudrate = *prop;
+@@ -153,7 +153,8 @@ static int __init gfar_mdio_of_init(void
+ 		while ((child = of_get_next_child(np, child)) != NULL) {
+ 			int irq = irq_of_parse_and_map(child, 0);
+ 			if (irq != NO_IRQ) {
+-				const u32 *id = get_property(child, "reg", NULL);
++				const u32 *id = of_get_property(child,
++							"reg", NULL);
+ 				mdio_data.irq[*id] = irq;
+ 			}
+ 		}
+@@ -209,7 +210,7 @@ static int __init gfar_of_init(void)
+ 
+ 		of_irq_to_resource(np, 0, &r[1]);
+ 
+-		model = get_property(np, "model", NULL);
++		model = of_get_property(np, "model", NULL);
+ 
+ 		/* If we aren't the FEC we have multiple interrupts */
+ 		if (model && strcasecmp(model, "FEC")) {
+@@ -253,7 +254,7 @@ static int __init gfar_of_init(void)
+ 			    FSL_GIANFAR_DEV_HAS_VLAN |
+ 			    FSL_GIANFAR_DEV_HAS_EXTENDED_HASH;
+ 
+-		ph = get_property(np, "phy-handle", NULL);
++		ph = of_get_property(np, "phy-handle", NULL);
+ 		phy = of_find_node_by_phandle(*ph);
+ 
+ 		if (phy == NULL) {
+@@ -263,7 +264,7 @@ static int __init gfar_of_init(void)
+ 
+ 		mdio = of_get_parent(phy);
+ 
+-		id = get_property(phy, "reg", NULL);
++		id = of_get_property(phy, "reg", NULL);
+ 		ret = of_address_to_resource(mdio, 0, &res);
+ 		if (ret) {
+ 			of_node_put(phy);
+@@ -325,11 +326,11 @@ static int __init fsl_i2c_of_init(void)
+ 		}
+ 
+ 		i2c_data.device_flags = 0;
+-		flags = get_property(np, "dfsrr", NULL);
++		flags = of_get_property(np, "dfsrr", NULL);
+ 		if (flags)
+ 			i2c_data.device_flags |= FSL_I2C_DEV_SEPARATE_DFSRR;
+ 
+-		flags = get_property(np, "fsl5200-clocking", NULL);
++		flags = of_get_property(np, "fsl5200-clocking", NULL);
+ 		if (flags)
+ 			i2c_data.device_flags |= FSL_I2C_DEV_CLOCK_5200;
+ 
+@@ -374,7 +375,7 @@ static int __init mpc83xx_wdt_init(void)
+ 		goto nosoc;
+ 	}
+ 
+-	freq = get_property(soc, "bus-frequency", NULL);
++	freq = of_get_property(soc, "bus-frequency", NULL);
+ 	if (!freq) {
+ 		ret = -ENODEV;
+ 		goto err;
+@@ -466,15 +467,15 @@ static int __init fsl_usb_of_init(void)
+ 
+ 		usb_data.operating_mode = FSL_USB2_MPH_HOST;
+ 
+-		prop = get_property(np, "port0", NULL);
++		prop = of_get_property(np, "port0", NULL);
+ 		if (prop)
+ 			usb_data.port_enables |= FSL_USB2_PORT0_ENABLED;
+ 
+-		prop = get_property(np, "port1", NULL);
++		prop = of_get_property(np, "port1", NULL);
+ 		if (prop)
+ 			usb_data.port_enables |= FSL_USB2_PORT1_ENABLED;
+ 
+-		prop = get_property(np, "phy_type", NULL);
++		prop = of_get_property(np, "phy_type", NULL);
+ 		usb_data.phy_mode = determine_usb_phy(prop);
+ 
+ 		ret =
+@@ -501,7 +502,7 @@ static int __init fsl_usb_of_init(void)
+ 
+ 		of_irq_to_resource(np, 0, &r[1]);
+ 
+-		prop = get_property(np, "dr_mode", NULL);
++		prop = of_get_property(np, "dr_mode", NULL);
+ 
+ 		if (!prop || !strcmp(prop, "host")) {
+ 			usb_data.operating_mode = FSL_USB2_DR_HOST;
+@@ -538,7 +539,7 @@ static int __init fsl_usb_of_init(void)
+ 			goto err;
+ 		}
+ 
+-		prop = get_property(np, "phy_type", NULL);
++		prop = of_get_property(np, "phy_type", NULL);
+ 		usb_data.phy_mode = determine_usb_phy(prop);
+ 
+ 		if (usb_dev_dr_host) {
+@@ -633,7 +634,7 @@ static int __init fs_enet_of_init(void)
+ 			goto err;
+ 		}
+ 
+-		model = get_property(np, "model", NULL);
++		model = of_get_property(np, "model", NULL);
+ 		if (model == NULL) {
+ 			ret = -ENODEV;
+ 			goto unreg;
+@@ -643,7 +644,7 @@ static int __init fs_enet_of_init(void)
+ 		if (mac_addr)
+ 			memcpy(fs_enet_data.macaddr, mac_addr, 6);
+ 
+-		ph = get_property(np, "phy-handle", NULL);
++		ph = of_get_property(np, "phy-handle", NULL);
+ 		phy = of_find_node_by_phandle(*ph);
+ 
+ 		if (phy == NULL) {
+@@ -651,12 +652,12 @@ static int __init fs_enet_of_init(void)
+ 			goto unreg;
+ 		}
+ 
+-		phy_addr = get_property(phy, "reg", NULL);
++		phy_addr = of_get_property(phy, "reg", NULL);
+ 		fs_enet_data.phy_addr = *phy_addr;
+ 
+-		phy_irq = get_property(phy, "interrupts", NULL);
++		phy_irq = of_get_property(phy, "interrupts", NULL);
+ 
+-		id = get_property(np, "device-id", NULL);
++		id = of_get_property(np, "device-id", NULL);
+ 		fs_enet_data.fs_no = *id;
+ 		strcpy(fs_enet_data.fs_type, model);
+ 
+@@ -668,8 +669,10 @@ static int __init fs_enet_of_init(void)
+                         goto unreg;
+                 }
+ 
+-		fs_enet_data.clk_rx = *((u32 *) get_property(np, "rx-clock", NULL));
+-		fs_enet_data.clk_tx = *((u32 *) get_property(np, "tx-clock", NULL));
++		fs_enet_data.clk_rx = *((u32 *)of_get_property(np,
++						"rx-clock", NULL));
++		fs_enet_data.clk_tx = *((u32 *)of_get_property(np,
++						"tx-clock", NULL));
+ 
+ 		if (strstr(model, "FCC")) {
+ 			int fcc_index = *id - 1;
+@@ -690,7 +693,7 @@ static int __init fs_enet_of_init(void)
+ 			fs_enet_data.bus_id = (char*)&bus_id[(*id)];
+ 			fs_enet_data.init_ioports = init_fcc_ioports;
+ 
+-			mdio_bb_prop = get_property(phy, "bitbang", NULL);
++			mdio_bb_prop = of_get_property(phy, "bitbang", NULL);
+ 			if (mdio_bb_prop) {
+ 				struct platform_device *fs_enet_mdio_bb_dev;
+ 				struct fs_mii_bb_platform_info fs_enet_mdio_bb_data;
+@@ -796,10 +799,10 @@ static int __init cpm_uart_of_init(void)
+ 			goto err;
+ 		}
+ 
+-		id = get_property(np, "device-id", NULL);
++		id = of_get_property(np, "device-id", NULL);
+ 		cpm_uart_data.fs_no = *id;
+ 
+-		model = (char*)get_property(np, "model", NULL);
++		model = of_get_property(np, "model", NULL);
+ 		strcpy(cpm_uart_data.fs_type, model);
+ 
+ 		cpm_uart_data.uart_clk = ppc_proc_freq;
+@@ -808,8 +811,10 @@ static int __init cpm_uart_of_init(void)
+ 		cpm_uart_data.tx_buf_size = 32;
+ 		cpm_uart_data.rx_num_fifo = 4;
+ 		cpm_uart_data.rx_buf_size = 32;
+-		cpm_uart_data.clk_rx = *((u32 *) get_property(np, "rx-clock", NULL));
+-		cpm_uart_data.clk_tx = *((u32 *) get_property(np, "tx-clock", NULL));
++		cpm_uart_data.clk_rx = *((u32 *)of_get_property(np,
++						"rx-clock", NULL));
++		cpm_uart_data.clk_tx = *((u32 *)of_get_property(np,
++						"tx-clock", NULL));
+ 
+ 		ret =
+ 		    platform_device_add_data(cpm_uart_dev, &cpm_uart_data,
+@@ -833,7 +838,7 @@ arch_initcall(cpm_uart_of_init);
+ #ifdef CONFIG_8xx
+ 
+ extern void init_scc_ioports(struct fs_platform_info*);
+-extern int platform_device_skip(char *model, int id);
++extern int platform_device_skip(const char *model, int id);
+ 
+ static int __init fs_enet_mdio_of_init(void)
+ {
+@@ -900,21 +905,22 @@ static int __init fs_enet_of_init(void)
+ 		struct resource r[4];
+ 		struct device_node *phy = NULL, *mdio = NULL;
+ 		struct fs_platform_info fs_enet_data;
+-		unsigned int *id, *phy_addr;
++		const unsigned int *id;
++		const unsigned int *phy_addr;
+ 		void *mac_addr;
+-		phandle *ph;
+-		char *model;
++		const phandle *ph;
++		const char *model;
+ 
+ 		memset(r, 0, sizeof(r));
+ 		memset(&fs_enet_data, 0, sizeof(fs_enet_data));
+ 
+-		model = (char *)get_property(np, "model", NULL);
++		model = of_get_property(np, "model", NULL);
+ 		if (model == NULL) {
+ 			ret = -ENODEV;
+ 			goto unreg;
+ 		}
+ 
+-		id = (u32 *) get_property(np, "device-id", NULL);
++		id = of_get_property(np, "device-id", NULL);
+ 		fs_enet_data.fs_no = *id;
+ 
+ 		if (platform_device_skip(model, *id))
+@@ -929,12 +935,12 @@ static int __init fs_enet_of_init(void)
+ 		if (mac_addr)
+ 			memcpy(fs_enet_data.macaddr, mac_addr, 6);
+ 
+-		ph = (phandle *) get_property(np, "phy-handle", NULL);
++		ph = of_get_property(np, "phy-handle", NULL);
+ 		if (ph != NULL)
+ 			phy = of_find_node_by_phandle(*ph);
+ 
+ 		if (phy != NULL) {
+-			phy_addr = (u32 *) get_property(phy, "reg", NULL);
++			phy_addr = of_get_property(phy, "reg", NULL);
+ 			fs_enet_data.phy_addr = *phy_addr;
+ 			fs_enet_data.has_phy = 1;
+ 
+@@ -947,7 +953,7 @@ static int __init fs_enet_of_init(void)
+ 			}
+ 		}
+ 
+-		model = (char*)get_property(np, "model", NULL);
++		model = of_get_property(np, "model", NULL);
+ 		strcpy(fs_enet_data.fs_type, model);
+ 
+ 		if (strstr(model, "FEC")) {
+@@ -1038,8 +1044,8 @@ static int __init cpm_smc_uart_of_init(v
+ 	     i++) {
+ 		struct resource r[3];
+ 		struct fs_uart_platform_info cpm_uart_data;
+-		int *id;
+-		char *model;
++		const int *id;
++		const char *model;
+ 
+ 		memset(r, 0, sizeof(r));
+ 		memset(&cpm_uart_data, 0, sizeof(cpm_uart_data));
+@@ -1066,10 +1072,10 @@ static int __init cpm_smc_uart_of_init(v
+ 			goto err;
+ 		}
+ 
+-		model = (char*)get_property(np, "model", NULL);
++		model = of_get_property(np, "model", NULL);
+ 		strcpy(cpm_uart_data.fs_type, model);
+ 
+-		id = (int*)get_property(np, "device-id", NULL);
++		id = of_get_property(np, "device-id", NULL);
+ 		cpm_uart_data.fs_no = *id;
+ 		cpm_uart_data.uart_clk = ppc_proc_freq;
+ 
+Index: linux-2.6.18/arch/powerpc/sysdev/qe_lib/qe.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/qe_lib/qe.c
++++ linux-2.6.18/arch/powerpc/sysdev/qe_lib/qe.c
+@@ -71,7 +71,7 @@ phys_addr_t get_qe_base(void)
+ 	qe = of_find_node_by_type(NULL, "qe");
+ 	if (qe) {
+ 		unsigned int size;
+-		const void *prop = get_property(qe, "reg", &size);
++		const void *prop = of_get_property(qe, "reg", &size);
+ 		qebase = of_translate_address(qe, prop);
+ 		of_node_put(qe);
+ 	};
+@@ -158,7 +158,7 @@ unsigned int get_brg_clk(void)
+ 	qe = of_find_node_by_type(NULL, "qe");
+ 	if (qe) {
+ 		unsigned int size;
+-		const u32 *prop = get_property(qe, "brg-frequency", &size);
++		const u32 *prop = of_get_property(qe, "brg-frequency", &size);
+ 		brg_clk = *prop;
+ 		of_node_put(qe);
+ 	};
+Index: linux-2.6.18/arch/powerpc/sysdev/qe_lib/qe_io.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/qe_lib/qe_io.c
++++ linux-2.6.18/arch/powerpc/sysdev/qe_lib/qe_io.c
+@@ -54,7 +54,7 @@ int par_io_init(struct device_node *np)
+ 		return ret;
+ 	par_io = ioremap(res.start, res.end - res.start + 1);
+ 
+-	num_ports = get_property(np, "num-ports", NULL);
++	num_ports = of_get_property(np, "num-ports", NULL);
+ 	if (num_ports)
+ 		num_par_io_ports = *num_ports;
+ 
+@@ -162,7 +162,7 @@ int par_io_of_config(struct device_node 
+ 		return -1;
+ 	}
+ 
+-	ph = get_property(np, "pio-handle", NULL);
++	ph = of_get_property(np, "pio-handle", NULL);
+ 	if (ph == 0) {
+ 		printk(KERN_ERR "pio-handle not available \n");
+ 		return -1;
+@@ -170,7 +170,7 @@ int par_io_of_config(struct device_node 
+ 
+ 	pio = of_find_node_by_phandle(*ph);
+ 
+-	pio_map = get_property(pio, "pio-map", &pio_map_len);
++	pio_map = of_get_property(pio, "pio-map", &pio_map_len);
+ 	if (pio_map == NULL) {
+ 		printk(KERN_ERR "pio-map is not set! \n");
+ 		return -1;
+Index: linux-2.6.18/arch/powerpc/sysdev/tsi108_dev.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/tsi108_dev.c
++++ linux-2.6.18/arch/powerpc/sysdev/tsi108_dev.c
+@@ -49,7 +49,7 @@ phys_addr_t get_csrbase(void)
+ 	tsi = of_find_node_by_type(NULL, "tsi-bridge");
+ 	if (tsi) {
+ 		unsigned int size;
+-		const void *prop = get_property(tsi, "reg", &size);
++		const void *prop = of_get_property(tsi, "reg", &size);
+ 		tsi108_csr_base = of_translate_address(tsi, prop);
+ 		of_node_put(tsi);
+ 	};
+@@ -78,10 +78,10 @@ static int __init tsi108_eth_of_init(voi
+ 		struct resource r[2];
+ 		struct device_node *phy;
+ 		hw_info tsi_eth_data;
+-		unsigned int *id;
+-		unsigned int *phy_id;
++		const unsigned int *id;
++		const unsigned int *phy_id;
+ 		const void *mac_addr;
+-		phandle *ph;
++		const phandle *ph;
+ 
+ 		memset(r, 0, sizeof(r));
+ 		memset(&tsi_eth_data, 0, sizeof(tsi_eth_data));
+@@ -108,10 +108,10 @@ static int __init tsi108_eth_of_init(voi
+ 			goto err;
+ 		}
+ 
+-		mac_addr = get_property(np, "address", NULL);
++		mac_addr = of_get_property(np, "address", NULL);
+ 		memcpy(tsi_eth_data.mac_addr, mac_addr, 6);
+ 
+-		ph = (phandle *) get_property(np, "phy-handle", NULL);
++		ph = of_get_property(np, "phy-handle", NULL);
+ 		phy = of_find_node_by_phandle(*ph);
+ 
+ 		if (phy == NULL) {
+@@ -119,8 +119,8 @@ static int __init tsi108_eth_of_init(voi
+ 			goto unreg;
+ 		}
+ 
+-		id = (u32 *) get_property(phy, "reg", NULL);
+-		phy_id = (u32 *) get_property(phy, "phy-id", NULL);
++		id = of_get_property(phy, "reg", NULL);
++		phy_id = of_get_property(phy, "phy-id", NULL);
+ 		ret = of_address_to_resource(phy, 0, &res);
+ 		if (ret) {
+ 			of_node_put(phy);
+Index: linux-2.6.18/arch/powerpc/sysdev/tsi108_pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/tsi108_pci.c
++++ linux-2.6.18/arch/powerpc/sysdev/tsi108_pci.c
+@@ -209,7 +209,7 @@ int __init tsi108_setup_pci(struct devic
+ 	has_address = (of_address_to_resource(dev, 0, &rsrc) == 0);
+ 
+ 	/* Get bus range if any */
+-	bus_range = get_property(dev, "bus-range", &len);
++	bus_range = of_get_property(dev, "bus-range", &len);
+ 	if (bus_range == NULL || len < 2 * sizeof(int)) {
+ 		printk(KERN_WARNING "Can't get bus-range for %s, assume"
+ 		       " bus 0\n", dev->full_name);
+Index: linux-2.6.18/mvl_patches/pro50-0170.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0170.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(170);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

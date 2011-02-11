@@ -1,0 +1,452 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_FSL_Rework_PCI_PCIe_support_for_85xx_86xx
+# Date: Wed Apr  9 10:00:44 2008
+# Source: kernel.org
+# MR: 26902
+# Type: Enhancement
+# Disposition: backported from kernel.org
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# From 72b122cc301858dcf283fe6731e61322c9772cf4 Mon Sep 17 00:00:00 2001
+# From: Kumar Gala <galak@kernel.crashing.org>
+# Date: Mon, 14 Jan 2008 17:02:19 -0600
+# Subject: [PATCH] [POWERPC] FSL: Rework PCI/PCIe support for 85xx/86xx
+# 
+# The current PCI code for Freescale 85xx/86xx was treating the virtual
+# P2P PCIe bridge as a transparent bridge.  Rather than doing that fixup
+# the virtual P2P bridge by copying the resources from the PHB.
+# 
+# Also, fixup a bit of the code for dealing with resource_size_t being
+# 64-bits and how we set ATMU registers for >4G.
+# 
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+
+PATCHNUM=1013
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: kernel.org
+MR: 26902
+Type: Enhancement
+Disposition: backported from kernel.org
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+From 72b122cc301858dcf283fe6731e61322c9772cf4 Mon Sep 17 00:00:00 2001
+From: Kumar Gala <galak@kernel.crashing.org>
+Date: Mon, 14 Jan 2008 17:02:19 -0600
+Subject: [PATCH] [POWERPC] FSL: Rework PCI/PCIe support for 85xx/86xx
+
+The current PCI code for Freescale 85xx/86xx was treating the virtual
+P2P PCIe bridge as a transparent bridge.  Rather than doing that fixup
+the virtual P2P bridge by copying the resources from the PHB.
+
+Also, fixup a bit of the code for dealing with resource_size_t being
+64-bits and how we set ATMU registers for >4G.
+
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+Index: linux-2.6.18/arch/powerpc/sysdev/fsl_pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/fsl_pci.c
++++ linux-2.6.18/arch/powerpc/sysdev/fsl_pci.c
+@@ -33,8 +33,8 @@ void __init setup_pci_atmu(struct pci_co
+ 	struct ccsr_pci __iomem *pci;
+ 	int i;
+ 
+-	pr_debug("PCI memory map start 0x%x, size 0x%x\n", rsrc->start,
+-			rsrc->end - rsrc->start + 1);
++	pr_debug("PCI memory map start 0x%016llx, size 0x%016llx\n",
++		    (u64)rsrc->start, (u64)rsrc->end - (u64)rsrc->start + 1);
+ 	pci = ioremap(rsrc->start, rsrc->end - rsrc->start + 1);
+ 
+ 	/* Disable all windows (except powar0 since its ignored) */
+@@ -46,17 +46,17 @@ void __init setup_pci_atmu(struct pci_co
+ 	/* Setup outbound MEM window */
+ 	for(i = 0; i < 3; i++)
+ 		if (hose->mem_resources[i].flags & IORESOURCE_MEM){
+-			pr_debug("PCI MEM resource start 0x%08x, size 0x%08x.\n",
+-				hose->mem_resources[i].start,
+-				hose->mem_resources[i].end
+-				  - hose->mem_resources[i].start + 1);
+-			out_be32(&pci->pow[i+1].potar,
+-				(hose->mem_resources[i].start >> 12)
+-				& 0x000fffff);
++			resource_size_t pci_addr_start =
++				 hose->mem_resources[i].start -
++				 hose->pci_mem_offset;
++			pr_debug("PCI MEM resource start 0x%016llx, size 0x%016llx.\n",
++				(u64)hose->mem_resources[i].start,
++				(u64)hose->mem_resources[i].end
++				  - (u64)hose->mem_resources[i].start + 1);
++			out_be32(&pci->pow[i+1].potar, (pci_addr_start >> 12));
+ 			out_be32(&pci->pow[i+1].potear, 0);
+ 			out_be32(&pci->pow[i+1].powbar,
+-				(hose->mem_resources[i].start >> 12)
+-				& 0x000fffff);
++				(hose->mem_resources[i].start >> 12));
+ 			/* Enable, Mem R/W */
+ 			out_be32(&pci->pow[i+1].powar, 0x80044000
+ 				| (__ilog2(hose->mem_resources[i].end
+@@ -65,15 +65,14 @@ void __init setup_pci_atmu(struct pci_co
+ 
+ 	/* Setup outbound IO window */
+ 	if (hose->io_resource.flags & IORESOURCE_IO){
+-		pr_debug("PCI IO resource start 0x%08x, size 0x%08x, phy base 0x%08x.\n",
+-			hose->io_resource.start,
+-			hose->io_resource.end - hose->io_resource.start + 1,
+-			hose->io_base_phys);
+-		out_be32(&pci->pow[i+1].potar, (hose->io_resource.start >> 12)
+-				& 0x000fffff);
++		pr_debug("PCI IO resource start 0x%016llx, size 0x%016llx, "
++			 "phy base 0x%016llx.\n",
++			(u64)hose->io_resource.start,
++			(u64)hose->io_resource.end - (u64)hose->io_resource.start + 1,
++			(u64)hose->io_base_phys);
++		out_be32(&pci->pow[i+1].potar, (hose->io_resource.start >> 12));
+ 		out_be32(&pci->pow[i+1].potear, 0);
+-		out_be32(&pci->pow[i+1].powbar, (hose->io_base_phys >> 12)
+-				& 0x000fffff);
++		out_be32(&pci->pow[i+1].powbar, (hose->io_base_phys >> 12));
+ 		/* Enable, IO R/W */
+ 		out_be32(&pci->pow[i+1].powar, 0x80088000
+ 			| (__ilog2(hose->io_resource.end
+@@ -107,55 +106,18 @@ void __init setup_pci_cmd(struct pci_con
+ 	}
+ }
+ 
+-static void __devinit quirk_fsl_pcie_transparent(struct pci_dev *dev)
++static int fsl_pcie_bus_fixup;
++  
++static void __init quirk_fsl_pcie_header(struct pci_dev *dev)
+ {
+-	struct resource *res;
+-	int i, res_idx = PCI_BRIDGE_RESOURCES;
+-	struct pci_controller *hose;
+ 
+ 	/* if we aren't a PCIe don't bother */
+ 	if (!pci_find_capability(dev, PCI_CAP_ID_EXP))
+ 		return ;
+ 
+-	/*
+-	 * Make the bridge be transparent.
+-	 */
+-	dev->transparent = 1;
+-
+-	hose = pci_bus_to_host(dev->bus);
+-	if (!hose) {
+-		printk(KERN_ERR "Can't find hose for bus %d\n",
+-		       dev->bus->number);
+-		return;
+-	}
+-
+-	/* Clear out any of the virtual P2P bridge registers */
+-	pci_write_config_word(dev, PCI_IO_BASE_UPPER16, 0);
+-	pci_write_config_word(dev, PCI_IO_LIMIT_UPPER16, 0);
+-	pci_write_config_byte(dev, PCI_IO_BASE, 0x10);
+-	pci_write_config_byte(dev, PCI_IO_LIMIT, 0);
+-	pci_write_config_word(dev, PCI_MEMORY_BASE, 0x10);
+-	pci_write_config_word(dev, PCI_MEMORY_LIMIT, 0);
+-	pci_write_config_word(dev, PCI_PREF_BASE_UPPER32, 0x0);
+-	pci_write_config_word(dev, PCI_PREF_LIMIT_UPPER32, 0x0);
+-	pci_write_config_word(dev, PCI_PREF_MEMORY_BASE, 0x10);
+-	pci_write_config_word(dev, PCI_PREF_MEMORY_LIMIT, 0);
+-
+-	if (hose->io_resource.flags) {
+-		res = &dev->resource[res_idx++];
+-		res->start = hose->io_resource.start;
+-		res->end = hose->io_resource.end;
+-		res->flags = hose->io_resource.flags;
+-		update_bridge_resource(dev, res);
+-	}
+-
+-	for (i = 0; i < 3; i++) {
+-		res = &dev->resource[res_idx + i];
+-		res->start = hose->mem_resources[i].start;
+-		res->end = hose->mem_resources[i].end;
+-		res->flags = hose->mem_resources[i].flags;
+-		update_bridge_resource(dev, res);
+-	}
++	dev->class = PCI_CLASS_BRIDGE_PCI << 8;
++	fsl_pcie_bus_fixup = 1;
++	return ;
+ }
+ 
+ int __init fsl_pcie_check_link(struct pci_controller *hose)
+@@ -172,11 +134,24 @@ void fsl_pcibios_fixup_bus(struct pci_bu
+ 	struct pci_controller *hose = (struct pci_controller *) bus->sysdata;
+ 	int i;
+ 
+-	/* deal with bogus pci_bus when we don't have anything connected on PCIe */
+-	if (hose->indirect_type & PPC_INDIRECT_TYPE_NO_PCIE_LINK) {
+-		if (bus->parent) {
+-			for (i = 0; i < 4; ++i)
+-				bus->resource[i] = bus->parent->resource[i];
++	if ((bus->parent == hose->bus) &&
++	    ((fsl_pcie_bus_fixup &&
++	      early_find_capability(hose, 0, 0, PCI_CAP_ID_EXP)) ||
++	     (hose->indirect_type & PPC_INDIRECT_TYPE_NO_PCIE_LINK)))
++	{
++		for (i = 0; i < 4; ++i) {
++			struct resource *res = bus->resource[i];
++			struct resource *par = bus->parent->resource[i];
++			if (res) {
++				res->start = 0;
++				res->end   = 0;
++				res->flags = 0;
++			}
++			if (res && par) {
++				res->start = par->start;
++				res->end   = par->end;
++				res->flags = par->flags;
++			}
+ 		}
+ 	}
+ }
+@@ -240,22 +215,22 @@ int __init fsl_add_bridge(struct device_
+ 	return 0;
+ }
+ 
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8548E, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8548, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8543E, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8543, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8547E, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8545E, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8545, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8568E, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8568, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8567E, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8567, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8533E, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8533, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8544E, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8544, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8572E, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8572, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8641, quirk_fsl_pcie_transparent);
+-DECLARE_PCI_FIXUP_EARLY(0x1957, PCI_DEVICE_ID_MPC8641D, quirk_fsl_pcie_transparent);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8548E, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8548, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8543E, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8543, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8547E, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8545E, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8545, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8568E, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8568, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8567E, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8567, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8533E, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8533, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8544E, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8544, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8572E, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8572, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8641, quirk_fsl_pcie_header);
++DECLARE_PCI_FIXUP_HEADER(0x1957, PCI_DEVICE_ID_MPC8641D, quirk_fsl_pcie_header);
+Index: linux-2.6.18/mvl_patches/pro50-1013.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1013.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1013);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

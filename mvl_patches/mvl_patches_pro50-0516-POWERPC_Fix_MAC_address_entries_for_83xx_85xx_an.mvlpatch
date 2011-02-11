@@ -1,0 +1,656 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Fix_MAC_address_entries_for_83xx_85xx_an
+# Date: Fri Oct 26 08:39:38 2007
+# Source: Kernel.org
+# MR: 25195
+# Type: Enhancement
+# Disposition: merged from Kernel.org
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# From eae98266e78e5659d75dbb62b4601960c15c7830 Mon Sep 17 00:00:00 2001
+# From: Timur Tabi <timur@freescale.com>
+# Date: Fri, 22 Jun 2007 14:33:15 -0500
+# Subject: [PATCH] [POWERPC] Fix MAC address entries for 83xx, 85xx, and 86xx device trees
+# 
+# For the 83xx, 85xx, and 86xx device trees, add a "local-mac-address" property
+# to every Ethernet node that didn't have one.  Add a comment indicating that
+# the "address" and/or "mac-address" properties are deprecated in DTS files
+# and will be removed at a later time.  Change all MAC address properties to
+# have a zero MAC address value.
+# 
+# Signed-off-by: Timur Tabi <timur@freescale.com>
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+# NOTE: This patch was modified to remove references to the following file
+# which do not exist in the internal tree:
+# 
+# arch/powerpc/boot/dts/mpc832x_mds.dts
+# arch/powerpc/boot/dts/mpc834x_mds.dts
+# arch/powerpc/boot/dts/mpc836x_mds.dts
+# 
+
+PATCHNUM=516
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Kernel.org
+MR: 25195
+Type: Enhancement
+Disposition: merged from Kernel.org
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+From eae98266e78e5659d75dbb62b4601960c15c7830 Mon Sep 17 00:00:00 2001
+From: Timur Tabi <timur@freescale.com>
+Date: Fri, 22 Jun 2007 14:33:15 -0500
+Subject: [PATCH] [POWERPC] Fix MAC address entries for 83xx, 85xx, and 86xx device trees
+
+For the 83xx, 85xx, and 86xx device trees, add a "local-mac-address" property
+to every Ethernet node that didn't have one.  Add a comment indicating that
+the "address" and/or "mac-address" properties are deprecated in DTS files
+and will be removed at a later time.  Change all MAC address properties to
+have a zero MAC address value.
+
+Signed-off-by: Timur Tabi <timur@freescale.com>
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+NOTE: This patch was modified to remove references to the following file
+which do not exist in the internal tree:
+
+arch/powerpc/boot/dts/mpc832x_mds.dts
+arch/powerpc/boot/dts/mpc834x_mds.dts
+arch/powerpc/boot/dts/mpc836x_mds.dts
+
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc832x_rdb.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc832x_rdb.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc832x_rdb.dts
+@@ -242,7 +242,13 @@
+ 			reg = <3000 200>;
+ 			interrupts = <21>;
+ 			interrupt-parent = <&qeic>;
+-			mac-address = [ 00 04 9f ef 03 02 ];
++			/*
++			 * mac-address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
++			mac-address = [ 00 00 00 00 00 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			rx-clock = <20>;
+ 			tx-clock = <13>;
+ 			phy-handle = <&phy00>;
+@@ -257,7 +263,13 @@
+ 			reg = <2200 200>;
+ 			interrupts = <22>;
+ 			interrupt-parent = <&qeic>;
+-			mac-address = [ 00 04 9f ef 03 01 ];
++			/*
++			 * mac-address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
++			mac-address = [ 00 00 00 00 00 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			rx-clock = <19>;
+ 			tx-clock = <1a>;
+ 			phy-handle = <&phy04>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8349emitx.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8349emitx.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8349emitx.dts
+@@ -142,6 +142,11 @@
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+ 			reg = <24000 1000>;
++			/*
++			 * address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
+ 			address = [ 00 00 00 00 00 00 ];
+ 			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <20 8 21 8 22 8>;
+@@ -156,6 +161,11 @@
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+ 			reg = <25000 1000>;
++			/*
++			 * address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
+ 			address = [ 00 00 00 00 00 00 ];
+ 			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <23 8 24 8 25 8>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8540ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8540ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8540ads.dts
+@@ -106,8 +106,13 @@
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+ 			reg = <24000 1000>;
+-			address = [ 00 E0 0C 00 73 00 ];
+-			local-mac-address = [ 00 E0 0C 00 73 00 ];
++			/*
++			 * address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
++			address = [ 00 00 00 00 00 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <d 2 e 2 12 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy0>;
+@@ -120,8 +125,13 @@
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+ 			reg = <25000 1000>;
+-			address = [ 00 E0 0C 00 73 01 ];
+-			local-mac-address = [ 00 E0 0C 00 73 01 ];
++			/*
++			 * address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
++			address = [ 00 00 00 00 00 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <13 2 14 2 18 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy1>;
+@@ -134,8 +144,13 @@
+ 			model = "FEC";
+ 			compatible = "gianfar";
+ 			reg = <26000 1000>;
+-			address = [ 00 E0 0C 00 73 02 ];
+-			local-mac-address = [ 00 E0 0C 00 73 02 ];
++			/*
++			 * address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
++			address = [ 00 00 00 00 00 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <19 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy3>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8541cds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8541cds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8541cds.dts
+@@ -100,7 +100,7 @@
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+ 			reg = <24000 1000>;
+-			local-mac-address = [ 00 E0 0C 00 73 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <d 2 e 2 12 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy0>;
+@@ -113,7 +113,7 @@
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+ 			reg = <25000 1000>;
+-			local-mac-address = [ 00 E0 0C 00 73 01 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <13 2 14 2 18 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy1>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8548cds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8548cds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8548cds.dts
+@@ -126,7 +126,7 @@
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+ 			reg = <24000 1000>;
+-			local-mac-address = [ 00 E0 0C 00 73 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <d 2 e 2 12 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy0>;
+@@ -139,7 +139,7 @@
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+ 			reg = <25000 1000>;
+-			local-mac-address = [ 00 E0 0C 00 73 01 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <13 2 14 2 18 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy1>;
+@@ -153,7 +153,7 @@
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+ 			reg = <26000 1000>;
+-			local-mac-address = [ 00 E0 0C 00 73 02 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <f 2 10 2 11 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy2>;
+@@ -166,7 +166,7 @@
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+ 			reg = <27000 1000>;
+-			local-mac-address = [ 00 E0 0C 00 73 03 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <15 2 16 2 17 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy3>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8555cds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8555cds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8555cds.dts
+@@ -100,7 +100,7 @@
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+ 			reg = <24000 1000>;
+-			local-mac-address = [ 00 E0 0C 00 73 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <0d 2 0e 2 12 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy0>;
+@@ -113,7 +113,7 @@
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+ 			reg = <25000 1000>;
+-			local-mac-address = [ 00 E0 0C 00 73 01 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <13 2 14 2 18 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy1>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8560ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8560ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8560ads.dts
+@@ -102,7 +102,13 @@
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+ 			reg = <24000 1000>;
+-			address = [ 00 00 0C 00 00 FD ];
++			/*
++			 * address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
++			address = [ 00 00 00 00 00 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <d 2 e 2 12 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy0>;
+@@ -115,7 +121,13 @@
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+ 			reg = <25000 1000>;
+-			address = [ 00 00 0C 00 01 FD ];
++			/*
++			 * address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
++			address = [ 00 00 00 00 00 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <13 2 14 2 18 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy1>;
+@@ -276,7 +288,13 @@
+ 				model = "FCC";
+ 				device-id = <2>;
+ 				reg = <91320 20 88500 100 913a0 30>;
+-				mac-address = [ 00 00 0C 00 02 FD ];
++				/*
++				 * mac-address is deprecated and will be removed
++				 * in 2.6.25.  Only recent versions of
++				 * U-Boot support local-mac-address, however.
++				 */
++				mac-address = [ 00 00 00 00 00 00 ];
++				local-mac-address = [ 00 00 00 00 00 00 ];
+ 				clock-setup = <ff00ffff 250000>;
+ 				rx-clock = <15>;
+ 				tx-clock = <16>;
+@@ -291,7 +309,13 @@
+ 				model = "FCC";
+ 				device-id = <3>;
+ 				reg = <91340 20 88600 100 913d0 30>;
+-				mac-address = [ 00 00 0C 00 03 FD ];
++				/*
++				 * mac-address is deprecated and will be removed
++				 * in 2.6.25.  Only recent versions of
++				 * U-Boot support local-mac-address, however.
++				 */
++				mac-address = [ 00 00 00 00 00 00 ];
++				local-mac-address = [ 00 00 00 00 00 00 ];
+ 				clock-setup = <ffff00ff 3700>;
+ 				rx-clock = <17>;
+ 				tx-clock = <18>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8568mds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8568mds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8568mds.dts
+@@ -130,7 +130,13 @@
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+ 			reg = <24000 1000>;
++			/*
++			 * mac-address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
+ 			mac-address = [ 00 00 00 00 00 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <d 2 e 2 12 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy2>;
+@@ -143,7 +149,13 @@
+ 			model = "eTSEC";
+ 			compatible = "gianfar";
+ 			reg = <25000 1000>;
+-			mac-address = [ 00 00 00 00 00 00];
++			/*
++			 * mac-address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
++			mac-address = [ 00 00 00 00 00 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <13 2 14 2 18 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy3>;
+@@ -300,7 +312,13 @@
+ 			reg = <2000 200>;
+ 			interrupts = <20>;
+ 			interrupt-parent = <&qeic>;
+-			mac-address = [ 00 04 9f 00 23 23 ];
++			/*
++			 * mac-address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
++			mac-address = [ 00 00 00 00 00 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			rx-clock = <0>;
+ 			tx-clock = <19>;
+ 			phy-handle = <&qe_phy0>;
+@@ -316,7 +334,13 @@
+ 			reg = <3000 200>;
+ 			interrupts = <21>;
+ 			interrupt-parent = <&qeic>;
+-			mac-address = [ 00 11 22 33 44 55 ];
++			/*
++			 * mac-address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
++			mac-address = [ 00 00 00 00 00 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			rx-clock = <0>;
+ 			tx-clock = <14>;
+ 			phy-handle = <&qe_phy1>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8641_hpcn.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8641_hpcn.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8641_hpcn.dts
+@@ -122,7 +122,13 @@
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+ 			reg = <24000 1000>;
+-			mac-address = [ 00 E0 0C 00 73 00 ];
++			/*
++			 * mac-address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
++			mac-address = [ 00 00 00 00 00 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <1d 2 1e 2 22 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy0>;
+@@ -135,7 +141,13 @@
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+ 			reg = <25000 1000>;
+-			mac-address = [ 00 E0 0C 00 73 01 ];
++			/*
++			 * mac-address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
++			mac-address = [ 00 00 00 00 00 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <23 2 24 2 28 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy1>;
+@@ -148,7 +160,13 @@
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+ 			reg = <26000 1000>;
+-			mac-address = [ 00 E0 0C 00 02 FD ];
++			/*
++			 * mac-address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
++			mac-address = [ 00 00 00 00 00 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <1F 2 20 2 21 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy2>;
+@@ -161,7 +179,13 @@
+ 			model = "TSEC";
+ 			compatible = "gianfar";
+ 			reg = <27000 1000>;
+-			mac-address = [ 00 E0 0C 00 03 FD ];
++			/*
++			 * mac-address is deprecated and will be removed
++			 * in 2.6.25.  Only recent versions of
++			 * U-Boot support local-mac-address, however.
++			 */
++			mac-address = [ 00 00 00 00 00 00 ];
++			local-mac-address = [ 00 00 00 00 00 00 ];
+ 			interrupts = <25 2 26 2 27 2>;
+ 			interrupt-parent = <&mpic>;
+ 			phy-handle = <&phy3>;
+Index: linux-2.6.18/mvl_patches/pro50-0516.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0516.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(516);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

@@ -1,0 +1,1903 @@
+#! /usr/bin/env bash
+# Patch: -common_arm_freescale_mxc_core_support
+# Date: Wed Aug 29 07:23:16 2007
+
+PATCHNUM=105
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Index: linux-2.6.18/arch/arm/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/arm/Kconfig
++++ linux-2.6.18/arch/arm/Kconfig
+@@ -207,6 +207,13 @@ config ARCH_FOOTBRIDGE
+ 	  Support for systems based on the DC21285 companion chip
+ 	  ("FootBridge"), such as the Simtec CATS and the Rebel NetWinder.
+ 
++config ARCH_MXC
++	bool "Freescale MXC/iMX-based"
++	select ISA
++	select ARCH_MTD_XIP
++	help
++	  Support for Freescale MXC/iMX-based family of processors
++
+ config ARCH_NETX
+ 	bool "Hilscher NetX based"
+ 	select ARM_VIC
+@@ -335,6 +342,8 @@ source "arch/arm/mach-ep93xx/Kconfig"
+ 
+ source "arch/arm/mach-footbridge/Kconfig"
+ 
++source "arch/arm/plat-mxc/Kconfig"
++
+ source "arch/arm/mach-integrator/Kconfig"
+ 
+ source "arch/arm/mach-iop3xx/Kconfig"
+Index: linux-2.6.18/arch/arm/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/arm/Makefile
++++ linux-2.6.18/arch/arm/Makefile
+@@ -122,6 +122,8 @@ endif
+  machine-$(CONFIG_ARCH_EP93XX)     := ep93xx
+  machine-$(CONFIG_ARCH_PNX4008)    := pnx4008
+  machine-$(CONFIG_ARCH_NETX)       := netx
++  incdir-$(CONFIG_ARCH_MXC)        := mxc
++ machine-$(CONFIG_ARCH_MX2)        := mx2
+ 
+ ifeq ($(CONFIG_ARCH_EBSA110),y)
+ # This is what happens if you forget the IOCS16 line.
+@@ -161,6 +163,7 @@ core-$(CONFIG_VFP)		+= arch/arm/vfp/
+ 
+ # If we have a common platform directory, then include it in the build.
+ core-$(CONFIG_ARCH_OMAP)	+= arch/arm/plat-omap/
++core-$(CONFIG_ARCH_MXC)		+= arch/arm/plat-mxc/
+ 
+ drivers-$(CONFIG_OPROFILE)      += arch/arm/oprofile/
+ drivers-$(CONFIG_ARCH_CLPS7500)	+= drivers/acorn/char/
+Index: linux-2.6.18/arch/arm/mach-mx2/Kconfig
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/mach-mx2/Kconfig
+@@ -0,0 +1,11 @@
++menu "MX27 Options"
++	depends on ARCH_MX2
++
++config MACH_MX27ADS
++	bool "Support MX27ADS platform"
++	default y
++	help
++	  Include support for MX27ADS platform. This includes specific
++	  configurations for the board and its peripherals.
++
++endmenu
+Index: linux-2.6.18/arch/arm/mach-mx2/Makefile
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/mach-mx2/Makefile
+@@ -0,0 +1,8 @@
++#
++# Makefile for the linux kernel.
++#
++
++# Object file lists.
++
++obj-y		:= mm.o time.o
++obj-$(CONFIG_MACH_MX27ADS)	+= mx27ads.o
+Index: linux-2.6.18/arch/arm/mach-mx2/Makefile.boot
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/mach-mx2/Makefile.boot
+@@ -0,0 +1,3 @@
++   zreladdr-y	:= 0xA0008000
++params_phys-y	:= 0xA0000100
++initrd_phys-y	:= 0xA0800000
+Index: linux-2.6.18/arch/arm/mach-mx2/mm.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/mach-mx2/mm.c
+@@ -0,0 +1,50 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++/*!
++ * @file mm.c
++ *
++ * @brief This file creates static virtual to physical mappings, common to all
++ * MX2 boards.
++ *
++ * @ingroup Memory
++ */
++
++#include <linux/mm.h>
++#include <linux/init.h>
++
++#include <asm/hardware.h>
++#include <asm/pgtable.h>
++#include <asm/mach/map.h>
++#include <asm/arch/common.h>
++
++static struct map_desc io_desc[] __initdata = {
++	{
++		.virtual = AIPI_BASE_ADDR_VIRT,
++		.pfn     = __phys_to_pfn(AIPI_BASE_ADDR),
++		.length  = AIPI_SIZE,
++		.type    = MT_DEVICE,
++	}, {
++		.virtual = SAHB1_BASE_ADDR_VIRT,
++		.pfn     = __phys_to_pfn(SAHB1_BASE_ADDR),
++		.length  = SAHB1_SIZE,
++		.type    = MT_DEVICE,
++	}, {
++		.virtual = X_MEMC_BASE_ADDR_VIRT,
++		.pfn     = __phys_to_pfn(X_MEMC_BASE_ADDR),
++		.length  = X_MEMC_SIZE,
++		.type    = MT_DEVICE,
++	},
++};
++
++void __init mxc_map_io(void)
++{
++	iotable_init(io_desc, ARRAY_SIZE(io_desc));
++}
+Index: linux-2.6.18/arch/arm/mach-mx2/mx27ads.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/mach-mx2/mx27ads.c
+@@ -0,0 +1,118 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ *
++ * Based on mach-integrator/integrator_ap.c
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#include <linux/types.h>
++#include <linux/init.h>
++#include <linux/clk.h>
++#include <linux/serial_8250.h>
++#include <linux/delay.h>
++#include <linux/io.h>
++#include <linux/memory.h>
++
++#include <asm/hardware.h>
++#include <asm/mach-types.h>
++#include <asm/mach/arch.h>
++#include <asm/mach/map.h>
++#include <asm/arch/common.h>
++
++/*!
++ * @file mx27ads.c
++ * @brief This file contains the board specific initialization routines.
++ *
++ * @ingroup System
++ */
++
++#if defined(CONFIG_SERIAL_8250) || defined(CONFIG_SERIAL_8250_MODULE)
++/*!
++ * The serial port definition structure.
++ */
++static struct plat_serial8250_port serial_platform_data[] = {
++	{
++		.membase  = (void __iomem *)(CS4_BASE_ADDR_VIRT + 0x20000),
++		.mapbase  = (unsigned long)(CS4_BASE_ADDR + 0x20000),
++		.irq      = EXPIO_INT_XUART_INTA,
++		.uartclk  = 3686400,
++		.regshift = 1,
++		.iotype   = UPIO_MEM,
++		.flags    = UPF_BOOT_AUTOCONF | UPF_SKIP_TEST | UPF_AUTO_IRQ,
++	},
++	{},
++};
++
++static struct platform_device serial_device = {
++	.name = "serial8250",
++	.id   = 0,
++	.dev  = {
++		.platform_data = &serial_platform_data[0],
++	},
++};
++
++static int __init mxc_init_extuart(void)
++{
++	/* Toggle the UART reset line */
++
++	__raw_writew(PBC_BCTRL1_URST, PBC_BCTRL1_SET_REG);
++	udelay(1000);
++	__raw_writew(PBC_BCTRL1_URST, PBC_BCTRL1_CLEAR_REG);
++
++	return platform_device_register(&serial_device);
++}
++#else
++static inline int mxc_init_extuart(void)
++{
++	return 0;
++}
++#endif
++
++/*!
++ * This structure defines static mappings for the i.MX27ADS board.
++ */
++static struct map_desc mx27ads_io_desc[] __initdata = {
++	{
++		.virtual = CS4_BASE_ADDR_VIRT,
++		.pfn     = __phys_to_pfn(CS4_BASE_ADDR),
++		.length  = CS4_SIZE,
++		.type    = MT_DEVICE,
++	}
++};
++
++/*!
++ * Set up static virtual mappings.
++ */
++void __init mx27ads_map_io(void)
++{
++	mxc_map_io();
++	iotable_init(mx27ads_io_desc, ARRAY_SIZE(mx27ads_io_desc));
++}
++
++static void __init mx27ads_board_init(void)
++{
++	pr_info("AIPI VA base: 0x%x\n", IO_ADDRESS(AIPI_BASE_ADDR));
++
++	mxc_init_extuart();
++}
++
++/*
++ * The following uses standard kernel macros define in arch.h in order to
++ * initialize __mach_desc_MX27ADS data structure.
++ */
++/* *INDENT-OFF* */
++MACHINE_START(MX27ADS, "Freescale i.MX27ADS")
++	/* maintainer: Freescale Semiconductor, Inc. */
++	.phys_io        = AIPI_BASE_ADDR,
++	.io_pg_offst    = ((AIPI_BASE_ADDR_VIRT) >> 18) & 0xfffc,
++	.boot_params    = PHYS_OFFSET + 0x100,
++	.map_io         = mx27ads_map_io,
++	.init_irq       = mxc_init_irq,
++	.init_machine   = mx27ads_board_init,
++	.timer          = &mxc_timer,
++MACHINE_END
+Index: linux-2.6.18/arch/arm/mach-mx2/time.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/mach-mx2/time.c
+@@ -0,0 +1,119 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++/* System Timer Interrupt reconfigured to run in free-run mode.
++ * Author: Vitaly Wool
++ * Copyright 2004 MontaVista Software Inc.
++ */
++
++/*!
++ * @file time.c
++ * @brief This file contains OS tick implementations.
++ *
++ * This file contains OS tick implementations.
++ *
++ * @ingroup Timers
++ */
++
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/interrupt.h>
++#include <linux/irq.h>
++#include <linux/io.h>
++#include <asm/hardware.h>
++#include <asm/mach/time.h>
++#include <asm/arch/common.h>
++
++/* OS tick defines */
++#define MXC_GPT_INT_TICK		MXC_INT_GPT
++#define MXC_GPT_TCMP_TICK		MXC_GPT_TCMP(MXC_TIMER_GPT1)
++#define MXC_GPT_TSTAT_TICK		MXC_GPT_TSTAT(MXC_TIMER_GPT1)
++#define MXC_GPT_TCTL_TICK		MXC_GPT_TCTL(MXC_TIMER_GPT1)
++#define MXC_GPT_TPRER_TICK		MXC_GPT_TPRER(MXC_TIMER_GPT1)
++#define MXC_GPT_TCN_TICK		MXC_GPT_TCN(MXC_TIMER_GPT1)
++
++/*!
++ * This is the timer interrupt service routine to do required tasks.
++ *
++ * @param  irq          GPT interrupt source number (not used)
++ * @param  dev_id       this parameter is not used
++ * @return always returns \b IRQ_HANDLED as defined in
++ *         include/linux/interrupt.h.
++ */
++static irqreturn_t mxc_timer_interrupt(int irq, void *dev_id,
++		struct pt_regs *regs)
++{
++	unsigned int next_match;
++
++	write_seqlock(&xtime_lock);
++
++	do {
++		timer_tick(regs);
++		next_match = __raw_readl(MXC_GPT_TCMP_TICK) + LATCH;
++		__raw_writel(GPT_TSTAT_COMP, MXC_GPT_TSTAT_TICK);
++		__raw_writel(next_match, MXC_GPT_TCMP_TICK);
++	} while ((signed long)(next_match - __raw_readl(MXC_GPT_TCN_TICK)) <=
++		 0);
++
++	write_sequnlock(&xtime_lock);
++
++	return IRQ_HANDLED;
++}
++
++/*!
++ * The OS tick timer interrupt structure.
++ */
++static struct irqaction timer_irq = {
++	.name    = "MXC Timer Tick",
++	.flags   = IRQF_DISABLED | IRQF_TIMER,
++	.handler = mxc_timer_interrupt,
++};
++
++/*!
++ * This function is used to initialize the GPT to produce an interrupt
++ * every 10 msec. It is called by the start_kernel() during system startup.
++ */
++void mxc_init_time(void)
++{
++	u32 reg, v;
++
++	__raw_writel(0, MXC_GPT_TCTL_TICK);
++	__raw_writel(GPT_TCTL_SWR, MXC_GPT_TCTL_TICK);
++
++	while ((__raw_readl(MXC_GPT_TCTL_TICK) & GPT_TCTL_SWR) != 0)
++		cpu_relax();
++
++	reg = GPT_TCTL_FRR | GPT_TCTL_COMPEN | GPT_TCTL_SRC_PER1;
++
++	__raw_writel(reg, MXC_GPT_TCTL_TICK);
++
++	/* TODO: get timer rate from clk driver */
++	v = 13300000;
++
++	if ((v % CLOCK_TICK_RATE) != 0) {
++		pr_info("\nWARNING: Can't generate CLOCK_TICK_RATE at %d Hz\n",
++			CLOCK_TICK_RATE);
++	}
++	pr_info("Actual CLOCK_TICK_RATE is %d Hz\n",
++		v / ((__raw_readl(MXC_GPT_TPRER_TICK) & 0x7FF) + 1));
++
++	reg = __raw_readl(MXC_GPT_TCN_TICK);
++	reg += LATCH;
++	__raw_writel(reg, MXC_GPT_TCMP_TICK);
++
++	setup_irq(MXC_GPT_INT_TICK, &timer_irq);
++
++	reg = __raw_readl(MXC_GPT_TCTL_TICK) | GPT_TCTL_TEN;
++	__raw_writel(reg, MXC_GPT_TCTL_TICK);
++}
++
++struct sys_timer mxc_timer = {
++	.init = mxc_init_time,
++};
+Index: linux-2.6.18/arch/arm/mm/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mm/Kconfig
++++ linux-2.6.18/arch/arm/mm/Kconfig
+@@ -171,8 +171,8 @@ config CPU_ARM925T
+ # ARM926T
+ config CPU_ARM926T
+ 	bool "Support ARM926T processor"
+-	depends on ARCH_INTEGRATOR || ARCH_VERSATILE_PB || MACH_VERSATILE_AB || ARCH_OMAP730 || ARCH_OMAP16XX || MACH_REALVIEW_EB || ARCH_PNX4008 || ARCH_NETX || CPU_S3C2412 || ARCH_AT91SAM9260 || ARCH_AT91SAM9261
+-	default y if ARCH_VERSATILE_PB || MACH_VERSATILE_AB || ARCH_OMAP730 || ARCH_OMAP16XX || ARCH_PNX4008 || ARCH_NETX || CPU_S3C2412 || ARCH_AT91SAM9260 || ARCH_AT91SAM9261
++	depends on ARCH_INTEGRATOR || ARCH_VERSATILE_PB || MACH_VERSATILE_AB || ARCH_OMAP730 || ARCH_OMAP16XX || MACH_REALVIEW_EB || ARCH_PNX4008 || ARCH_NETX || CPU_S3C2412 || ARCH_AT91SAM9260 || ARCH_AT91SAM9261 || ARCH_MX2
++	default y if ARCH_VERSATILE_PB || MACH_VERSATILE_AB || ARCH_OMAP730 || ARCH_OMAP16XX || ARCH_PNX4008 || ARCH_NETX || CPU_S3C2412 || ARCH_AT91SAM9260 || ARCH_AT91SAM9261 || ARCH_MX2
+ 	select CPU_32v5
+ 	select CPU_ABRT_EV5TJ
+ 	select CPU_CACHE_VIVT
+Index: linux-2.6.18/arch/arm/plat-mxc/Kconfig
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/plat-mxc/Kconfig
+@@ -0,0 +1,21 @@
++if ARCH_MXC
++
++menu "Freescale MXC Implementations"
++
++choice
++	prompt "MXC/iMX System Type"
++	default 0
++
++config ARCH_MX2
++	bool "MX2-based"
++	select GENERIC_TIME
++	help
++	  This enables support for systems based on Freescale i.MX2x
++
++endchoice
++
++source "arch/arm/mach-mx2/Kconfig"
++
++endmenu
++
++endif
+Index: linux-2.6.18/arch/arm/plat-mxc/Makefile
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/plat-mxc/Makefile
+@@ -0,0 +1,6 @@
++#
++# Makefile for the linux kernel.
++#
++
++# Common support
++obj-y := irq.o
+Index: linux-2.6.18/arch/arm/plat-mxc/irq.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/plat-mxc/irq.c
+@@ -0,0 +1,83 @@
++/*
++ *  Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#include <linux/module.h>
++#include <linux/moduleparam.h>
++#include <linux/init.h>
++#include <linux/device.h>
++#include <linux/errno.h>
++#include <asm/hardware.h>
++#include <asm/io.h>
++#include <asm/irq.h>
++#include <asm/mach/irq.h>
++#include <asm/arch/common.h>
++
++/*!
++ * Disable interrupt number "irq" in the AVIC
++ *
++ * @param  irq          interrupt source number
++ */
++static void mxc_mask_irq(unsigned int irq)
++{
++	__raw_writel(irq, AVIC_INTDISNUM);
++}
++
++/*!
++ * Enable interrupt number "irq" in the AVIC
++ *
++ * @param  irq          interrupt source number
++ */
++static void mxc_unmask_irq(unsigned int irq)
++{
++	__raw_writel(irq, AVIC_INTENNUM);
++}
++
++static struct irq_chip mxc_avic_chip = {
++	.mask_ack = mxc_mask_irq,
++	.mask = mxc_mask_irq,
++	.unmask = mxc_unmask_irq,
++};
++
++/*!
++ * This function initializes the AVIC hardware and disables all the
++ * interrupts. It registers the interrupt enable and disable functions
++ * to the kernel for each interrupt source.
++ */
++void __init mxc_init_irq(void)
++{
++	int i;
++	u32 reg;
++
++	/* put the AVIC into the reset value with
++	 * all interrupts disabled
++	 */
++	__raw_writel(0, AVIC_INTCNTL);
++	__raw_writel(0x1f, AVIC_NIMASK);
++
++	/* disable all interrupts */
++	__raw_writel(0, AVIC_INTENABLEH);
++	__raw_writel(0, AVIC_INTENABLEL);
++
++	/* all IRQ no FIQ */
++	__raw_writel(0, AVIC_INTTYPEH);
++	__raw_writel(0, AVIC_INTTYPEL);
++	for (i = 0; i < MXC_MAX_INT_LINES; i++) {
++		set_irq_chip(i, &mxc_avic_chip);
++		set_irq_handler(i, handle_level_irq);
++		set_irq_flags(i, IRQF_VALID);
++	}
++
++	/* Set WDOG2's interrupt the highest priority level (bit 28-31) */
++	reg = __raw_readl(AVIC_NIPRIORITY6);
++	reg |= (0xF << 28);
++	__raw_writel(reg, AVIC_NIPRIORITY6);
++
++	printk(KERN_INFO "MXC IRQ initialized\n");
++}
+Index: linux-2.6.18/include/asm-arm/arch-mxc/board-mx27ads.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/board-mx27ads.h
+@@ -0,0 +1,219 @@
++/*
++ * Copyright 2005-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#ifndef __ASM_ARCH_MXC_BOARD_MX27ADS_H__
++#define __ASM_ARCH_MXC_BOARD_MX27ADS_H__
++
++#ifndef __ASM_ARCH_MXC_HARDWARE_H__
++#error "Do not include directly."
++#endif
++
++/* Size of contiguous memory for DMA and other h/w blocks */
++#define CONSISTENT_DMA_SIZE	SZ_8M
++
++/*!
++ * @name Memory Size parameters
++ */
++#define SDRAM_MEM_SIZE          SZ_128M
++
++/*!
++ * @name Keypad Configurations
++ */
++/* Maximum number of rows (0 to 7) */
++#define MXC_KBD_MAXROW          6
++
++/* Maximum number of columns (0 to 7) */
++#define MXC_KBD_MAXCOL          6
++
++/*!
++ * @name PBC Controller parameters
++ */
++#define PBC_BASE_ADDRESS        IO_ADDRESS(CS4_BASE_ADDR)
++#define PBC_REG_ADDR(offset)    (PBC_BASE_ADDRESS + (offset))
++
++/*!
++ * PBC Interupt name definitions
++ */
++#define PBC_GPIO1_0  0
++#define PBC_GPIO1_1  1
++#define PBC_GPIO1_2  2
++#define PBC_GPIO1_3  3
++#define PBC_GPIO1_4  4
++#define PBC_GPIO1_5  5
++
++#define PBC_INTR_MAX_NUM 6
++#define PBC_INTR_SHARED_MAX_NUM 8
++
++/* When the PBC address connection is fixed in h/w, defined as 1 */
++#define PBC_ADDR_SH             0
++
++/* Offsets for the PBC Controller register */
++#define PBC_VERSION_REG         PBC_REG_ADDR(0x00000 >> PBC_ADDR_SH)
++#define PBC_BCTRL1_SET_REG      PBC_REG_ADDR(0x00008 >> PBC_ADDR_SH)
++#define PBC_BCTRL1_CLEAR_REG    PBC_REG_ADDR(0x0000C >> PBC_ADDR_SH)
++#define PBC_BCTRL2_SET_REG      PBC_REG_ADDR(0x00010 >> PBC_ADDR_SH)
++#define PBC_BCTRL2_CLEAR_REG    PBC_REG_ADDR(0x00014 >> PBC_ADDR_SH)
++#define PBC_BCTRL3_SET_REG      PBC_REG_ADDR(0x00018 >> PBC_ADDR_SH)
++#define PBC_BCTRL3_CLEAR_REG    PBC_REG_ADDR(0x0001C >> PBC_ADDR_SH)
++#define PBC_BCTRL4_SET_REG      PBC_REG_ADDR(0x00020 >> PBC_ADDR_SH)
++#define PBC_BCTRL4_CLEAR_REG    PBC_REG_ADDR(0x00024 >> PBC_ADDR_SH)
++#define PBC_BSTAT1_REG          PBC_REG_ADDR(0x00028 >> PBC_ADDR_SH)
++#define PBC_INTSTATUS_REG       PBC_REG_ADDR(0x0002C >> PBC_ADDR_SH)
++#define PBC_INTCURR_STATUS_REG  PBC_REG_ADDR(0x00034 >> PBC_ADDR_SH)
++#define PBC_INTMASK_SET_REG     PBC_REG_ADDR(0x00038 >> PBC_ADDR_SH)
++#define PBC_INTMASK_CLEAR_REG   PBC_REG_ADDR(0x0003C >> PBC_ADDR_SH)
++
++/* PBC Board Version Register bit definitions */
++#define PBC_VERSION_ADS         0x8000	/* Bit15=1 means version for ads */
++#define PBC_VERSION_EVB_REVB    0x4000	/* BIT14=1 means version for evb revb */
++
++/* PBC Board Control Register 1 bit definitions */
++#define PBC_BCTRL1_ERST         0x0001	/* Ethernet Reset */
++#define PBC_BCTRL1_URST         0x0002	/* Reset External UART controller */
++#define PBC_BCTRL1_FRST         0x0004	/* FEC Reset */
++#define PBC_BCTRL1_ESLEEP       0x0010	/* Enable ethernet Sleep */
++#define PBC_BCTRL1_LCDON        0x0800	/* Enable the LCD */
++
++/* PBC Board Control Register 2 bit definitions */
++#define PBC_BCTRL2_VCC_EN       0x0004	/*   Enable VCC */
++#define PBC_BCTRL2_VPP_EN       0x0008	/*   Enable Vpp */
++#define PBC_BCTRL2_ATAFEC_EN    0x0010
++#define PBC_BCTRL2_ATAFEC_SEL   0x0020
++#define PBC_BCTRL2_ATA_EN       0x0040
++#define PBC_BCTRL2_IRDA_SD      0x0080
++#define PBC_BCTRL2_IRDA_EN      0x0100
++#define PBC_BCTRL2_CCTL10       0x0200
++#define PBC_BCTRL2_CCTL11       0x0400
++
++/* PBC Board Control Register 3 bit definitions */
++#define PBC_BCTRL3_HSH_EN       0x0020
++#define PBC_BCTRL3_FSH_MOD      0x0040
++#define PBC_BCTRL3_OTG_HS_EN    0x0080
++#define PBC_BCTRL3_OTG_VBUS_EN  0x0100
++#define PBC_BCTRL3_FSH_VBUS_EN  0x0200
++#define PBC_BCTRL3_USB_OTG_ON   0x0800
++#define PBC_BCTRL3_USB_FSH_ON   0x1000
++
++/* PBC Board Control Register 4 bit definitions */
++#define PBC_BCTRL4_REGEN_SEL    0x0001
++#define PBC_BCTRL4_USER_OFF     0x0002
++#define PBC_BCTRL4_VIB_EN       0x0004
++#define PBC_BCTRL4_PWRGT1_EN    0x0008
++#define PBC_BCTRL4_PWRGT2_EN    0x0010
++#define PBC_BCTRL4_STDBY_PRI    0x0020
++
++#ifndef __ASSEMBLY__
++/*!
++ * Enumerations for SD cards and memory stick card. This corresponds to
++ * the card EN bits in the IMR: SD1_EN | MS_EN | SD3_EN | SD2_EN.
++ */
++enum mxc_card_no {
++	MXC_CARD_SD2 = 0,
++	MXC_CARD_SD3,
++	MXC_CARD_MS,
++	MXC_CARD_SD1,
++	MXC_CARD_MIN = MXC_CARD_SD2,
++	MXC_CARD_MAX = MXC_CARD_SD1,
++};
++#endif
++
++#define MXC_CPLD_VER_1_50       0x01
++
++/*!
++ * PBC BSTAT Register bit definitions
++ */
++#define PBC_BSTAT_PRI_INT       0x0001
++#define PBC_BSTAT_USB_BYP       0x0002
++#define PBC_BSTAT_ATA_IOCS16    0x0004
++#define PBC_BSTAT_ATA_CBLID     0x0008
++#define PBC_BSTAT_ATA_DASP      0x0010
++#define PBC_BSTAT_PWR_RDY       0x0020
++#define PBC_BSTAT_SD3_WP        0x0100
++#define PBC_BSTAT_SD2_WP        0x0200
++#define PBC_BSTAT_SD1_WP        0x0400
++#define PBC_BSTAT_SD3_DET       0x0800
++#define PBC_BSTAT_SD2_DET       0x1000
++#define PBC_BSTAT_SD1_DET       0x2000
++#define PBC_BSTAT_MS_DET        0x4000
++#define PBC_BSTAT_SD3_DET_BIT   11
++#define PBC_BSTAT_SD2_DET_BIT   12
++#define PBC_BSTAT_SD1_DET_BIT   13
++#define PBC_BSTAT_MS_DET_BIT    14
++#define MXC_BSTAT_BIT(n)        ((n == MXC_CARD_SD2) ? PBC_BSTAT_SD2_DET : \
++				 ((n == MXC_CARD_SD3) ? PBC_BSTAT_SD3_DET : \
++				 ((n == MXC_CARD_SD1) ? PBC_BSTAT_SD1_DET : \
++				 ((n == MXC_CARD_MS) ? PBC_BSTAT_MS_DET : 0))))
++
++/*!
++ * PBC UART Control Register bit definitions
++ */
++#define PBC_UCTRL_DCE_DCD       0x0001
++#define PBC_UCTRL_DCE_DSR       0x0002
++#define PBC_UCTRL_DCE_RI        0x0004
++#define PBC_UCTRL_DTE_DTR       0x0100
++
++/*!
++ * PBC UART Status Register bit definitions
++ */
++#define PBC_USTAT_DTE_DCD       0x0001
++#define PBC_USTAT_DTE_DSR       0x0002
++#define PBC_USTAT_DTE_RI        0x0004
++#define PBC_USTAT_DCE_DTR       0x0100
++
++/*!
++ * PBC Interupt mask register bit definitions
++ */
++#define PBC_INTR_SD3_R_EN_BIT   4
++#define PBC_INTR_SD2_R_EN_BIT   0
++#define PBC_INTR_SD1_R_EN_BIT   6
++#define PBC_INTR_MS_R_EN_BIT    5
++#define PBC_INTR_SD3_EN_BIT     13
++#define PBC_INTR_SD2_EN_BIT     12
++#define PBC_INTR_MS_EN_BIT      14
++#define PBC_INTR_SD1_EN_BIT     15
++
++#define PBC_INTR_SD2_R_EN       0x0001
++#define PBC_INTR_LOW_BAT        0x0002
++#define PBC_INTR_OTG_FSOVER     0x0004
++#define PBC_INTR_FSH_OVER       0x0008
++#define PBC_INTR_SD3_R_EN       0x0010
++#define PBC_INTR_MS_R_EN        0x0020
++#define PBC_INTR_SD1_R_EN       0x0040
++#define PBC_INTR_FEC_INT        0x0080
++#define PBC_INTR_ENET_INT       0x0100
++#define PBC_INTR_OTGFS_INT      0x0200
++#define PBC_INTR_XUART_INT      0x0400
++#define PBC_INTR_CCTL12         0x0800
++#define PBC_INTR_SD2_EN         0x1000
++#define PBC_INTR_SD3_EN         0x2000
++#define PBC_INTR_MS_EN          0x4000
++#define PBC_INTR_SD1_EN         0x8000
++
++
++/*
++ * This corresponds to PBC_INTMASK_SET_REG at offset 0x38.
++ */
++#define EXPIO_INT_LOW_BAT       (MXC_EXP_IO_BASE + 1)
++#define EXPIO_INT_OTG_FS_OVR    (MXC_EXP_IO_BASE + 2)
++#define EXPIO_INT_FSH_OVR       (MXC_EXP_IO_BASE + 3)
++#define EXPIO_INT_RES4          (MXC_EXP_IO_BASE + 4)
++#define EXPIO_INT_RES5          (MXC_EXP_IO_BASE + 5)
++#define EXPIO_INT_RES6          (MXC_EXP_IO_BASE + 6)
++#define EXPIO_INT_FEC           (MXC_EXP_IO_BASE + 7)
++#define EXPIO_INT_ENET_INT      (MXC_EXP_IO_BASE + 8)
++#define EXPIO_INT_OTG_FS_INT    (MXC_EXP_IO_BASE + 9)
++#define EXPIO_INT_XUART_INTA    (MXC_EXP_IO_BASE + 10)
++#define EXPIO_INT_CCTL12_INT    (MXC_EXP_IO_BASE + 11)
++#define EXPIO_INT_SD2_EN        (MXC_EXP_IO_BASE + 12)
++#define EXPIO_INT_SD3_EN        (MXC_EXP_IO_BASE + 13)
++#define EXPIO_INT_MS_EN         (MXC_EXP_IO_BASE + 14)
++#define EXPIO_INT_SD1_EN        (MXC_EXP_IO_BASE + 15)
++
++#endif	/* __ASM_ARCH_MXC_BOARD_MX27ADS_H__ */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/board.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/board.h
+@@ -0,0 +1,36 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++
++#ifndef __ASM_ARCH_MXC_BOARD_H__
++#define __ASM_ARCH_MXC_BOARD_H__
++
++#ifndef __ASM_ARCH_MXC_HARDWARE_H__
++#error "Do not include directly."
++#endif
++
++/*
++ * The modes of the UART ports
++ */
++#define MODE_DTE                0
++#define MODE_DCE                1
++/*
++ * Is the UART configured to be a IR port
++ */
++#define IRDA                    0
++#define NO_IRDA                 1
++
++#ifdef CONFIG_MACH_MX27ADS
++#include <asm/arch/board-mx27ads.h>
++#endif
++
++#endif				/* __ASM_ARCH_MXC_BOARD_H__ */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/common.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/common.h
+@@ -0,0 +1,20 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#ifndef __ASM_ARCH_MXC_COMMON_H__
++#define __ASM_ARCH_MXC_COMMON_H__
++
++struct sys_timer;
++
++extern void mxc_map_io(void);
++extern void mxc_init_irq(void);
++extern struct sys_timer mxc_timer;
++
++#endif
+Index: linux-2.6.18/include/asm-arm/arch-mxc/dma.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/dma.h
+@@ -0,0 +1,21 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#ifndef __ASM_ARCH_MXC_DMA_H__
++#define __ASM_ARCH_MXC_DMA_H__
++
++/*!
++ * @file dma.h
++ * @brief This file contains Unified DMA API for all MXC platforms.
++ * The API is platform independent.
++ *
++ * @ingroup SDMA
++ */
++#endif
+Index: linux-2.6.18/include/asm-arm/arch-mxc/entry-macro.S
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/entry-macro.S
+@@ -0,0 +1,39 @@
++/*
++ *  Copyright (C) 2007 Lennert Buytenhek <buytenh@wantstofly.org>
++ *  Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++	@ this macro disables fast irq (not implemented)
++	.macro	disable_fiq
++	.endm
++
++	.macro  get_irqnr_preamble, base, tmp
++	.endm
++
++	.macro  arch_ret_to_user, tmp1, tmp2
++	.endm
++
++	@ this macro checks which interrupt occured
++	@ and returns its number in irqnr
++	@ and returns if an interrupt occured in irqstat
++	.macro	get_irqnr_and_base, irqnr, irqstat, base, tmp
++	ldr	\base, =AVIC_IO_ADDRESS(AVIC_BASE_ADDR)
++	@ Load offset & priority of the highest priority
++	@ interrupt pending from AVIC_NIVECSR
++	ldr	\irqstat, [\base, #0x40]
++	@ Shift to get the decoded IRQ number, using ASR so
++	@ 'no interrupt pending' becomes 0xffffffff
++	mov	\irqnr, \irqstat, asr #16
++	@ set zero flag if IRQ + 1 == 0
++	adds	\tmp, \irqnr, #1
++	.endm
++
++	@ irq priority table (not used)
++	.macro	irq_prio_table
++	.endm
+Index: linux-2.6.18/include/asm-arm/arch-mxc/hardware.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/hardware.h
+@@ -0,0 +1,54 @@
++/*
++ *  Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++/*!
++ * @file hardware.h
++ * @brief This file contains the hardware definitions of the board.
++ *
++ * @ingroup System
++ */
++#ifndef __ASM_ARCH_MXC_HARDWARE_H__
++#define __ASM_ARCH_MXC_HARDWARE_H__
++
++#include <asm/sizes.h>
++
++#ifdef CONFIG_ARCH_MX2
++#include <asm/arch/mx2.h>
++#endif
++
++#include <asm/arch/mxc.h>
++
++#define MXC_MAX_GPIO_LINES      (GPIO_NUM_PIN * GPIO_PORT_NUM)
++
++/*
++ * ---------------------------------------------------------------------------
++ * Board specific defines
++ * ---------------------------------------------------------------------------
++ */
++#define MXC_EXP_IO_BASE         (MXC_GPIO_INT_BASE + MXC_MAX_GPIO_LINES)
++
++#include <asm/arch/board.h>
++
++#ifndef MXC_MAX_EXP_IO_LINES
++#define MXC_MAX_EXP_IO_LINES 0
++#endif
++
++#define MXC_MAX_VIRTUAL_INTS	16
++#define MXC_VIRTUAL_INTS_BASE	(MXC_EXP_IO_BASE + MXC_MAX_EXP_IO_LINES)
++#define MXC_SDIO1_CARD_IRQ	MXC_VIRTUAL_INTS_BASE
++#define MXC_SDIO2_CARD_IRQ	(MXC_VIRTUAL_INTS_BASE + 1)
++#define MXC_SDIO3_CARD_IRQ	(MXC_VIRTUAL_INTS_BASE + 2)
++
++#define MXC_MAX_INTS		(MXC_MAX_INT_LINES + \
++				MXC_MAX_GPIO_LINES + \
++				MXC_MAX_EXP_IO_LINES + \
++				MXC_MAX_VIRTUAL_INTS)
++
++#endif				/* __ASM_ARCH_MXC_HARDWARE_H__ */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/io.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/io.h
+@@ -0,0 +1,33 @@
++/*
++ *  Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++/*!
++ * @file io.h
++ * @brief This file contains some memory mapping macros.
++ * @note There is no real ISA or PCI buses. But have to define these macros
++ * for some drivers to compile.
++ *
++ * @ingroup System
++ */
++
++#ifndef __ASM_ARCH_MXC_IO_H__
++#define __ASM_ARCH_MXC_IO_H__
++
++/*! Allow IO space to be anywhere in the memory */
++#define IO_SPACE_LIMIT 0xffffffff
++
++/*!
++ * io address mapping macro
++ */
++#define __io(a)			((void __iomem *)(a))
++
++#define __mem_pci(a)		(a)
++
++#endif
+Index: linux-2.6.18/include/asm-arm/arch-mxc/irqs.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/irqs.h
+@@ -0,0 +1,38 @@
++/*
++ *  Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#ifndef __ASM_ARCH_MXC_IRQS_H__
++#define __ASM_ARCH_MXC_IRQS_H__
++
++#include <asm/hardware.h>
++
++/*!
++ * @file irqs.h
++ * @brief This file defines the number of normal interrupts and fast interrupts
++ *
++ * @ingroup Interrupt
++ */
++
++#define MXC_IRQ_TO_EXPIO(irq)	((irq) - MXC_EXP_IO_BASE)
++
++#define MXC_IRQ_TO_GPIO(irq)	((irq) - MXC_GPIO_INT_BASE)
++#define MXC_GPIO_TO_IRQ(x)	(MXC_GPIO_INT_BASE + x)
++
++/*!
++ * Number of normal interrupts
++ */
++#define NR_IRQS		MXC_MAX_INTS
++
++/*!
++ * Number of fast interrupts
++ */
++#define NR_FIQS		MXC_MAX_INTS
++
++#endif				/* __ASM_ARCH_MXC_IRQS_H__ */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/memory.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/memory.h
+@@ -0,0 +1,36 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#ifndef __ASM_ARCH_MXC_MEMORY_H__
++#define __ASM_ARCH_MXC_MEMORY_H__
++
++#include <asm/hardware.h>
++
++/*!
++ * @file memory.h
++ * @brief This file contains macros needed by the Linux kernel and drivers.
++ *
++ * @ingroup Memory
++ */
++
++/*!
++ * Virtual view <-> DMA view memory address translations
++ * This macro is used to translate the virtual address to an address
++ * suitable to be passed to set_dma_addr()
++ */
++#define __virt_to_bus(a)	__virt_to_phys(a)
++
++/*!
++ * Used to convert an address for DMA operations to an address that the
++ * kernel can use.
++ */
++#define __bus_to_virt(a)	__phys_to_virt(a)
++
++#endif				/* __ASM_ARCH_MXC_MEMORY_H__ */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/mx2.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/mx2.h
+@@ -0,0 +1,52 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#ifndef __ASM_ARCH_MX2_H__
++#define __ASM_ARCH_MX2_H__
++
++#ifndef __ASM_ARCH_MXC_HARDWARE_H__
++#error "Do not include directly."
++#endif
++
++/*!
++ * defines the hardware clock tick rate
++ */
++#define CLOCK_TICK_RATE         13300000
++
++/*
++ *****************************************
++ * GPT  Register definitions             *
++ *****************************************
++ */
++#define GPT_BASE_ADDR(x)	(GPT ##x## _BASE_ADDR)
++#define MXC_GPT_TCTL(x)		IO_ADDRESS(GPT_BASE_ADDR(x) + 0x00)
++#define MXC_GPT_TPRER(x)	IO_ADDRESS(GPT_BASE_ADDR(x) + 0x04)
++#define MXC_GPT_TCMP(x)		IO_ADDRESS(GPT_BASE_ADDR(x) + 0x08)
++#define MXC_GPT_TCR(x)		IO_ADDRESS(GPT_BASE_ADDR(x) + 0x0C)
++#define MXC_GPT_TCN(x)		IO_ADDRESS(GPT_BASE_ADDR(x) + 0x10)
++#define MXC_GPT_TSTAT(x)	IO_ADDRESS(GPT_BASE_ADDR(x) + 0x14)
++#define MXC_GPT_GPTCNT		MXC_GPT_TCN(MXC_TIMER_GPT1)
++#define GPT_TSTAT_COMP		(1 << 0)
++#define GPT_TSTAT_CAPT		(1 << 1)
++#define GPT_TCTL_TEN		(1 << 0)
++#define GPT_TCTL_SRC_PER1	(1 << 1)
++#define GPT_TCTL_SRC_PER1_DIV4	(2 << 1)
++#define GPT_TCTL_SRC_TIN	(3 << 1)
++#define GPT_TCTL_SRC_32K	(4 << 1)
++#define GPT_TCTL_COMPEN		(1 << 4)
++#define GPT_TCTL_CAPTEN		(1 << 5)
++#define GPT_TCTL_FRR		(1 << 8)
++#define GPT_TCTL_OM		(1 << 9)
++#define GPT_TCTL_CC		(1 << 10)
++#define GPT_TCTL_SWR		(1 << 15)
++
++#include <asm/arch/mx27.h>
++
++#endif				/*  __ASM_ARCH_MX2_H__ */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/mx27.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/mx27.h
+@@ -0,0 +1,289 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#ifndef __ASM_ARCH_MXC_MX27_H__
++#define __ASM_ARCH_MXC_MX27_H__
++
++#ifndef __ASM_ARCH_MXC_HARDWARE_H__
++#error "Do not include directly."
++#endif
++
++/*!
++ * defines the hardware clock tick rate
++ */
++#define CLOCK_TICK_RATE         13300000
++
++/*
++ * MX27 memory map:
++ *
++ * Virt		Phys		Size	What
++ * ---------------------------------------------------------------------------
++ * F8000000	10000000	1M	AIPI 1 & 2 (incl. AVIC & ROMP)
++ * F8100000	80000000	1M	SAHB1
++ *         	A0000000	256M	CSD0 SDRAM/DDR
++ *         	B0000000	256M	CSD1 SDRAM/DDR
++ *         	C0000000	128M	CS0 Flash
++ *         	C8000000	128M	CS1 Flash
++ *         	D0000000	32M	CS2
++ *         	D2000000	32M	CS3
++ * F4000000	D4000000	32M	CS4
++ *         	D6000000	32M	CS5
++ * FE000000	D8000000	64K	NAND, SDRAM, WEIM, M3IF, EMI controllers
++ *         	DC000000	64M	PCMCIA/CF
++ *         	FFFF4C00	45K	IRAM
++ */
++
++/*
++ * IRAM
++ */
++#define IRAM_BASE_ADDR          0xFFFF4C00	/* internal ram */
++
++/*
++ *  Register offests.
++ */
++#define AIPI_BASE_ADDR          0x10000000
++#define AIPI_BASE_ADDR_VIRT     0xF8000000
++#define AIPI_SIZE               SZ_1M
++
++#define DMA_BASE_ADDR           (AIPI_BASE_ADDR + 0x01000)
++#define WDOG_BASE_ADDR          (AIPI_BASE_ADDR + 0x02000)
++#define GPT1_BASE_ADDR          (AIPI_BASE_ADDR + 0x03000)
++#define GPT2_BASE_ADDR          (AIPI_BASE_ADDR + 0x04000)
++#define GPT3_BASE_ADDR          (AIPI_BASE_ADDR + 0x05000)
++#define PWM_BASE_ADDR           (AIPI_BASE_ADDR + 0x06000)
++#define RTC_BASE_ADDR           (AIPI_BASE_ADDR + 0x07000)
++#define KPP_BASE_ADDR           (AIPI_BASE_ADDR + 0x08000)
++#define OWIRE_BASE_ADDR         (AIPI_BASE_ADDR + 0x09000)
++#define UART1_BASE_ADDR         (AIPI_BASE_ADDR + 0x0A000)
++#define UART2_BASE_ADDR         (AIPI_BASE_ADDR + 0x0B000)
++#define UART3_BASE_ADDR         (AIPI_BASE_ADDR + 0x0C000)
++#define UART4_BASE_ADDR         (AIPI_BASE_ADDR + 0x0D000)
++#define CSPI1_BASE_ADDR         (AIPI_BASE_ADDR + 0x0E000)
++#define CSPI2_BASE_ADDR         (AIPI_BASE_ADDR + 0x0F000)
++#define SSI1_BASE_ADDR          (AIPI_BASE_ADDR + 0x10000)
++#define SSI2_BASE_ADDR          (AIPI_BASE_ADDR + 0x11000)
++#define I2C_BASE_ADDR           (AIPI_BASE_ADDR + 0x12000)
++#define SDHC1_BASE_ADDR         (AIPI_BASE_ADDR + 0x13000)
++#define SDHC2_BASE_ADDR         (AIPI_BASE_ADDR + 0x14000)
++#define GPIO_BASE_ADDR          (AIPI_BASE_ADDR + 0x15000)
++#define AUDMUX_BASE_ADDR        (AIPI_BASE_ADDR + 0x16000)
++
++#define CSPI3_BASE_ADDR         (AIPI_BASE_ADDR + 0x17000)
++#define MSHC_BASE_ADDR          (AIPI_BASE_ADDR + 0x18000)
++#define GPT5_BASE_ADDR          (AIPI_BASE_ADDR + 0x19000)
++#define GPT4_BASE_ADDR          (AIPI_BASE_ADDR + 0x1A000)
++#define UART5_BASE_ADDR         (AIPI_BASE_ADDR + 0x1B000)
++#define UART6_BASE_ADDR         (AIPI_BASE_ADDR + 0x1C000)
++#define I2C2_BASE_ADDR          (AIPI_BASE_ADDR + 0x1D000)
++#define SDHC3_BASE_ADDR         (AIPI_BASE_ADDR + 0x1E000)
++#define GPT6_BASE_ADDR          (AIPI_BASE_ADDR + 0x1F000)
++
++#define LCDC_BASE_ADDR          (AIPI_BASE_ADDR + 0x21000)
++#define SLCDC_BASE_ADDR         (AIPI_BASE_ADDR + 0x22000)
++#define VPU_BASE_ADDR           (AIPI_BASE_ADDR + 0x23000)
++#define USBOTG_BASE_ADDR        (AIPI_BASE_ADDR + 0x24000)
++
++#define OTG_BASE_ADDR           USBOTG_BASE_ADDR
++#define SAHARA_BASE_ADDR        (AIPI_BASE_ADDR + 0x25000)
++#define EMMA_BASE_ADDR          (AIPI_BASE_ADDR + 0x26400)
++#define CCM_BASE_ADDR           (AIPI_BASE_ADDR + 0x27000)
++#define SYSCTRL_BASE_ADDR       (AIPI_BASE_ADDR + 0x27800)
++#define IIM_BASE_ADDR           (AIPI_BASE_ADDR + 0x28000)
++
++#define RTIC_BASE_ADDR          (AIPI_BASE_ADDR + 0x2A000)
++#define FEC_BASE_ADDR           (AIPI_BASE_ADDR + 0x2B000)
++#define SCC_BASE_ADDR           (AIPI_BASE_ADDR + 0x2C000)
++#define ETB_BASE_ADDR           (AIPI_BASE_ADDR + 0x3B000)
++#define ETB_RAM_BASE_ADDR       (AIPI_BASE_ADDR + 0x3C000)
++
++#define JAM_BASE_ADDR           (AIPI_BASE_ADDR + 0x3E000)
++#define MAX_BASE_ADDR           (AIPI_BASE_ADDR + 0x3F000)
++
++/*
++ * ROMP and AVIC
++ */
++#define ROMP_BASE_ADDR          0x10041000
++
++#define AVIC_BASE_ADDR          0x10040000
++
++#define SAHB1_BASE_ADDR         0x80000000
++#define SAHB1_BASE_ADDR_VIRT    0xF8100000
++#define SAHB1_SIZE              SZ_1M
++
++#define CSI_BASE_ADDR           (SAHB1_BASE_ADDR + 0x0000)
++#define ATA_BASE_ADDR           (SAHB1_BASE_ADDR + 0x1000)
++
++/*
++ * NAND, SDRAM, WEIM, M3IF, EMI controllers
++ */
++#define X_MEMC_BASE_ADDR        0xD8000000
++#define X_MEMC_BASE_ADDR_VIRT   0xFE000000
++#define X_MEMC_SIZE             SZ_1M
++
++#define NFC_BASE_ADDR           (X_MEMC_BASE_ADDR)
++#define SDRAMC_BASE_ADDR        (X_MEMC_BASE_ADDR + 0x1000)
++#define WEIM_BASE_ADDR          (X_MEMC_BASE_ADDR + 0x2000)
++#define M3IF_BASE_ADDR          (X_MEMC_BASE_ADDR + 0x3000)
++#define PCMCIA_CTL_BASE_ADDR    (X_MEMC_BASE_ADDR + 0x4000)
++
++/*
++ * Memory regions and CS
++ */
++#define SDRAM_BASE_ADDR         0xA0000000
++#define CSD1_BASE_ADDR          0xB0000000
++
++#define CS0_BASE_ADDR           0xC0000000
++#define CS1_BASE_ADDR           0xC8000000
++#define CS2_BASE_ADDR           0xD0000000
++#define CS3_BASE_ADDR           0xD2000000
++#define CS4_BASE_ADDR           0xD4000000
++#define CS4_BASE_ADDR_VIRT      0xF4000000
++#define CS4_SIZE                SZ_1M
++#define CS5_BASE_ADDR           0xD6000000
++#define PCMCIA_MEM_BASE_ADDR    0xDC000000
++
++/*!
++ * This macro defines the physical to virtual address mapping for all the
++ * peripheral modules. It is used by passing in the physical address as x
++ * and returning the virtual address. If the physical address is not mapped,
++ * it returns 0xDEADBEEF
++ */
++#define IO_ADDRESS(x)   \
++	(((x >= AIPI_BASE_ADDR) && \
++	  (x < (AIPI_BASE_ADDR + AIPI_SIZE))) ? AIPI_IO_ADDRESS(x) : \
++	 ((x >= SAHB1_BASE_ADDR) && \
++	  (x < (SAHB1_BASE_ADDR + SAHB1_SIZE))) ? SAHB1_IO_ADDRESS(x) : \
++	 ((x >= CS4_BASE_ADDR) && \
++	  (x < (CS4_BASE_ADDR + CS4_SIZE))) ? CS4_IO_ADDRESS(x) : \
++	 ((x >= X_MEMC_BASE_ADDR) && \
++	  (x < (X_MEMC_BASE_ADDR + X_MEMC_SIZE))) ? X_MEMC_IO_ADDRESS(x) : \
++	0xDEADBEEF)
++
++/*
++ * define the address mapping macros: in physical address order
++ */
++
++#define AIPI_IO_ADDRESS(x)  \
++	(((x) - AIPI_BASE_ADDR) + AIPI_BASE_ADDR_VIRT)
++
++#define AVIC_IO_ADDRESS(x)      AIPI_IO_ADDRESS(x)
++
++#define SAHB1_IO_ADDRESS(x)  \
++	(((x) - SAHB1_BASE_ADDR) + SAHB1_BASE_ADDR_VIRT)
++
++#define CS4_IO_ADDRESS(x)  \
++	(((x) - CS4_BASE_ADDR) + CS4_BASE_ADDR_VIRT)
++
++#define X_MEMC_IO_ADDRESS(x)  \
++	(((x) - X_MEMC_BASE_ADDR) + X_MEMC_BASE_ADDR_VIRT)
++
++#define PCMCIA_IO_ADDRESS(x) \
++	(((x) - X_MEMC_BASE_ADDR) + X_MEMC_BASE_ADDR_VIRT)
++
++/* Start of physical RAM */
++#define PHYS_OFFSET             UL(0xA0000000)
++
++/*
++ *  MX27 ADS Interrupt numbers
++ */
++#define MXC_INT_I2C2                1
++#define MXC_INT_GPT6                2
++#define MXC_INT_GPT5                3
++#define MXC_INT_GPT4                4
++#define MXC_INT_RTIC                5
++#define MXC_INT_CSPI3               6
++#define MXC_INT_SDHC                7
++#define MXC_INT_GPIO                8
++#define MXC_INT_SDHC3               9
++#define MXC_INT_SDHC2               10
++#define MXC_INT_SDHC1               11
++#define MXC_INT_I2C                 12
++#define MXC_INT_SSI2                13
++#define MXC_INT_SSI1                14
++#define MXC_INT_CSPI2               15
++#define MXC_INT_CSPI1               16
++#define MXC_INT_UART4               17
++#define MXC_INT_UART3               18
++#define MXC_INT_UART2               19
++#define MXC_INT_UART1               20
++#define MXC_INT_KPP                 21
++#define MXC_INT_RTC                 22
++#define MXC_INT_PWM                 23
++#define MXC_INT_GPT3                24
++#define MXC_INT_GPT2                25
++#define MXC_INT_GPT1                26
++#define MXC_INT_GPT                 MXC_INT_GPT1
++#define MXC_INT_WDOG                27
++#define MXC_INT_PCMCIA              28
++#define MXC_INT_NANDFC              29
++#define MXC_INT_ATA                 30
++#define MXC_INT_CSI                 31
++#define MXC_INT_DMACH0              32
++#define MXC_INT_DMACH1              33
++#define MXC_INT_DMACH2              34
++#define MXC_INT_DMACH3              35
++#define MXC_INT_DMACH4              36
++#define MXC_INT_DMACH5              37
++#define MXC_INT_DMACH6              38
++#define MXC_INT_DMACH7              39
++#define MXC_INT_DMACH8              40
++#define MXC_INT_DMACH9              41
++#define MXC_INT_DMACH10             42
++#define MXC_INT_DMACH11             43
++#define MXC_INT_DMACH12             44
++#define MXC_INT_DMACH13             45
++#define MXC_INT_DMACH14             46
++#define MXC_INT_DMACH15             47
++#define MXC_INT_UART6               48
++#define MXC_INT_UART5               49
++#define MXC_INT_FEC                 50
++#define MXC_INT_EMMAPRP             51
++#define MXC_INT_EMMAPP              52
++#define MXC_INT_VPU                 53
++#define MXC_INT_USB1                54
++#define MXC_INT_USB2                55
++#define MXC_INT_USB3                56
++#define MXC_INT_SCC_SMN             57
++#define MXC_INT_SCC_SCM             58
++#define MXC_INT_SAHARA              59
++#define MXC_INT_SLCDC               60
++#define MXC_INT_LCDC                61
++#define MXC_INT_IIM                 62
++#define MXC_INT_CCM                 63
++
++#define MXC_MAX_INT_LINES       64
++#define MXC_MAX_EXT_LINES       0
++
++#define MXC_MUX_GPIO_INTERRUPTS 1
++#define MXC_GPIO_INT_BASE       (MXC_MAX_INT_LINES)
++
++/*!
++ * Number of GPIO port as defined in the IC Spec
++ */
++#define GPIO_PORT_NUM           6
++/*!
++ * Number of GPIO pins per port
++ */
++#define GPIO_NUM_PIN            32
++
++#define MXC_TIMER_GPT1          1
++#define MXC_TIMER_GPT2          2
++#define MXC_TIMER_GPT3          3
++#define MXC_TIMER_GPT4          4
++#define MXC_TIMER_GPT5          5
++#define MXC_TIMER_GPT6          6
++
++/*
++ * GPT clock source mask and offset bit definition
++ */
++#define GPT_CTRL_MASK           0xFFFFFFF1
++#define GPT_CTRL_OFFSET	    	1
++
++#endif				/* __ASM_ARCH_MXC_MX27_H__ */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/mxc.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/mxc.h
+@@ -0,0 +1,56 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#ifndef __ASM_ARCH_MXC_H__
++#define __ASM_ARCH_MXC_H__
++
++#ifndef __ASM_ARCH_MXC_HARDWARE_H__
++#error "Do not include directly."
++#endif
++
++/*
++ *****************************************
++ * AVIC Registers                        *
++ *****************************************
++ */
++#define AVIC_BASE		IO_ADDRESS(AVIC_BASE_ADDR)
++#define AVIC_INTCNTL		(AVIC_BASE + 0x00)	/* int control reg */
++#define AVIC_NIMASK		(AVIC_BASE + 0x04)	/* int mask reg */
++#define AVIC_INTENNUM		(AVIC_BASE + 0x08)	/* int enable number reg */
++#define AVIC_INTDISNUM		(AVIC_BASE + 0x0C)	/* int disable number reg */
++#define AVIC_INTENABLEH		(AVIC_BASE + 0x10)	/* int enable reg high */
++#define AVIC_INTENABLEL		(AVIC_BASE + 0x14)	/* int enable reg low */
++#define AVIC_INTTYPEH		(AVIC_BASE + 0x18)	/* int type reg high */
++#define AVIC_INTTYPEL		(AVIC_BASE + 0x1C)	/* int type reg low */
++#define AVIC_NIPRIORITY7	(AVIC_BASE + 0x20)	/* norm int priority lvl7 */
++#define AVIC_NIPRIORITY6	(AVIC_BASE + 0x24)	/* norm int priority lvl6 */
++#define AVIC_NIPRIORITY5	(AVIC_BASE + 0x28)	/* norm int priority lvl5 */
++#define AVIC_NIPRIORITY4	(AVIC_BASE + 0x2C)	/* norm int priority lvl4 */
++#define AVIC_NIPRIORITY3	(AVIC_BASE + 0x30)	/* norm int priority lvl3 */
++#define AVIC_NIPRIORITY2	(AVIC_BASE + 0x34)	/* norm int priority lvl2 */
++#define AVIC_NIPRIORITY1	(AVIC_BASE + 0x38)	/* norm int priority lvl1 */
++#define AVIC_NIPRIORITY0	(AVIC_BASE + 0x3C)	/* norm int priority lvl0 */
++#define AVIC_NIVECSR		(AVIC_BASE + 0x40)	/* norm int vector/status */
++#define AVIC_FIVECSR		(AVIC_BASE + 0x44)	/* fast int vector/status */
++#define AVIC_INTSRCH		(AVIC_BASE + 0x48)	/* int source reg high */
++#define AVIC_INTSRCL		(AVIC_BASE + 0x4C)	/* int source reg low */
++#define AVIC_INTFRCH		(AVIC_BASE + 0x50)	/* int force reg high */
++#define AVIC_INTFRCL		(AVIC_BASE + 0x54)	/* int force reg low */
++#define AVIC_NIPNDH		(AVIC_BASE + 0x58)	/* norm int pending high */
++#define AVIC_NIPNDL		(AVIC_BASE + 0x5C)	/* norm int pending low */
++#define AVIC_FIPNDH		(AVIC_BASE + 0x60)	/* fast int pending high */
++#define AVIC_FIPNDL		(AVIC_BASE + 0x64)	/* fast int pending low */
++
++#define SYSTEM_PREV_REG		IO_ADDRESS(IIM_BASE_ADDR + 0x20)
++#define SYSTEM_SREV_REG		IO_ADDRESS(IIM_BASE_ADDR + 0x24)
++#define IIM_PROD_REV_SH		3
++#define IIM_PROD_REV_LEN	5
++
++#endif				/*  __ASM_ARCH_MXC_H__ */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/system.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/system.h
+@@ -0,0 +1,50 @@
++/*
++ *  Copyright (C) 1999 ARM Limited
++ *  Copyright (C) 2000 Deep Blue Solutions Ltd
++ *  Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++ */
++
++#ifndef __ASM_ARCH_MXC_SYSTEM_H__
++#define __ASM_ARCH_MXC_SYSTEM_H__
++
++/*!
++ * @file system.h
++ * @brief This file contains idle and reset functions.
++ *
++ * @ingroup System
++ */
++
++/*!
++ * This function puts the CPU into idle mode. It is called by default_idle()
++ * in process.c file.
++ */
++static inline void arch_idle(void)
++{
++	cpu_do_idle();
++}
++
++/*
++ * This function resets the system. It is called by machine_restart().
++ *
++ * @param  mode         indicates different kinds of resets
++ */
++static inline void arch_reset(char mode)
++{
++	cpu_reset(0);
++}
++
++#endif				/* __ASM_ARCH_MXC_SYSTEM_H__ */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/timex.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/timex.h
+@@ -0,0 +1,25 @@
++/*
++ *  Copyright (C) 1999 ARM Limited
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++ */
++
++#ifndef __ASM_ARCH_MXC_TIMEX_H__
++#define __ASM_ARCH_MXC_TIMEX_H__
++
++#include <asm/hardware.h>	/* for CLOCK_TICK_RATE */
++
++#endif				/* __ASM_ARCH_MXC_TIMEX_H__ */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/uncompress.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/uncompress.h
+@@ -0,0 +1,79 @@
++/*
++ *  include/asm-arm/arch-mxc/uncompress.h
++ *
++ *
++ *
++ *  Copyright (C) 1999 ARM Limited
++ *  Copyright (C) Shane Nay (shane@minirl.com)
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++ */
++#ifndef __ASM_ARCH_MXC_UNCOMPRESS_H__
++#define __ASM_ARCH_MXC_UNCOMPRESS_H__
++
++#define __MXC_BOOT_UNCOMPRESS
++
++#include <asm/hardware.h>
++#include <asm/processor.h>
++
++#define UART(x) (*(volatile unsigned long *)(serial_port + (x)))
++
++#define USR2 0x98
++#define USR2_TXFE (1<<14)
++#define TXR  0x40
++#define UCR1 0x80
++#define UCR1_UARTEN 1
++
++/*
++ * The following code assumes the serial port has already been
++ * initialized by the bootloader.  We search for the first enabled
++ * port in the most probable order.  If you didn't setup a port in
++ * your bootloader then nothing will appear (which might be desired).
++ *
++ * This does not append a newline
++ */
++
++static void putc(int ch)
++{
++	static unsigned long serial_port = 0;
++
++	if (unlikely(serial_port == 0)) {
++		do {
++			serial_port = UART1_BASE_ADDR;
++			if (UART(UCR1) & UCR1_UARTEN)
++				break;
++			serial_port = UART2_BASE_ADDR;
++			if (UART(UCR1) & UCR1_UARTEN)
++				break;
++			return;
++		} while (0);
++	}
++
++	while (!(UART(USR2) & USR2_TXFE))
++		cpu_relax();
++
++	UART(TXR) = ch;
++}
++
++#define flush() do { } while (0)
++
++/*
++ * nothing to do
++ */
++#define arch_decomp_setup()
++
++#define arch_decomp_wdog()
++
++#endif				/* __ASM_ARCH_MXC_UNCOMPRESS_H__ */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/vmalloc.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/vmalloc.h
+@@ -0,0 +1,36 @@
++/*
++ *  Copyright (C) 2000 Russell King.
++ *  Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++ */
++
++#ifndef __ASM_ARCH_MXC_VMALLOC_H__
++#define __ASM_ARCH_MXC_VMALLOC_H__
++
++/*!
++ * @file vmalloc.h
++ *
++ * @brief This file contains platform specific macros for vmalloc.
++ *
++ * @ingroup System
++ */
++
++/*!
++ * vmalloc ending address
++ */
++#define VMALLOC_END       0xF4000000
++
++#endif				/* __ASM_ARCH_MXC_VMALLOC_H__ */
+Index: linux-2.6.18/mvl_patches/pro50-0105.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0105.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(105);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

@@ -1,0 +1,479 @@
+#! /usr/bin/env bash
+# Patch: -pro_POWERPC_4xx_Add_460EX_PCIe_support_to_4xx_pci_dri
+# Date: Wed Jun 11 14:50:51 2008
+# MR: 27840
+# Source: DENX Software Engineering
+# Type: Enhancement
+# Disposition: merged from git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# 
+# From 66b7e504c0e66c568b1759882884b8e1cfb307bd Mon Sep 17 00:00:00 2001
+# From: Stefan Roese <sr@denx.de>
+# Date: Sun, 24 Feb 2008 08:08:27 +1100
+# Subject: [PATCH] [POWERPC] 4xx: Add 460EX PCIe support to 4xx pci driver
+# 
+# All this code is needed to properly initialize the 460EX PCIe host
+# bridge(s). We re-initialize all ports again, even though this has been done
+# in the bootloader (U-Boot) before. This way we make sure, that we always
+# run the latest init code in Linux and don't depend on code versions from
+# U-Boot.
+# 
+# Unfortunately all IBM/AMCC chips currently supported in this PCIe driver need
+# a different reset-/init-sequence.
+# 
+# Tested on AMCC Canyonlands eval board.
+# 
+# Follows v2.6.25-rc1 (Linux 2.6.25-rc1)
+# 
+# Signed-off-by: Stefan Roese <sr@denx.de>
+# Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+
+PATCHNUM=1200
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 27840
+Source: DENX Software Engineering
+Type: Enhancement
+Disposition: merged from git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+
+From 66b7e504c0e66c568b1759882884b8e1cfb307bd Mon Sep 17 00:00:00 2001
+From: Stefan Roese <sr@denx.de>
+Date: Sun, 24 Feb 2008 08:08:27 +1100
+Subject: [PATCH] [POWERPC] 4xx: Add 460EX PCIe support to 4xx pci driver
+
+All this code is needed to properly initialize the 460EX PCIe host
+bridge(s). We re-initialize all ports again, even though this has been done
+in the bootloader (U-Boot) before. This way we make sure, that we always
+run the latest init code in Linux and don't depend on code versions from
+U-Boot.
+
+Unfortunately all IBM/AMCC chips currently supported in this PCIe driver need
+a different reset-/init-sequence.
+
+Tested on AMCC Canyonlands eval board.
+
+Follows v2.6.25-rc1 (Linux 2.6.25-rc1)
+
+Signed-off-by: Stefan Roese <sr@denx.de>
+Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+Index: linux-2.6.18/arch/powerpc/sysdev/ppc4xx_pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/ppc4xx_pci.c
++++ linux-2.6.18/arch/powerpc/sysdev/ppc4xx_pci.c
+@@ -530,6 +530,7 @@ static void __init ppc4xx_probe_pcix_bri
+  *
+  * ibm,plb-pciex-440spe
+  * ibm,plb-pciex-405ex
++ * ibm,plb-pciex-460ex
+  *
+  * Anything else will be rejected for now as they are all subtly
+  * different unfortunately.
+@@ -776,6 +777,117 @@ static struct ppc4xx_pciex_hwops ppc440s
+ 	.setup_utl	= ppc440speB_pciex_init_utl,
+ };
+ 
++static int __init ppc460ex_pciex_core_init(struct device_node *np)
++{
++	/* Nothing to do, return 2 ports */
++	return 2;
++}
++
++static int ppc460ex_pciex_init_port_hw(struct ppc4xx_pciex_port *port)
++{
++	u32 val;
++	u32 utlset1;
++
++	if (port->endpoint) {
++		val = PTYPE_LEGACY_ENDPOINT << 20;
++		utlset1 = 0x20222222;
++	} else {
++		val = PTYPE_ROOT_PORT << 20;
++		utlset1 = 0x21222222;
++	}
++
++	if (port->index == 0) {
++		val |= LNKW_X1 << 12;
++	} else {
++		val |= LNKW_X4 << 12;
++		utlset1 |= 0x00101101;
++	}
++
++	mtdcri(SDR0, port->sdr_base + PESDRn_DLPSET, val);
++	mtdcri(SDR0, port->sdr_base + PESDRn_UTLSET1, utlset1);
++	mtdcri(SDR0, port->sdr_base + PESDRn_UTLSET2, 0x01210000);
++
++	switch (port->index) {
++	case 0:
++		mtdcri(SDR0, PESDR0_460EX_L0CDRCTL, 0x00003230);
++		mtdcri(SDR0, PESDR0_460EX_L0DRV, 0x00000136);
++		mtdcri(SDR0, PESDR0_460EX_L0CLK, 0x00000006);
++
++		mtdcri(SDR0, PESDR0_460EX_PHY_CTL_RST,0x10000000);
++		break;
++
++	case 1:
++		mtdcri(SDR0, PESDR1_460EX_L0CDRCTL, 0x00003230);
++		mtdcri(SDR0, PESDR1_460EX_L1CDRCTL, 0x00003230);
++		mtdcri(SDR0, PESDR1_460EX_L2CDRCTL, 0x00003230);
++		mtdcri(SDR0, PESDR1_460EX_L3CDRCTL, 0x00003230);
++		mtdcri(SDR0, PESDR1_460EX_L0DRV, 0x00000136);
++		mtdcri(SDR0, PESDR1_460EX_L1DRV, 0x00000136);
++		mtdcri(SDR0, PESDR1_460EX_L2DRV, 0x00000136);
++		mtdcri(SDR0, PESDR1_460EX_L3DRV, 0x00000136);
++		mtdcri(SDR0, PESDR1_460EX_L0CLK, 0x00000006);
++		mtdcri(SDR0, PESDR1_460EX_L1CLK, 0x00000006);
++		mtdcri(SDR0, PESDR1_460EX_L2CLK, 0x00000006);
++		mtdcri(SDR0, PESDR1_460EX_L3CLK, 0x00000006);
++
++		mtdcri(SDR0, PESDR1_460EX_PHY_CTL_RST,0x10000000);
++		break;
++	}
++
++	mtdcri(SDR0, port->sdr_base + PESDRn_RCSSET,
++	       mfdcri(SDR0, port->sdr_base + PESDRn_RCSSET) |
++	       (PESDRx_RCSSET_RSTGU | PESDRx_RCSSET_RSTPYN));
++
++	/* Poll for PHY reset */
++	/* XXX FIXME add timeout */
++	switch (port->index) {
++	case 0:
++		while (!(mfdcri(SDR0, PESDR0_460EX_RSTSTA) & 0x1))
++			udelay(10);
++		break;
++	case 1:
++		while (!(mfdcri(SDR0, PESDR1_460EX_RSTSTA) & 0x1))
++			udelay(10);
++		break;
++	}
++
++	mtdcri(SDR0, port->sdr_base + PESDRn_RCSSET,
++	       (mfdcri(SDR0, port->sdr_base + PESDRn_RCSSET) &
++		~(PESDRx_RCSSET_RSTGU | PESDRx_RCSSET_RSTDL)) |
++	       PESDRx_RCSSET_RSTPYN);
++
++	port->has_ibpre = 1;
++
++	return 0;
++}
++
++static int ppc460ex_pciex_init_utl(struct ppc4xx_pciex_port *port)
++{
++	dcr_write(port->dcrs, DCRO_PEGPL_SPECIAL, 0x0);
++
++	/*
++	 * Set buffer allocations and then assert VRB and TXE.
++	 */
++	out_be32(port->utl_base + PEUTL_PBCTL,	0x0800000c);
++	out_be32(port->utl_base + PEUTL_OUTTR,	0x08000000);
++	out_be32(port->utl_base + PEUTL_INTR,	0x02000000);
++	out_be32(port->utl_base + PEUTL_OPDBSZ,	0x04000000);
++	out_be32(port->utl_base + PEUTL_PBBSZ,	0x00000000);
++	out_be32(port->utl_base + PEUTL_IPHBSZ,	0x02000000);
++	out_be32(port->utl_base + PEUTL_IPDBSZ,	0x04000000);
++	out_be32(port->utl_base + PEUTL_RCIRQEN,0x00f00000);
++	out_be32(port->utl_base + PEUTL_PCTL,	0x80800066);
++
++	return 0;
++}
++
++static struct ppc4xx_pciex_hwops ppc460ex_pcie_hwops __initdata =
++{
++	.core_init	= ppc460ex_pciex_core_init,
++	.port_init_hw	= ppc460ex_pciex_init_port_hw,
++	.setup_utl	= ppc460ex_pciex_init_utl,
++};
++
+ #endif /* CONFIG_44x */
+ 
+ #ifdef CONFIG_40x
+@@ -897,6 +1009,8 @@ static int __init ppc4xx_pciex_check_cor
+ 		else
+ 			ppc4xx_pciex_hwops = &ppc440speB_pcie_hwops;
+ 	}
++	if (of_device_is_compatible(np, "ibm,plb-pciex-460ex"))
++		ppc4xx_pciex_hwops = &ppc460ex_pcie_hwops;
+ #endif /* CONFIG_44x    */
+ #ifdef CONFIG_40x
+ 	if (of_device_is_compatible(np, "ibm,plb-pciex-405ex"))
+Index: linux-2.6.18/arch/powerpc/sysdev/ppc4xx_pci.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/ppc4xx_pci.h
++++ linux-2.6.18/arch/powerpc/sysdev/ppc4xx_pci.h
+@@ -271,6 +271,59 @@
+ #define PESDR1_405EX_PHYSTA		0x044C
+ 
+ /*
++ * 460EX additional DCRs
++ */
++#define PESDR0_460EX_L0BIST		0x0308
++#define PESDR0_460EX_L0BISTSTS		0x0309
++#define PESDR0_460EX_L0CDRCTL		0x030A
++#define PESDR0_460EX_L0DRV		0x030B
++#define PESDR0_460EX_L0REC		0x030C
++#define PESDR0_460EX_L0LPB		0x030D
++#define PESDR0_460EX_L0CLK		0x030E
++#define PESDR0_460EX_PHY_CTL_RST	0x030F
++#define PESDR0_460EX_RSTSTA		0x0310
++#define PESDR0_460EX_OBS		0x0311
++#define PESDR0_460EX_L0ERRC		0x0320
++
++#define PESDR1_460EX_L0BIST		0x0348
++#define PESDR1_460EX_L1BIST		0x0349
++#define PESDR1_460EX_L2BIST		0x034A
++#define PESDR1_460EX_L3BIST		0x034B
++#define PESDR1_460EX_L0BISTSTS		0x034C
++#define PESDR1_460EX_L1BISTSTS		0x034D
++#define PESDR1_460EX_L2BISTSTS		0x034E
++#define PESDR1_460EX_L3BISTSTS		0x034F
++#define PESDR1_460EX_L0CDRCTL		0x0350
++#define PESDR1_460EX_L1CDRCTL		0x0351
++#define PESDR1_460EX_L2CDRCTL		0x0352
++#define PESDR1_460EX_L3CDRCTL		0x0353
++#define PESDR1_460EX_L0DRV		0x0354
++#define PESDR1_460EX_L1DRV		0x0355
++#define PESDR1_460EX_L2DRV		0x0356
++#define PESDR1_460EX_L3DRV		0x0357
++#define PESDR1_460EX_L0REC		0x0358
++#define PESDR1_460EX_L1REC		0x0359
++#define PESDR1_460EX_L2REC		0x035A
++#define PESDR1_460EX_L3REC		0x035B
++#define PESDR1_460EX_L0LPB		0x035C
++#define PESDR1_460EX_L1LPB		0x035D
++#define PESDR1_460EX_L2LPB		0x035E
++#define PESDR1_460EX_L3LPB		0x035F
++#define PESDR1_460EX_L0CLK		0x0360
++#define PESDR1_460EX_L1CLK		0x0361
++#define PESDR1_460EX_L2CLK		0x0362
++#define PESDR1_460EX_L3CLK		0x0363
++#define PESDR1_460EX_PHY_CTL_RST	0x0364
++#define PESDR1_460EX_RSTSTA		0x0365
++#define PESDR1_460EX_OBS		0x0366
++#define PESDR1_460EX_L0ERRC		0x0368
++#define PESDR1_460EX_L1ERRC		0x0369
++#define PESDR1_460EX_L2ERRC		0x036A
++#define PESDR1_460EX_L3ERRC		0x036B
++#define PESDR0_460EX_IHS1		0x036C
++#define PESDR0_460EX_IHS2		0x036D
++
++/*
+  * Of the above, some are common offsets from the base
+  */
+ #define PESDRn_UTLSET1			0x00
+@@ -353,6 +406,12 @@
+ #define PECFG_POM2LAL		0x390
+ #define PECFG_POM2LAH		0x394
+ 
++/* SDR Bit Mappings */
++#define PESDRx_RCSSET_HLDPLB	0x10000000
++#define PESDRx_RCSSET_RSTGU	0x01000000
++#define PESDRx_RCSSET_RDY       0x00100000
++#define PESDRx_RCSSET_RSTDL     0x00010000
++#define PESDRx_RCSSET_RSTPYN    0x00001000
+ 
+ enum
+ {
+Index: linux-2.6.18/mvl_patches/pro50-1200.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1200.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1200);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

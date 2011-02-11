@@ -1,0 +1,945 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_i2c_adds_support_for_i2c_bus_on_8xx
+# Date: Wed Sep 26 11:10:41 2007
+# Source: MontaVista Software, Inc.
+# MR: 22087
+# Type: Enhancement
+# Disposition: submitted to Jean Delvare <khali@linux-fr.org>, lkml, linuxppc-dev
+# Signed-off-by: Vitaly Bordug <vbordug@ru.mvista.com>
+# Description:
+#     Old adapter and algorithm drivers for 8xx are merged into single i2c-pq1 driver.
+#     Interface has been reworked to of_device as well as other feedback
+#     addressed. Repeated start ability is missing from the implementation.
+# 
+# 
+
+PATCHNUM=181
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: MontaVista Software, Inc.
+MR: 22087
+Type: Enhancement
+Disposition: submitted to Jean Delvare <khali@linux-fr.org>, lkml, linuxppc-dev
+Signed-off-by: Vitaly Bordug <vbordug@ru.mvista.com>
+Description:
+    Old adapter and algorithm drivers for 8xx are merged into single i2c-pq1 driver.
+    Interface has been reworked to of_device as well as other feedback
+    addressed. Repeated start ability is missing from the implementation.
+
+
+Index: linux-2.6.18/arch/powerpc/platforms/8xx/mpc885ads_setup.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/8xx/mpc885ads_setup.c
++++ linux-2.6.18/arch/powerpc/platforms/8xx/mpc885ads_setup.c
+@@ -52,6 +52,17 @@ static void init_smc1_uart_ioports(struc
+ static void init_smc2_uart_ioports(struct fs_uart_platform_info *fpi);
+ static void init_scc3_ioports(struct fs_platform_info *ptr);
+ 
++#ifdef CONFIG_I2C_PQ1
++static void init_i2c_ioports(void)
++{
++	cpm8xx_t *cp = (cpm8xx_t *)immr_map(im_cpm);
++
++	setbits32(&cp->cp_pbpar, 0x00000030);
++	setbits32(&cp->cp_pbdir, 0x00000030);
++	setbits16(&cp->cp_pbodr, 0x0030);
++}
++#endif
++
+ #ifdef CONFIG_PCMCIA_M8XX
+ static void pcmcia_hw_setup(int slot, int enable)
+ {
+@@ -186,6 +197,10 @@ void __init mpc885ads_board_setup(void)
+ 	m8xx_pcmcia_ops.hw_ctrl = pcmcia_hw_setup;
+ 	m8xx_pcmcia_ops.voltage_set = pcmcia_set_voltage;
+ #endif
++
++#ifdef CONFIG_I2C_PQ1
++	init_i2c_ioports();
++#endif
+ }
+ 
+ static void init_fec1_ioports(struct fs_platform_info *ptr)
+Index: linux-2.6.18/arch/powerpc/sysdev/fsl_soc.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/fsl_soc.c
++++ linux-2.6.18/arch/powerpc/sysdev/fsl_soc.c
+@@ -1124,4 +1124,17 @@ err:
+ 
+ arch_initcall(cpm_smc_uart_of_init);
+ 
++static int __init fsl_i2c_cpm_of_init(void)
++{
++	struct device_node *np = NULL;
++
++	/* Register all the devices which type is "i2c-cpm" */
++	while ((np = of_find_compatible_node(np, "i2c", "fsl,i2c-cpm")) != NULL)
++		of_platform_device_create(np, "fsl-i2c-cpm", NULL);
++
++	return 0;
++}
++
++arch_initcall(fsl_i2c_cpm_of_init);
++
+ #endif /* CONFIG_8xx */
+Index: linux-2.6.18/drivers/i2c/busses/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/i2c/busses/Kconfig
++++ linux-2.6.18/drivers/i2c/busses/Kconfig
+@@ -355,6 +355,16 @@ config I2C_RPXLITE
+ 	depends on (RPXLITE || RPXCLASSIC) && I2C
+ 	select I2C_ALGO8XX
+ 
++config I2C_PQ1
++	tristate "MPC8xx I2C interface"
++	depends on PPC_8xx
++	help
++	  If you say yes to this option, support will be included for the
++	  built-in I2C interface on the MPC8xx processors.
++
++	  This driver can also be built as a module.  If so, the module
++	  will be called i2c-pq1.
++
+ config I2C_S3C2410
+ 	tristate "S3C2410 I2C Driver"
+ 	depends on I2C && ARCH_S3C2410
+Index: linux-2.6.18/drivers/i2c/busses/Makefile
+===================================================================
+--- linux-2.6.18.orig/drivers/i2c/busses/Makefile
++++ linux-2.6.18/drivers/i2c/busses/Makefile
+@@ -29,6 +29,7 @@ obj-$(CONFIG_I2C_PARPORT)	+= i2c-parport
+ obj-$(CONFIG_I2C_PARPORT_LIGHT)	+= i2c-parport-light.o
+ obj-$(CONFIG_I2C_PCA_ISA)	+= i2c-pca-isa.o
+ obj-$(CONFIG_I2C_PIIX4)		+= i2c-piix4.o
++obj-$(CONFIG_I2C_PQ1)		+= i2c-pq1.o
+ obj-$(CONFIG_I2C_PROSAVAGE)	+= i2c-prosavage.o
+ obj-$(CONFIG_I2C_PXA)		+= i2c-pxa.o
+ obj-$(CONFIG_I2C_RPXLITE)	+= i2c-rpx.o
+Index: linux-2.6.18/drivers/i2c/busses/i2c-pq1.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/i2c/busses/i2c-pq1.c
+@@ -0,0 +1,599 @@
++/*
++ * The combined i2c adapter and algorithm driver for 8xx processors.
++ *
++ * Copyright (c) 1999 Dan Malek (dmalek@jlc.net).
++ *
++ * moved into proper i2c interface;
++ * Brad Parker (brad@heeltoe.com)
++ *
++ * (C) 2007 Montavista Software, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++ */
++
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/stddef.h>
++#include <linux/dma-mapping.h>
++#include <linux/i2c.h>
++#include <linux/device.h>
++#include <asm/commproc.h>
++#include <asm/io.h>
++#include <asm/mpc8xx.h>
++#include <asm/of_device.h>
++#include <asm/of_platform.h>
++#include <asm/mpc8xx.h>
++#include <asm/time.h>
++#include <asm/fs_pd.h>
++
++
++#define CPM_MAX_READ    513
++#define BD_SC_NAK		((ushort)0x0004)	/* NAK - did not respond */
++#define BD_SC_OV		((ushort)0x0002)	/* OV - receive overrun */
++#define CPM_CR_CLOSE_RXBD	((ushort)0x0007)
++
++/* Try to define this if you have an older CPU (earlier than rev D4) */
++#undef	I2C_CHIP_ERRATA
++
++struct m8xx_i2c {
++	struct of_device *ofdev;
++	struct i2c_adapter adap;
++	wait_queue_head_t queue;
++
++	i2c8xx_t *regs;
++	iic_t *pram;
++	cpm8xx_t *cp;
++	uint dp_base;
++	int irq;
++	int reloc;
++
++	u_char temp[CPM_MAX_READ];
++};
++
++static irqreturn_t i2c_pq1_cpm_irq(int irq, void *dev_id, struct pt_regs *rg)
++{
++	struct m8xx_i2c *i2c = (struct m8xx_i2c *) dev_id;
++	i2c8xx_t *regs = i2c->regs;
++
++#ifdef I2C_CHIP_ERRATA
++	/* Chip errata, clear enable. This is not needed on rev D4 CPUs
++	 * This should probably be removed and replaced by I2C_CHIP_ERRATA stuff
++	 * Someone with a buggy CPU needs to confirm that
++	 */
++	out_8(&regs->i2c_i2mod, in_8(&regs->i2c_i2mod) | ~1);
++#endif
++	/* Clear interrupt. */
++	out_8(&regs->i2c_i2cer, 0xff);
++
++	/* Get 'me going again. */
++	wake_up_interruptible(&i2c->queue);
++
++	return IRQ_HANDLED;
++}
++
++static void i2c_pq1_cpm_reset_params(struct m8xx_i2c *i2c)
++{
++	iic_t *pram = i2c->pram;
++
++	pram->iic_tbase = i2c->dp_base;
++	pram->iic_rbase = i2c->dp_base + sizeof(cbd_t) * 2;
++
++	pram->iic_tfcr = SMC_EB;
++	pram->iic_rfcr = SMC_EB;
++
++	pram->iic_mrblr = CPM_MAX_READ;
++
++	pram->iic_rstate = 0;
++	pram->iic_rdp = 0;
++	pram->iic_rbptr = pram->iic_rbase;
++	pram->iic_rbc = 0;
++	pram->iic_rxtmp = 0;
++	pram->iic_tstate = 0;
++	pram->iic_tdp = 0;
++	pram->iic_tbptr = pram->iic_tbase;
++	pram->iic_tbc = 0;
++	pram->iic_txtmp = 0;
++}
++
++static void i2c_pq1_force_close(struct i2c_adapter *adap)
++{
++	struct m8xx_i2c *i2c = i2c_get_adapdata(adap);
++	i2c8xx_t *regs = i2c->regs;
++
++	if (i2c->reloc == 0) {	/* micro code disabled */
++		cpm8xx_t *cp = i2c->cp;
++		u16 v =
++		    mk_cr_cmd(CPM_CR_CH_I2C, CPM_CR_CLOSE_RXBD) | CPM_CR_FLG;
++
++		dev_dbg(&adap->dev, "force_close\n");
++
++		out_be16(&cp->cp_cpcr, v);
++		wait_event_timeout(i2c->queue,
++				   !(in_be16(&cp->cp_cpcr) & CPM_CR_FLG),
++				   HZ * 5);
++	}
++	out_8(&regs->i2c_i2cmr, 0x00);	/* Disable all interrupts */
++	out_8(&regs->i2c_i2cer, 0xff);
++}
++
++/* Read from I2C...
++ * abyte = address byte, with r/w flag already set
++ */
++static int i2c_pq1_read(struct i2c_adapter *adap, u_char abyte,
++			char *buf, int count)
++{
++	struct m8xx_i2c *i2c = i2c_get_adapdata(adap);
++	iic_t *pram = i2c->pram;
++	i2c8xx_t *regs = i2c->regs;
++	cbd_t *tbdf, *rbdf;
++	u_char *tb;
++	int ret = 0;
++
++	if (count >= CPM_MAX_READ)
++		return -EINVAL;
++
++	/* check for and use a microcode relocation patch */
++	if (i2c->reloc)
++		i2c_pq1_cpm_reset_params(i2c);
++
++	tbdf = (cbd_t *) cpm_dpram_addr(pram->iic_tbase);
++	rbdf = (cbd_t *) cpm_dpram_addr(pram->iic_rbase);
++
++	/* To read, we need an empty buffer of the proper length.
++	 * All that is used is the first byte for address, the remainder
++	 * is just used for timing (and doesn't really have to exist).
++	 */
++	tb = i2c->temp;
++	tb = (u_char *) (((uint) tb + 15) & ~15);
++	tb[0] = abyte;		/* Device address byte w/rw flag */
++
++	dev_dbg(&adap->dev, "i2c_pq1_read(abyte=0x%x)\n", abyte);
++
++	tbdf->cbd_bufaddr = dma_map_single(&i2c->ofdev->dev,
++						tb, count, DMA_TO_DEVICE);
++
++	tbdf->cbd_datlen = count + 1;
++	tbdf->cbd_sc = BD_SC_READY | BD_SC_LAST | BD_SC_WRAP | BD_IIC_START;
++
++	pram->iic_mrblr = count + 1;	/* prevent excessive read, +1
++					   is needed otherwise will the
++					   RXB interrupt come too early */
++
++	rbdf->cbd_datlen = 0;
++	rbdf->cbd_bufaddr = dma_map_single(&i2c->ofdev->dev,
++						buf, count, DMA_FROM_DEVICE);
++	rbdf->cbd_sc = BD_SC_EMPTY | BD_SC_WRAP | BD_SC_INTRPT;
++
++	/* Chip bug, set enable here */
++	out_8(&regs->i2c_i2cmr, 0x13);	/* Enable some interupts */
++	out_8(&regs->i2c_i2cer, 0xff);
++	out_8(&regs->i2c_i2mod, in_8(&regs->i2c_i2mod) | 1);	/* Enable */
++	out_8(&regs->i2c_i2com, in_8(&regs->i2c_i2com) | 0x80);	/* Begin transmission */
++
++	/* Wait for IIC transfer */
++	ret = wait_event_interruptible_timeout(i2c->queue, 0, 1 * HZ);
++
++	dma_unmap_single(i2c->ofdev->dev, tb, 1, DMA_TO_DEVICE);
++	dma_unmap_single(i2c->ofdev->dev, buf, count, DMA_FROM_DEVICE);
++
++	if (ret < 0) {
++		i2c_pq1_force_close(adap);
++		dev_dbg(&adap->dev, "I2C read: timeout!\n");
++		return -EIO;
++	}
++#ifdef I2C_CHIP_ERRATA
++	/* Chip errata, clear enable. This is not needed on rev D4 CPUs.
++	   Disabling I2C too early may cause too short stop condition */
++	udelay(4);
++	out_8(&regs->i2c_i2mod, in_8(&regs->i2c_i2mod) | ~1);
++#endif
++
++	dev_dbg(&adap->dev, "tx sc %04x, rx sc %04x\n",
++		tbdf->cbd_sc, rbdf->cbd_sc);
++
++	if (tbdf->cbd_sc & BD_SC_READY) {
++		dev_dbg(&adap->dev, "I2C read; complete but tbuf ready\n");
++		i2c_pq1_force_close(adap);
++		dev_dbg(&adap->dev, "tx sc %04x, rx sc %04x\n",
++			tbdf->cbd_sc, rbdf->cbd_sc);
++	}
++
++	if (tbdf->cbd_sc & BD_SC_NAK) {
++		dev_dbg(&adap->dev, "I2C read; no ack\n");
++		return -EREMOTEIO;
++	}
++
++	if (rbdf->cbd_sc & BD_SC_EMPTY) {
++		/* force_close(adap); */
++		dev_dbg(&adap->dev,
++			"I2C read; complete but rbuf empty\n");
++		dev_dbg(&adap->dev, "tx sc %04x, rx sc %04x\n",
++			tbdf->cbd_sc, rbdf->cbd_sc);
++		return -EREMOTEIO;
++	}
++
++	if (rbdf->cbd_sc & BD_SC_OV) {
++		dev_dbg(&adap->dev, "I2C read; Overrun\n");
++		return -EREMOTEIO;
++	}
++
++	dev_dbg(&adap->dev, "read %d bytes\n", rbdf->cbd_datlen);
++
++	if (rbdf->cbd_datlen < count) {
++		dev_dbg(&adap->dev,
++			"I2C read; short, wanted %d got %d\n", count,
++			rbdf->cbd_datlen);
++		return 0;
++	}
++
++	return count;
++}
++
++/* Write to I2C...
++ * addr = address byte, with r/w flag already set
++ */
++static int i2c_pq1_write(struct i2c_adapter *adap, u_char abyte,
++			 char *buf, int count)
++{
++	struct m8xx_i2c *i2c = i2c_get_adapdata(adap);
++	iic_t *pram = i2c->pram;
++	i2c8xx_t *regs = i2c->regs;
++	cbd_t *tbdf;
++	u_char *tb;
++	int ret = 0;
++
++	/* check for and use a microcode relocation patch */
++	if (i2c->reloc) {
++		i2c_pq1_cpm_reset_params(i2c);
++	}
++
++	tb = i2c->temp;
++	tb = (u_char *) (((uint) tb + 15) & ~15);
++	*tb = abyte;		/* Device address byte w/rw flag */
++
++	dev_dbg(&adap->dev, "i2c_pq1_write(abyte=0x%x)\n", abyte);
++
++	/* set up 2 descriptors */
++	tbdf = (cbd_t *) cpm_dpram_addr(pram->iic_tbase);
++
++	tbdf[0].cbd_bufaddr = dma_map_single(&i2c->ofdev->dev,
++						tb, 1, DMA_TO_DEVICE);
++	tbdf[0].cbd_datlen = 1;
++	tbdf[0].cbd_sc = BD_SC_READY | BD_IIC_START;
++
++	tbdf[1].cbd_bufaddr = dma_map_single(&i2c->ofdev->dev,
++						buf, count, DMA_TO_DEVICE);
++	tbdf[1].cbd_datlen = count;
++	tbdf[1].cbd_sc = BD_SC_READY | BD_SC_INTRPT | BD_SC_LAST | BD_SC_WRAP;
++
++	/* Chip bug, set enable here */
++	out_8(&regs->i2c_i2cmr, 0x13);	/* Enable some interupts */
++	out_8(&regs->i2c_i2cer, 0xff);
++	out_8(&regs->i2c_i2mod, in_8(&regs->i2c_i2mod) | 1);	/* Enable */
++	out_8(&regs->i2c_i2com, in_8(&regs->i2c_i2com) | 0x80);	/* Begin transmission */
++
++	/* Wait for IIC transfer */
++	ret = wait_event_interruptible_timeout(i2c->queue, 0, 1 * HZ);
++
++	dma_unmap_single(i2c->ofdev->dev, tb, 1, DMA_TO_DEVICE);
++	dma_unmap_single(i2c->ofdev->dev, buf, count, DMA_TO_DEVICE);
++
++	if (ret < 0) {
++		i2c_pq1_force_close(adap);
++		dev_dbg(&adap->dev, "I2C write: timeout!\n");
++		return -EIO;
++	}
++#ifdef I2C_CHIP_ERRATA
++	/* Chip errata, clear enable. This is not needed on rev D4 CPUs.
++	 * Disabling I2C too early may cause too short stop condition.
++	 */
++	udelay(4);
++	out_8(&regs->i2c_i2mod, in_8(&regs->i2c_i2mod) | ~1);
++#endif
++	dev_dbg(&adap->dev, "tx0 sc %04x, tx1 sc %04x\n",
++		tbdf[0].cbd_sc, tbdf[1].cbd_sc);
++
++	if (tbdf->cbd_sc & BD_SC_NAK) {
++		dev_dbg(&adap->dev, "I2C write; no ack\n");
++		return 0;
++	}
++
++	if (tbdf->cbd_sc & BD_SC_READY) {
++		dev_dbg(&adap->dev,
++			"I2C write; complete but tbuf ready\n");
++		return 0;
++	}
++
++	return count;
++}
++
++static int i2c_pq1_cpm_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
++{
++	struct i2c_msg *pmsg;
++	int i, ret;
++	u_char addr;
++
++	for (i = 0; i < num; i++) {
++		pmsg = &msgs[i];
++
++		dev_dbg(&adap->dev, "i2c-xfer: %d addr=0x%x flags=0x%x len=%d\n buf=%lx\n",
++			i, pmsg->addr, pmsg->flags, pmsg->len,
++			(unsigned long)pmsg->buf);
++
++		addr = pmsg->addr << 1;
++		if (pmsg->flags & I2C_M_RD)
++			addr |= 1;
++
++		if (pmsg->flags & I2C_M_RD) {
++			/* read bytes into buffer */
++			ret = i2c_pq1_read(adap, addr, pmsg->buf, pmsg->len);
++			dev_dbg(&adap->dev, "i2c-xfer: read %d bytes\n", ret);
++			if (ret < pmsg->len) {
++				return (ret < 0) ? ret : -EREMOTEIO;
++			}
++		} else {
++			/* write bytes from buffer */
++			ret = i2c_pq1_write(adap, addr, pmsg->buf, pmsg->len);
++			dev_dbg(&adap->dev, "i2c-xfer: wrote %d\n", ret);
++			if (ret < pmsg->len) {
++				return (ret < 0) ? ret : -EREMOTEIO;
++			}
++		}
++	}
++
++	return num;
++}
++
++static int i2c_pq1_cpm_init(struct m8xx_i2c *i2c)
++{
++	iic_t *pram = i2c->pram;
++	i2c8xx_t *regs = i2c->regs;
++	unsigned char brg;
++	int ret;
++
++	/* Initialize the parameter ram.
++	 * We need to make sure many things are initialized to zero,
++	 * especially in the case of a microcode patch.
++	 */
++	pram->iic_rstate = 0;
++	pram->iic_rdp = 0;
++	pram->iic_rbptr = 0;
++	pram->iic_rbc = 0;
++	pram->iic_rxtmp = 0;
++	pram->iic_tstate = 0;
++	pram->iic_tdp = 0;
++	pram->iic_tbptr = 0;
++	pram->iic_tbc = 0;
++	pram->iic_txtmp = 0;
++
++	/* Set up the IIC parameters in the parameter ram. */
++	pram->iic_tbase = i2c->dp_base;
++	pram->iic_rbase = i2c->dp_base + sizeof(cbd_t) * 2;
++
++	pram->iic_tfcr = SMC_EB;
++	pram->iic_rfcr = SMC_EB;
++
++	/* Set maximum receive size. */
++	pram->iic_mrblr = CPM_MAX_READ;
++
++	/* Initialize Tx/Rx parameters. */
++	if (i2c->reloc == 0) {
++		cpm8xx_t *cp = i2c->cp;
++		int ret;
++
++		u16 v = mk_cr_cmd(CPM_CR_CH_I2C, CPM_CR_INIT_TRX) | CPM_CR_FLG;
++
++		out_be16(&cp->cp_cpcr, v);
++		ret = wait_event_timeout(i2c->queue,
++					 !(in_be16(&cp->cp_cpcr) & CPM_CR_FLG),
++					 HZ * 1);
++		if (!ret)
++			return -EIO;
++
++	} else {
++		pram->iic_rbptr = pram->iic_rbase;
++		pram->iic_tbptr = pram->iic_tbase;
++		pram->iic_rstate = 0;
++		pram->iic_tstate = 0;
++	}
++
++	/* Select an arbitrary address. Just make sure it is unique. */
++	out_8(&regs->i2c_i2add, 0xfe);
++
++	/* Make clock run at 60 kHz. */
++	brg = ppc_proc_freq / (32 * 2 * 60000) - 3;
++	out_8(&regs->i2c_i2brg, brg);
++
++	out_8(&regs->i2c_i2mod, 0x00);
++	out_8(&regs->i2c_i2com, 0x01);	/* Master mode */
++
++	/* Disable interrupts. */
++	out_8(&regs->i2c_i2cmr, 0);
++	out_8(&regs->i2c_i2cer, 0xff);
++
++	/* Install interrupt handler. */
++	ret = request_irq(i2c->irq, i2c_pq1_cpm_irq, 0, "8xx_i2c", i2c);
++	if (ret)
++		return -EIO;
++
++	return 0;
++}
++
++static void i2c_pq1_shutdown(struct m8xx_i2c *i2c)
++{
++	i2c8xx_t *regs = i2c->regs;
++
++	out_8(&regs->i2c_i2mod, in_8(&regs->i2c_i2mod) | ~1);
++	out_8(&regs->i2c_i2cmr, 0);
++	out_8(&regs->i2c_i2cer, 0xff);
++}
++
++static int i2c_pq1_res_init(struct m8xx_i2c *i2c)
++{
++	volatile cpm8xx_t *cp;
++	struct resource r;
++	struct of_device *ofdev = i2c->ofdev;
++	struct device_node *np = ofdev->node;
++
++	/* Pointer to Communication Processor
++	 */
++	cp = i2c->cp = (cpm8xx_t *)immr_map(im_cpm);
++
++	i2c->irq = irq_of_parse_and_map(np, 0);
++  	if (i2c->irq < 0)
++		return -EINVAL;
++
++	if (of_address_to_resource(np, 0, &r))
++		return -EINVAL;
++
++	i2c->regs = ioremap(r.start, r.end - r.start + 1);
++	if (i2c->regs == NULL)
++		return -EINVAL;
++
++	if (of_address_to_resource(np, 1, &r)) {
++		iounmap(i2c->regs);
++		return -EINVAL;
++	}
++
++	i2c->pram = ioremap(r.start, r.end - r.start + 1);
++	if (i2c->pram == NULL) {
++		iounmap(i2c->regs);
++		return -EINVAL;
++	}
++
++	/* Check for and use a microcode relocation patch. */
++	if ((i2c->reloc = i2c->pram->iic_rpbase))
++		i2c->pram = (iic_t *)&cp->cp_dpmem[i2c->pram->iic_rpbase];
++
++	/* Allocate space for two transmit and two receive buffer
++	 * descriptors in the DP ram.
++	 */
++	i2c->dp_base = cpm_dpalloc(sizeof(cbd_t) * 4, 8);
++
++	return 0;
++}
++
++static void i2c_pq1_ret_free(struct m8xx_i2c *i2c)
++{
++	iounmap(i2c->regs);
++	iounmap(i2c->pram);
++}
++
++static u32 i2c_pq1_func(struct i2c_adapter *adap)
++{
++	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL;
++}
++
++static struct i2c_algorithm i2c_pq1_algo = {
++	.master_xfer = i2c_pq1_cpm_xfer,
++	.functionality = i2c_pq1_func,
++};
++
++static const struct i2c_adapter pq1_ops = {
++	.owner		= THIS_MODULE,
++	.name		= "i2c-pq1",
++	.id		= I2C_HW_MPC8XX_EPON,
++	.algo		= &i2c_pq1_algo,
++	.class		= I2C_CLASS_HWMON,
++	.timeout	= 1,
++	.retries	= 1
++};
++
++static int i2c_pq1_probe(struct of_device* ofdev, const struct of_device_id *match)
++{
++	int ret;
++	struct m8xx_i2c *i2c;
++
++	if (!(i2c = kzalloc(sizeof(*i2c), GFP_KERNEL))) {
++		return -ENOMEM;
++	}
++	i2c->ofdev = ofdev;
++	init_waitqueue_head(&i2c->queue);
++
++	ret = i2c_pq1_res_init(i2c);
++        if (ret != 0) {
++		return ret;
++	}
++
++        /* initialise the i2c controller */
++	ret = i2c_pq1_cpm_init(i2c);
++        if (ret != 0) {
++		i2c_pq1_ret_free(i2c);
++		return ret;
++	}
++
++	dev_set_drvdata(&ofdev->dev, i2c);
++	i2c->adap = pq1_ops;
++	i2c_set_adapdata(&i2c->adap, i2c);
++	i2c->adap.dev.parent = &ofdev->dev;
++
++	if ((ret = i2c_add_adapter(&i2c->adap)) < 0) {
++		printk(KERN_ERR "i2c-pq1: Unable to register with I2C\n");
++		i2c_pq1_ret_free(i2c);
++		free_irq(i2c->irq, NULL);
++		kfree(i2c);
++	}
++
++	return ret;
++}
++
++static int i2c_pq1_remove(struct of_device* ofdev)
++{
++	struct m8xx_i2c *i2c = dev_get_drvdata(&ofdev->dev);
++
++	i2c_pq1_shutdown(i2c);
++	i2c_pq1_ret_free(i2c);
++	free_irq(i2c->irq, NULL);
++	dev_set_drvdata(&ofdev->dev, NULL);
++	kfree(i2c);
++
++	return 0;
++}
++
++static struct of_device_id i2c_pq1_match[] = {
++	{
++		.type = "i2c",
++		.compatible = "fsl,i2c-cpm",
++	},
++	{},
++};
++
++MODULE_DEVICE_TABLE(of, i2c_pq1_match);
++
++static struct of_platform_driver i2c_pq1_driver = {
++	.name		= "fsl-i2c-cpm",
++	.match_table	= i2c_pq1_match,
++	.probe		= i2c_pq1_probe,
++	.remove		= i2c_pq1_remove,
++};
++
++static int __init i2c_pq1_init(void)
++{
++	return of_register_platform_driver(&i2c_pq1_driver);
++}
++
++static void __exit i2c_pq1_exit(void)
++{
++	of_unregister_platform_driver(&i2c_pq1_driver);
++}
++
++module_init(i2c_pq1_init);
++module_exit(i2c_pq1_exit);
++
++MODULE_AUTHOR("Dan Malek <dmalek@jlc.net>");
++MODULE_DESCRIPTION("I2C-Bus adapter routines for MPC8xx boards");
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc885ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc885ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc885ads.dts
+@@ -178,6 +178,13 @@
+ 				interrupt-parent = <&Cpm_pic>;
+ 				phy-handle = <&Phy2>;
+ 			};
++			i2c@860 {
++				device_type = "i2c";
++				compatible = "fsl,i2c-cpm";
++				reg = <860 20 3c80 30>;
++				interrupts = <10 3>;
++				interrupt-parent = <&Cpm_pic>;
++			};
+ 		};
+ 	};
+ };
+Index: linux-2.6.18/mvl_patches/pro50-0181.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0181.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(181);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

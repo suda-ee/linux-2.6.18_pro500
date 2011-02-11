@@ -1,0 +1,353 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_44x_sequoia_nand
+# Date: Fri Aug 15 13:07:00 2008
+# MR: 27840
+# Source: MontaVista Software, Inc.
+# Type: Enhancement
+# Disposition: local
+# Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+# Description:
+#     Add PowerPC 440EPx/GRx Sequoia/Rainier NAND support.
+#     Based on the warp-nand.c from the community.
+# 
+
+PATCHNUM=1472
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 27840
+Source: MontaVista Software, Inc.
+Type: Enhancement
+Disposition: local
+Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+Description:
+    Add PowerPC 440EPx/GRx Sequoia/Rainier NAND support.
+    Based on the warp-nand.c from the community.
+
+Index: linux-2.6.18/arch/powerpc/platforms/44x/sequoia-nand.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/44x/sequoia-nand.c
+@@ -0,0 +1,102 @@
++/*
++ * AMCC Sequoia/Rainier NAND flash specific routines
++ *
++ * Based on the warp-nand.c which is:
++ *   Copyright (c) 2008 PIKA Technologies
++ *     Sean MacLennan <smaclennan@pikatech.com>
++ */
++
++#if defined(CONFIG_MTD_NAND_NDFC) || defined(CONFIG_MTD_NAND_NDFC_MODULE)
++#include <linux/platform_device.h>
++#include <linux/mtd/mtd.h>
++#include <linux/mtd/map.h>
++#include <linux/mtd/partitions.h>
++#include <linux/mtd/nand.h>
++#include <linux/mtd/ndfc.h>
++
++#include <asm/machdep.h>
++
++
++#define CS_NAND_0	3	/* use chip select 3 for NAND device 0 */
++
++#define SEQUOIA_NAND_FLASH_REG_ADDR	0x1D0000000ULL
++#define SEQUOIA_NAND_FLASH_REG_SIZE	0x2000
++
++static struct resource sequoia_ndfc = {
++	.start = SEQUOIA_NAND_FLASH_REG_ADDR,
++	.end   = SEQUOIA_NAND_FLASH_REG_ADDR + SEQUOIA_NAND_FLASH_REG_SIZE - 1,
++	.flags = IORESOURCE_MEM,
++};
++
++static struct mtd_partition nand_parts[] = {
++	{
++		.name   = "u-boot-nand",
++		.offset = 0,
++		.size   = 0x0080000,
++	},
++	{
++		.name   = "kernel-nand",
++		.offset = 0x0080000,
++		.size   = 0x0180000,
++	},
++	{
++	 	.name   = "filesystem",
++	 	.offset = 0x0200000,
++	 	.size   = 0x1e00000,
++	 },
++};
++
++struct ndfc_controller_settings sequoia_ndfc_settings = {
++	.ccr_settings = (NDFC_CCR_BS(CS_NAND_0) | NDFC_CCR_ARAC1),
++	.ndfc_erpn = 0,
++};
++
++static struct ndfc_chip_settings sequoia_chip0_settings = {
++	.bank_settings = 0x80002222,
++};
++
++struct platform_nand_ctrl sequoia_nand_ctrl = {
++	.priv = &sequoia_ndfc_settings,
++};
++
++static struct platform_device sequoia_ndfc_device = {
++	.name = "ndfc-nand",
++	.id = 0,
++	.dev = {
++		.platform_data = &sequoia_nand_ctrl,
++	},
++	.num_resources = 1,
++	.resource = &sequoia_ndfc,
++};
++
++static struct platform_nand_chip sequoia_nand_chip0 = {
++	.nr_chips = 1,
++	.chip_offset = CS_NAND_0,
++	.nr_partitions = ARRAY_SIZE(nand_parts),
++	.partitions = nand_parts,
++	.chip_delay = 50,
++	.priv = &sequoia_chip0_settings,
++};
++
++static struct platform_device sequoia_nand_device = {
++	.name = "ndfc-chip",
++	.id = 0,
++	.num_resources = 0,
++	.dev = {
++		.platform_data = &sequoia_nand_chip0,
++		.parent = &sequoia_ndfc_device.dev,
++	}
++};
++
++static int sequoia_setup_nand_flash(void)
++{
++	platform_device_register(&sequoia_ndfc_device);
++	platform_device_register(&sequoia_nand_device);
++
++	return 0;
++}
++
++machine_device_initcall(sequoia, sequoia_setup_nand_flash);
++machine_device_initcall(rainier, sequoia_setup_nand_flash);
++
++#endif /* CONFIG_MTD_NAND_NDFC || CONFIG_MTD_NAND_NDFC_MODULE */
+Index: linux-2.6.18/arch/powerpc/platforms/44x/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/44x/Makefile
++++ linux-2.6.18/arch/powerpc/platforms/44x/Makefile
+@@ -3,8 +3,10 @@ obj-$(CONFIG_EBONY)	+= ebony.o
+ obj-$(CONFIG_TAISHAN)	+= taishan.o
+ obj-$(CONFIG_BAMBOO)	+= bamboo.o
+ obj-$(CONFIG_SEQUOIA)	+= sequoia.o
++obj-$(CONFIG_SEQUOIA)	+= sequoia-nand.o
+ obj-$(CONFIG_KATMAI)	+= katmai.o
+ obj-$(CONFIG_RAINIER)	+= rainier.o
++obj-$(CONFIG_RAINIER)	+= sequoia-nand.o
+ obj-$(CONFIG_CANYONLANDS) += canyonlands.o
+ obj-$(CONFIG_CANYONLANDS) += canyonlands-nand.o
+ obj-$(CONFIG_CANYONLANDS) += canyonlands-sata.o
+Index: linux-2.6.18/mvl_patches/pro50-1472.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1472.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1472);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

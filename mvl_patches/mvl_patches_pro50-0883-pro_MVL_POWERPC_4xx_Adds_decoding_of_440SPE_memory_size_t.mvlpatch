@@ -1,0 +1,477 @@
+#! /usr/bin/env bash
+# Patch: -pro_MVL_POWERPC_4xx_Adds_decoding_of_440SPE_memory_size_t
+# Date: Wed Mar  5 11:44:51 2008
+# MR: 26747
+# Disposition: backport from
+# git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# Adjustments:
+#     Removed walnut part since it's not supported in pro 5.0.
+#     Minor changes to make it apply with no fuzz.
+# 
+# From d23f5099297c0f017ba4fb165dc9879bda11f9ce Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Fri, 21 Dec 2007 15:39:31 +1100
+# Subject: [PATCH] [POWERPC] 4xx: Adds decoding of 440SPE memory size to boot wrapper library
+# 
+# This adds a function to the bootwrapper 4xx library to decode memory
+# size on 440SPE processors.
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+
+PATCHNUM=883
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26747
+Disposition: backport from
+git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+Adjustments:
+    Removed walnut part since it's not supported in pro 5.0.
+    Minor changes to make it apply with no fuzz.
+
+From d23f5099297c0f017ba4fb165dc9879bda11f9ce Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Fri, 21 Dec 2007 15:39:31 +1100
+Subject: [PATCH] [POWERPC] 4xx: Adds decoding of 440SPE memory size to boot wrapper library
+
+This adds a function to the bootwrapper 4xx library to decode memory
+size on 440SPE processors.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+Index: linux-2.6.18/arch/powerpc/boot/4xx.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/4xx.c
++++ linux-2.6.18/arch/powerpc/boot/4xx.c
+@@ -22,16 +22,14 @@
+ #include "dcr.h"
+ 
+ /* Read the 4xx SDRAM controller to get size of system memory. */
+-void ibm4xx_fixup_memsize(void)
++void ibm4xx_sdram_fixup_memsize(void)
+ {
+ 	int i;
+ 	unsigned long memsize, bank_config;
+ 
+ 	memsize = 0;
+ 	for (i = 0; i < ARRAY_SIZE(sdram_bxcr); i++) {
+-		mtdcr(DCRN_SDRAM0_CFGADDR, sdram_bxcr[i]);
+-		bank_config = mfdcr(DCRN_SDRAM0_CFGDATA);
+-
++		bank_config = SDRAM0_READ(sdram_bxcr[i]);
+ 		if (bank_config & SDRAM_CONFIG_BANK_ENABLE)
+ 			memsize += SDRAM_CONFIG_BANK_SIZE(bank_config);
+ 	}
+@@ -39,6 +37,69 @@ void ibm4xx_fixup_memsize(void)
+ 	dt_fixup_memory(0, memsize);
+ }
+ 
++/* Read the 440SPe MQ controller to get size of system memory. */
++#define DCRN_MQ0_B0BAS		0x40
++#define DCRN_MQ0_B1BAS		0x41
++#define DCRN_MQ0_B2BAS		0x42
++#define DCRN_MQ0_B3BAS		0x43
++
++static u64 ibm440spe_decode_bas(u32 bas)
++{
++	u64 base = ((u64)(bas & 0xFFE00000u)) << 2;
++
++	/* open coded because I'm paranoid about invalid values */
++	switch ((bas >> 4) & 0xFFF) {
++	case 0:
++		return 0;
++	case 0xffc:
++		return base + 0x000800000ull;
++	case 0xff8:
++		return base + 0x001000000ull;
++	case 0xff0:
++		return base + 0x002000000ull;
++	case 0xfe0:
++		return base + 0x004000000ull;
++	case 0xfc0:
++		return base + 0x008000000ull;
++	case 0xf80:
++		return base + 0x010000000ull;
++	case 0xf00:
++		return base + 0x020000000ull;
++	case 0xe00:
++		return base + 0x040000000ull;
++	case 0xc00:
++		return base + 0x080000000ull;
++	case 0x800:
++		return base + 0x100000000ull;
++	}
++	printf("Memory BAS value 0x%08x unsupported !\n", bas);
++	return 0;
++}
++
++void ibm440spe_fixup_memsize(void)
++{
++	u64 banktop, memsize = 0;
++
++	/* Ultimately, we should directly construct the memory node
++	 * so we are able to handle holes in the memory address space
++	 */
++	banktop = ibm440spe_decode_bas(mfdcr(DCRN_MQ0_B0BAS));
++	if (banktop > memsize)
++		memsize = banktop;
++	banktop = ibm440spe_decode_bas(mfdcr(DCRN_MQ0_B1BAS));
++	if (banktop > memsize)
++		memsize = banktop;
++	banktop = ibm440spe_decode_bas(mfdcr(DCRN_MQ0_B2BAS));
++	if (banktop > memsize)
++		memsize = banktop;
++	banktop = ibm440spe_decode_bas(mfdcr(DCRN_MQ0_B3BAS));
++	if (banktop > memsize)
++		memsize = banktop;
++
++	dt_fixup_memory(0, memsize);
++}
++
++
+ /* 4xx DDR1/2 Denali memory controller support */
+ /* DDR0 registers */
+ #define DDR0_02			2
+@@ -77,19 +138,13 @@ void ibm4xx_fixup_memsize(void)
+ 
+ #define DDR_GET_VAL(val, mask, shift)	(((val) >> (shift)) & (mask))
+ 
+-static inline u32 mfdcr_sdram0(u32 reg)
+-{
+-        mtdcr(DCRN_SDRAM0_CFGADDR, reg);
+-        return mfdcr(DCRN_SDRAM0_CFGDATA);
+-}
+-
+ void ibm4xx_denali_fixup_memsize(void)
+ {
+ 	u32 val, max_cs, max_col, max_row;
+ 	u32 cs, col, row, bank, dpath;
+ 	unsigned long memsize;
+ 
+-	val = mfdcr_sdram0(DDR0_02);
++	val = SDRAM0_READ(DDR0_02);
+ 	if (!DDR_GET_VAL(val, DDR_START, DDR_START_SHIFT))
+ 		fatal("DDR controller is not initialized\n");
+ 
+@@ -99,7 +154,7 @@ void ibm4xx_denali_fixup_memsize(void)
+ 	max_row = DDR_GET_VAL(val, DDR_MAX_ROW_REG, DDR_MAX_ROW_REG_SHIFT);
+ 
+ 	/* get CS value */
+-	val = mfdcr_sdram0(DDR0_10);
++	val = SDRAM0_READ(DDR0_10);
+ 
+ 	val = DDR_GET_VAL(val, DDR_CS_MAP, DDR_CS_MAP_SHIFT);
+ 	cs = 0;
+@@ -115,15 +170,15 @@ void ibm4xx_denali_fixup_memsize(void)
+ 		fatal("DDR wrong CS configuration\n");
+ 
+ 	/* get data path bytes */
+-	val = mfdcr_sdram0(DDR0_14);
++	val = SDRAM0_READ(DDR0_14);
+ 
+ 	if (DDR_GET_VAL(val, DDR_REDUC, DDR_REDUC_SHIFT))
+ 		dpath = 8; /* 64 bits */
+ 	else
+ 		dpath = 4; /* 32 bits */
+ 
+-	/* get adress pins (rows) */
+-	val = mfdcr_sdram0(DDR0_42);
++	/* get address pins (rows) */
++ 	val = SDRAM0_READ(DDR0_42);
+ 
+ 	row = DDR_GET_VAL(val, DDR_APIN, DDR_APIN_SHIFT);
+ 	if (row > max_row)
+@@ -131,7 +186,7 @@ void ibm4xx_denali_fixup_memsize(void)
+ 	row = max_row - row;
+ 
+ 	/* get collomn size and banks */
+-	val = mfdcr_sdram0(DDR0_43);
++	val = SDRAM0_READ(DDR0_43);
+ 
+ 	col = DDR_GET_VAL(val, DDR_COL_SZ, DDR_COL_SZ_SHIFT);
+ 	if (col > max_col)
+Index: linux-2.6.18/arch/powerpc/boot/4xx.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/4xx.h
++++ linux-2.6.18/arch/powerpc/boot/4xx.h
+@@ -11,7 +11,8 @@
+ #ifndef _POWERPC_BOOT_4XX_H_
+ #define _POWERPC_BOOT_4XX_H_
+ 
+-void ibm4xx_fixup_memsize(void);
++void ibm4xx_sdram_fixup_memsize(void);
++void ibm440spe_fixup_memsize(void);
+ void ibm4xx_denali_fixup_memsize(void);
+ void ibm44x_dbcr_reset(void);
+ void ibm40x_dbcr_reset(void);
+Index: linux-2.6.18/arch/powerpc/boot/bamboo.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/bamboo.c
++++ linux-2.6.18/arch/powerpc/boot/bamboo.c
+@@ -32,7 +32,7 @@ static void bamboo_fixups(void)
+ 	unsigned long sysclk = 33333333;
+ 
+ 	ibm440ep_fixup_clocks(sysclk, 11059200);
+-	ibm4xx_fixup_memsize();
++	ibm4xx_sdram_fixup_memsize();
+ 	ibm4xx_quiesce_eth((u32 *)0xef600e00, (u32 *)0xef600f00);
+ }
+ 
+Index: linux-2.6.18/arch/powerpc/boot/cuboot-taishan.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/cuboot-taishan.c
++++ linux-2.6.18/arch/powerpc/boot/cuboot-taishan.c
+@@ -38,7 +38,7 @@ static void taishan_fixups(void)
+ 	   so we just use that code for now at least */
+ 	ibm440ep_fixup_clocks(sysclk, 6 * 1843200);
+ 
+-	ibm4xx_fixup_memsize();
++	ibm4xx_sdram_fixup_memsize();
+ 
+ 	dt_fixup_mac_addresses(bd.bi_enetaddr, bd.bi_enet1addr);
+ 
+Index: linux-2.6.18/arch/powerpc/boot/dcr.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dcr.h
++++ linux-2.6.18/arch/powerpc/boot/dcr.h
+@@ -14,12 +14,20 @@
+ #define DCRN_SDRAM0_CFGADDR				0x010
+ #define DCRN_SDRAM0_CFGDATA				0x011
+ 
++#define SDRAM0_READ(offset) ({\
++	mtdcr(DCRN_SDRAM0_CFGADDR, offset); \
++	mfdcr(DCRN_SDRAM0_CFGDATA); })
++#define SDRAM0_WRITE(offset, data) ({\
++	mtdcr(DCRN_SDRAM0_CFGADDR, offset); \
++	mtdcr(DCRN_SDRAM0_CFGDATA, data); })
++
+ #define 	SDRAM0_B0CR				0x40
+ #define 	SDRAM0_B1CR				0x44
+ #define 	SDRAM0_B2CR				0x48
+ #define 	SDRAM0_B3CR				0x4c
+ 
+-static const unsigned long sdram_bxcr[] = { SDRAM0_B0CR, SDRAM0_B1CR, SDRAM0_B2CR, SDRAM0_B3CR };
++static const unsigned long sdram_bxcr[] = { SDRAM0_B0CR, SDRAM0_B1CR,
++					    SDRAM0_B2CR, SDRAM0_B3CR };
+ 
+ #define			SDRAM_CONFIG_BANK_ENABLE        0x00000001
+ #define			SDRAM_CONFIG_SIZE_MASK          0x000e0000
+Index: linux-2.6.18/arch/powerpc/boot/ebony.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/ebony.c
++++ linux-2.6.18/arch/powerpc/boot/ebony.c
+@@ -134,7 +134,7 @@ static void ebony_fixups(void)
+ 	unsigned long sysclk = 33000000;
+ 
+ 	ibm440gp_fixup_clocks(sysclk, 6 * 1843200);
+-	ibm4xx_fixup_memsize();
++	ibm4xx_sdram_fixup_memsize();
+ 	dt_fixup_mac_addresses(ebony_mac0, ebony_mac1);
+ 	ibm4xx_fixup_ebc_ranges("/plb/opb/ebc");
+ 	ebony_flashsel_fixup();
+Index: linux-2.6.18/mvl_patches/pro50-0883.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0883.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(883);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

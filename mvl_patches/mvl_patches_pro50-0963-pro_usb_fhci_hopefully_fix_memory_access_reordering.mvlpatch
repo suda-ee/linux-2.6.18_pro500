@@ -1,0 +1,1353 @@
+#! /usr/bin/env bash
+# Patch: -pro_usb_fhci_hopefully_fix_memory_access_reordering
+# Date: Wed Mar  5 16:45:19 2008
+# Source: MontaVista Software, Inc.
+# MR: 27041
+# Type: Defect Fix
+# Disposition: needs submitting to linux-usb
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# [PRO USB FHCI] hopefully fix memory access reordering
+# 
+# When working with memory mapped registers, we must use {in,out}_*
+# accessors, this guaranties memory accesses order.
+# 
+# Few static declarations were also added.
+# 
+#  drivers/usb/host/fhci-cq.c  |    2 
+#  drivers/usb/host/fhci-hcd.c |  117 +++++++++-------------
+#  drivers/usb/host/fhci-hub.c |   44 +++-----
+#  drivers/usb/host/fhci-q.c   |    2 
+#  drivers/usb/host/fhci-tds.c |  234 ++++++++++++++++++++++---------------------
+#  drivers/usb/host/fhci.h     |   56 +++++-----
+#  6 files changed, 219 insertions(+), 236 deletions(-)
+# 
+
+PATCHNUM=963
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: MontaVista Software, Inc.
+MR: 27041
+Type: Defect Fix
+Disposition: needs submitting to linux-usb
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+[PRO USB FHCI] hopefully fix memory access reordering
+
+When working with memory mapped registers, we must use {in,out}_*
+accessors, this guaranties memory accesses order.
+
+Few static declarations were also added.
+
+ drivers/usb/host/fhci-cq.c  |    2 
+ drivers/usb/host/fhci-hcd.c |  117 +++++++++-------------
+ drivers/usb/host/fhci-hub.c |   44 +++-----
+ drivers/usb/host/fhci-q.c   |    2 
+ drivers/usb/host/fhci-tds.c |  234 ++++++++++++++++++++++----------------------
+ drivers/usb/host/fhci.h     |   56 +++++-----
+ mvl_patches/pro50-0963.c    |   16 +++
+ 7 files changed, 235 insertions(+), 236 deletions(-)
+
+Index: linux-2.6.18/drivers/usb/host/fhci-cq.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/fhci-cq.c
++++ linux-2.6.18/drivers/usb/host/fhci-cq.c
+@@ -87,7 +87,7 @@ static void *cq_get(struct cir_q *cq)
+ 	n = cq->first;
+ 	/* see if the queue is not empty */
+ 	if (n == cq->last)
+-		return 0;
++		return NULL;
+ 
+ 	p = cq->table[n];
+ 	if (++n >= cq->max)
+Index: linux-2.6.18/drivers/usb/host/fhci-hcd.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/fhci-hcd.c
++++ linux-2.6.18/drivers/usb/host/fhci-hcd.c
+@@ -50,7 +50,7 @@ static void recycle_frame(struct fhci_us
+ 	pkt->len = 0;
+ 	pkt->status = USB_TD_OK;
+ 	pkt->info = 0;
+-	pkt->priv_data = 0;
++	pkt->priv_data = NULL;
+ 
+ 	cq_put(usb->ep0->empty_frame_Q, pkt);
+ }
+@@ -137,7 +137,7 @@ static void transaction_confirm(struct f
+ 		move_td_from_ed_to_done_list(usb, ed);
+ }
+ 
+-void qe_usb_stop_tx(u8 ep)
++static void qe_usb_stop_tx(u8 ep)
+ {
+ 	qe_issue_cmd(QE_USB_STOP_TX, QE_CR_SUBBLOCK_USB, ep, 0);
+ }
+@@ -153,7 +153,7 @@ static void abort_transmission(struct fh
+ 	/* issue stop Tx command */
+ 	qe_usb_stop_tx(EP_ZERO);
+ 	/* flush Tx FIFOs */
+-	usb->fhci->regs->usb_comm = (u8) (USB_CMD_FLUSH_FIFO | EP_ZERO);
++	out_8(&usb->fhci->regs->usb_comm, USB_CMD_FLUSH_FIFO | EP_ZERO);
+ 	udelay(1000);
+ 	/* reset Tx BDs */
+ 	flush_bds(usb);
+@@ -166,13 +166,13 @@ static void abort_transmission(struct fh
+  * This routine is called when disabling the USB port to flush all
+  * transmissions that are allready scheduled in the BDs
+  */
+-void flush_all_transmissions(struct fhci_usb *usb)
++static void flush_all_transmissions(struct fhci_usb *usb)
+ {
+ 	u8 mode;
+ 	struct td *td;
+ 
+-	mode = usb->fhci->regs->usb_mod;
+-	usb->fhci->regs->usb_mod = (u8) (mode & ~USB_MODE_EN);
++	mode = in_8(&usb->fhci->regs->usb_mod);
++	clrbits8(&usb->fhci->regs->usb_mod, USB_MODE_EN);
+ 
+ 	flush_bds(usb);
+ 
+@@ -186,9 +186,9 @@ void flush_all_transmissions(struct fhci
+ 	usb->actual_frame->frame_status = FRAME_END_TRANSMISSION;
+ 
+ 	/* reset the event register */
+-	usb->fhci->regs->usb_event = 0xffff;
++	out_be16(&usb->fhci->regs->usb_event, 0xffff);
+ 	/* enable the USB controller */
+-	usb->fhci->regs->usb_mod = (u8) (mode | USB_MODE_EN);
++	out_8(&usb->fhci->regs->usb_mod, mode | USB_MODE_EN);
+ }
+ 
+ /*
+@@ -364,7 +364,7 @@ static u32 rotate_frames(struct fhci_usb
+ 	struct fhci_hcd *fhci = usb->fhci;
+ 
+ 	if (!list_empty(&usb->actual_frame->tds_list)) {
+-		if ((((u16)(fhci->pram->frame_num & 0x07ff) -
++		if ((((in_be16(&fhci->pram->frame_num) & 0x07ff) -
+ 		      usb->actual_frame->frame_num) & 0x7ff) > 5)
+ 			flush_actual_frame(usb);
+ 		else
+@@ -372,7 +372,7 @@ static u32 rotate_frames(struct fhci_usb
+ 	}
+ 
+ 	usb->actual_frame->frame_status = FRAME_IS_PREPARED;
+-	usb->actual_frame->frame_num = (u16) (fhci->pram->frame_num & 0x7ff);
++	usb->actual_frame->frame_num = in_be16(&fhci->pram->frame_num) & 0x7ff;
+ 	usb->actual_frame->total_bytes = 0;
+ 
+ 	return 0;
+@@ -421,8 +421,9 @@ static void schedule_transactions(struct
+ }
+ 
+ /* initialize the endpoint zero */
+-u32 endpoint_zero_init(struct fhci_usb *usb, enum fhci_mem_alloc data_mem,
+-		       u32 ring_len)
++static u32 endpoint_zero_init(struct fhci_usb *usb,
++			      enum fhci_mem_alloc data_mem,
++			      u32 ring_len)
+ {
+ 	u32 rc;
+ 
+@@ -437,7 +438,7 @@ u32 endpoint_zero_init(struct fhci_usb *
+ }
+ 
+ /* enable the USB interrupts */
+-void fhci_usb_enable_interrupt(struct fhci_usb *usb)
++static void fhci_usb_enable_interrupt(struct fhci_usb *usb)
+ {
+ 	struct fhci_hcd *fhci = usb->fhci;
+ 
+@@ -446,8 +447,8 @@ void fhci_usb_enable_interrupt(struct fh
+ 		enable_irq(fhci_to_hcd(fhci)->irq);
+ 
+ 		/* initialize the event register and mask register */
+-		usb->fhci->regs->usb_event = 0xffff;
+-		usb->fhci->regs->usb_mask = usb->saved_msk;
++		out_be16(&usb->fhci->regs->usb_event, 0xffff);
++		out_be16(&usb->fhci->regs->usb_mask, usb->saved_msk);
+ 
+ 		/* enable the timer interrupts */
+ 		enable_irq(fhci->timer_irq);
+@@ -457,7 +458,7 @@ void fhci_usb_enable_interrupt(struct fh
+ }
+ 
+ /* diable the usb interrupt */
+-void fhci_usb_disable_interrupt(struct fhci_usb *usb)
++static void fhci_usb_disable_interrupt(struct fhci_usb *usb)
+ {
+ 	struct fhci_hcd *fhci = usb->fhci;
+ 
+@@ -467,25 +468,19 @@ void fhci_usb_disable_interrupt(struct f
+ 
+ 		/* disable the usb interrupt */
+ 		disable_irq(fhci_to_hcd(fhci)->irq);
+-		usb->fhci->regs->usb_mask = 0;
++		out_be16(&usb->fhci->regs->usb_mask, 0);
+ 	}
+ 	usb->intr_nesting_cnt++;
+ }
+ 
+ /* enable the USB controller */
+-u32 fhci_usb_enable(struct fhci_hcd *fhci)
++static u32 fhci_usb_enable(struct fhci_hcd *fhci)
+ {
+ 	struct fhci_usb *usb = fhci->usb_lld;
+-	u8 mode;
+-
+-	/* configure IO ports for USB--in Linux kernel initialize */
+-
+-	usb->fhci->regs->usb_event = 0xffff;
+-	usb->fhci->regs->usb_mask = usb->saved_msk;
+ 
+-	mode = usb->fhci->regs->usb_mod;
+-	mode |= USB_MODE_EN;
+-	usb->fhci->regs->usb_mod = mode;
++	out_be16(&usb->fhci->regs->usb_event, 0xffff);
++	out_be16(&usb->fhci->regs->usb_mask, usb->saved_msk);
++	setbits8(&usb->fhci->regs->usb_mod, USB_MODE_EN);
+ 
+ 	mdelay(100);
+ 
+@@ -493,10 +488,9 @@ u32 fhci_usb_enable(struct fhci_hcd *fhc
+ }
+ 
+ /* disable the USB controller */
+-u32 fhci_usb_disable(struct fhci_hcd *fhci)
++static u32 fhci_usb_disable(struct fhci_hcd *fhci)
+ {
+ 	struct fhci_usb *usb = fhci->usb_lld;
+-	u8 mode;
+ 
+ 	fhci_usb_disable_interrupt(usb);
+ 	usb_port_disable(fhci);
+@@ -506,15 +500,13 @@ u32 fhci_usb_disable(struct fhci_hcd *fh
+ 			usb->port_status == FHCI_PORT_LOW)
+ 		device_disconnected_interrupt(fhci);
+ 
+-	mode = usb->fhci->regs->usb_mod;
+-	mode &= ~USB_MODE_EN;
+-	usb->fhci->regs->usb_mod = mode;
++	clrbits8(&usb->fhci->regs->usb_mod, USB_MODE_EN);
+ 
+ 	return 0;
+ }
+ 
+ /* check the bus state by polling the QE bit on the IO ports */
+-int fhci_ioports_check_bus_state(struct fhci_hcd *fhci)
++static int fhci_ioports_check_bus_state(struct fhci_hcd *fhci)
+ {
+ 	u8 bits = 0;
+ 
+@@ -547,7 +539,7 @@ static void sof_interrupt(struct fhci_hc
+ 			usb->port_status = FHCI_PORT_FULL;
+ 		/* Disable IDLE */
+ 		usb->saved_msk &= ~USB_E_IDLE_MASK;
+-		usb->fhci->regs->usb_mask = usb->saved_msk;
++		out_be16(&usb->fhci->regs->usb_mask, usb->saved_msk);
+ 	}
+ 
+ 	qe_reset_ref_timer_16(fhci->timer, 1500000, usb->max_frame_usage);
+@@ -561,20 +553,17 @@ static void sof_interrupt(struct fhci_hc
+ /* Handles device disconnected interrupt on port */
+ static void device_disconnected_interrupt(struct fhci_hcd *fhci)
+ {
+-	u8 mode;
+ 	struct fhci_usb *usb = fhci->usb_lld;
+ 
+ 	fhci_dbg(fhci, "-> %s\n", __func__);
+ 
+ 	fhci_usb_disable_interrupt(usb);
+-	mode = usb->fhci->regs->usb_mod;
+-	mode &= ~USB_MODE_LSS;
+-	usb->fhci->regs->usb_mod = mode;
++	clrbits8(&usb->fhci->regs->usb_mod, USB_MODE_LSS);
+ 	usb->port_status = FHCI_PORT_DISABLED;
+ 
+ 	/* Enable IDLE since we want to know if something comes along */
+ 	usb->saved_msk |= USB_E_IDLE_MASK;
+-	usb->fhci->regs->usb_mask = usb->saved_msk;
++	out_be16(&usb->fhci->regs->usb_mask, usb->saved_msk);
+ 
+ 	usb->vroot_hub->port.wPortStatus &= ~USB_PORT_STAT_CONNECTION;
+ 	usb->vroot_hub->port.wPortChange |= USB_PORT_STAT_C_CONNECTION;
+@@ -591,7 +580,6 @@ static void device_connected_interrupt(s
+ 	struct fhci_usb *usb = fhci->usb_lld;
+ 	int state;
+ 	int ret;
+-	u8 mode;
+ 
+ 	fhci_dbg(fhci, "-> %s\n", __func__);
+ 
+@@ -608,9 +596,7 @@ static void device_connected_interrupt(s
+ 		}
+ 
+ 		usb->port_status = FHCI_PORT_LOW;
+-		mode = usb->fhci->regs->usb_mod;
+-		mode |= USB_MODE_LSS;
+-		usb->fhci->regs->usb_mod = mode;
++		setbits8(&usb->fhci->regs->usb_mod, USB_MODE_LSS);
+ 		usb->vroot_hub->port.wPortStatus |=
+ 		    (USB_PORT_STAT_LOW_SPEED |
+ 		     USB_PORT_STAT_CONNECTION);
+@@ -628,9 +614,7 @@ static void device_connected_interrupt(s
+ 		}
+ 
+ 		usb->port_status = FHCI_PORT_FULL;
+-		mode = usb->fhci->regs->usb_mod;
+-		mode &= ~USB_MODE_LSS;
+-		usb->fhci->regs->usb_mod = mode;
++		clrbits8(&usb->fhci->regs->usb_mod, USB_MODE_LSS);
+ 		usb->vroot_hub->port.wPortStatus &=
+ 		    ~USB_PORT_STAT_LOW_SPEED;
+ 		usb->vroot_hub->port.wPortStatus |=
+@@ -645,8 +629,8 @@ out:
+ 	fhci_dbg(fhci, "<- %s\n", __func__);
+ }
+ 
+-irqreturn_t fhci_frame_limit_timer_irq(int irq, void *_hcd,
+-				       struct pt_regs *regs)
++static irqreturn_t fhci_frame_limit_timer_irq(int irq, void *_hcd,
++					      struct pt_regs *regs)
+ {
+ 	struct usb_hcd *hcd = _hcd;
+ 	struct fhci_hcd *fhci = hcd_to_fhci(hcd);
+@@ -684,11 +668,11 @@ static irqreturn_t fhci_irq(struct usb_h
+ 
+ 	usb->intr_counter++;
+ 	do {
+-		usb_er |= (u16) (usb->fhci->regs->usb_event &
+-				 usb->fhci->regs->usb_mask);
++		usb_er |= in_be16(&usb->fhci->regs->usb_event) &
++			  in_be16(&usb->fhci->regs->usb_mask);
+ 
+ 		/* clear event bits for next time */
+-		usb->fhci->regs->usb_event = usb_er;
++		out_be16(&usb->fhci->regs->usb_event, usb_er);
+ 
+ 		fhci_dbg_isr(fhci, usb_er);
+ 
+@@ -703,7 +687,8 @@ static irqreturn_t fhci_irq(struct usb_h
+ 
+ 				/* Turn on IDLE since we want to disconnect */
+ 				usb->saved_msk |= USB_E_IDLE_MASK;
+-				usb->fhci->regs->usb_event = usb->saved_msk;
++				out_be16(&usb->fhci->regs->usb_event,
++					 usb->saved_msk);
+ 			} else if (usb->port_status == FHCI_PORT_DISABLED) {
+ 				if (fhci_ioports_check_bus_state(fhci) == 1 &&
+ 						usb->port_status != FHCI_PORT_LOW &&
+@@ -757,7 +742,8 @@ static irqreturn_t fhci_irq(struct usb_h
+ 
+ 				/* Disable IDLE */
+ 				usb->saved_msk &= ~USB_E_IDLE_MASK;
+-				usb->fhci->regs->usb_mask = usb->saved_msk;
++				out_be16(&usb->fhci->regs->usb_mask,
++					 usb->saved_msk);
+ 			} else
+ 				fhci_dbg_isr(fhci, -1);
+ 
+@@ -789,7 +775,7 @@ static void fhci_mem_free(struct fhci_hc
+ 	kfree(fhci->hc_list);
+ }
+ 
+-DECLARE_TASKLET(fhci_tasklet, process_done_list, 0);
++static DECLARE_TASKLET(fhci_tasklet, process_done_list, 0);
+ 
+ static int fhci_mem_init(struct fhci_hcd *fhci)
+ {
+@@ -855,7 +841,7 @@ static u32 transfer_confirm_callback(str
+ }
+ 
+ /* destroy the fhci_usb structure */
+-void fhci_usb_free(void *lld)
++static void fhci_usb_free(void *lld)
+ {
+ 	struct fhci_usb *usb = lld;
+ 	struct fhci_hcd *fhci = usb->fhci;
+@@ -877,10 +863,9 @@ void fhci_usb_free(void *lld)
+ }
+ 
+ /* initialize the USB*/
+-u32 fhci_usb_init(struct fhci_hcd *fhci)
++static u32 fhci_usb_init(struct fhci_hcd *fhci)
+ {
+ 	struct fhci_usb *usb = fhci->usb_lld;
+-	u8 mode = 0;
+ 
+ 	memset_io(usb->fhci->pram, 0, FHCI_PRAM_SIZE);
+ 
+@@ -903,11 +888,11 @@ u32 fhci_usb_init(struct fhci_hcd *fhci)
+ 
+ 	INIT_LIST_HEAD(&usb->actual_frame->tds_list);
+ 
+-	/* initializing registers on chip clear frame number */
+-	fhci->pram->frame_num = 0;
++	/* initializing registers on chip, clear frame number */
++	out_be16(&fhci->pram->frame_num, 0);
+ 
+ 	/* clear rx state */
+-	fhci->pram->rx_state = 0;
++	out_be32(&fhci->pram->rx_state, 0);
+ 
+ 	/* set mask register */
+ 	usb->saved_msk = (USB_E_TXB_MASK |
+@@ -919,15 +904,13 @@ u32 fhci_usb_init(struct fhci_hcd *fhci)
+ 	usb->saved_msk |= USB_E_RXB_MASK;
+ #endif
+ 
+-	/* config the usb mode register */
+-	mode = USB_MODE_HOST | USB_MODE_EN;
+-	usb->fhci->regs->usb_mod = mode;
++	out_8(&usb->fhci->regs->usb_mod, USB_MODE_HOST | USB_MODE_EN);
+ 
+ 	/* clearing the mask register */
+-	usb->fhci->regs->usb_mask = (u16) 0x0;
++	out_be16(&usb->fhci->regs->usb_mask, 0);
+ 
+ 	/* initialing the event register */
+-	usb->fhci->regs->usb_event = (u16) 0xffff;
++	out_be16(&usb->fhci->regs->usb_event, 0xffff);
+ 
+ 	if (endpoint_zero_init(usb, DEFAULT_DATA_MEM, DEFAULT_RING_LEN) != 0) {
+ 		fhci_usb_free(usb);
+@@ -938,7 +921,7 @@ u32 fhci_usb_init(struct fhci_hcd *fhci)
+ }
+ 
+ /* initialize the fhci_usb struct and the corresponding data staruct*/
+-struct fhci_usb *fhci_create_lld(struct fhci_hcd *fhci)
++static struct fhci_usb *fhci_create_lld(struct fhci_hcd *fhci)
+ {
+ 	struct fhci_usb *usb;
+ 
+@@ -1190,7 +1173,7 @@ static int __devinit fhci_probe(struct d
+ {
+ 	unsigned long ret;
+ 	int i;
+-	struct usb_hcd *hcd = 0;
++	struct usb_hcd *hcd = NULL;
+ 	struct fhci_hcd *fhci;
+ 
+ 	if (usb_disabled())
+Index: linux-2.6.18/drivers/usb/host/fhci-hub.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/fhci-hub.c
++++ linux-2.6.18/drivers/usb/host/fhci-hub.c
+@@ -31,21 +31,18 @@ static u8 root_hub_des[] = {
+ static void fhci_start_sof_timer(struct fhci_hcd *fhci)
+ {
+ 	struct fhci_usb *usb = fhci->usb_lld;
+-	u8 mode;
+-	
++
+ 	fhci_dbg(fhci, "-> %s\n", __func__);
+ 
+ 	/* clear frame_n */
+-	fhci->pram->frame_num = 0;
++	out_be16(&fhci->pram->frame_num, 0);
+ 
+ #ifdef CONFIG_FHCI_HAS_EOP_MISSING_BUG
+ 	usb->eop_missing_bug_indicator = 0;
+ #endif
+ 
+-	fhci->regs->usb_sof_tmr = 0;
+-	mode = fhci->regs->usb_mod;
+-	mode |= USB_MODE_SFTE;
+-	fhci->regs->usb_mod = mode;
++	out_be16(&fhci->regs->usb_sof_tmr, 0);
++	setbits8(&fhci->regs->usb_mod, USB_MODE_SFTE);
+ 
+ 	qe_reset_ref_timer_16(fhci->timer, 1500000, usb->max_frame_usage);
+ 
+@@ -54,14 +51,9 @@ static void fhci_start_sof_timer(struct 
+ 
+ static void fhci_stop_sof_timer(struct fhci_hcd *fhci)
+ {
+-	u8 mode;
+-
+ 	fhci_dbg(fhci, "-> %s\n", __func__);
+ 
+-	mode = fhci->regs->usb_mod;
+-	mode &= ~USB_MODE_SFTE;
+-	fhci->regs->usb_mod = mode;
+-
++	clrbits8(&fhci->regs->usb_mod, USB_MODE_SFTE);
+ 	qe_stop_timer(fhci->timer);
+ 
+ 	fhci_dbg(fhci, "<- %s\n", __func__);
+@@ -69,10 +61,10 @@ static void fhci_stop_sof_timer(struct f
+ 
+ static u16 get_sof_timer_count(struct fhci_usb *usb)
+ {
+-	return (u16) (usb->fhci->regs->usb_sof_tmr / 12);
++	return be16_to_cpu(in_be16(&usb->fhci->regs->usb_sof_tmr) / 12);
+ }
+ 
+-void config_transceiver(struct fhci_hcd *fhci, enum fhci_op_mode mode)
++static void config_transceiver(struct fhci_hcd *fhci, enum fhci_op_mode mode)
+ {
+ 	fhci_dbg(fhci, "-> %s: %d\n", __func__, mode);
+ 
+@@ -113,7 +105,7 @@ void config_transceiver(struct fhci_hcd 
+ }
+ 
+ /* disable the USB port by clearing the EN bit in the USBMOD register */
+-void usb_port_disable(struct fhci_hcd *fhci)
++static void usb_port_disable(struct fhci_hcd *fhci)
+ {
+ 	struct fhci_usb *usb = (struct fhci_usb *)fhci->usb_lld;
+ 	enum fhci_port_status port_status;
+@@ -132,7 +124,7 @@ void usb_port_disable(struct fhci_hcd *f
+ 
+ 	/* Enable IDLE since we want to know if something comes along */
+ 	usb->saved_msk |= USB_E_IDLE_MASK;
+-	usb->fhci->regs->usb_mask = usb->saved_msk;
++	out_be16(&usb->fhci->regs->usb_mask, usb->saved_msk);
+ 
+ 	/* check if during the disconnection process attached new device */
+ 	if (port_status == FHCI_PORT_WAITING)
+@@ -145,7 +137,7 @@ void usb_port_disable(struct fhci_hcd *f
+ }
+ 
+ /* enable the USB port by setting the EN bit in the USBMOD register */
+-void usb_port_enable(void *lld)
++static void usb_port_enable(void *lld)
+ {
+ 	struct fhci_usb *usb = (struct fhci_usb *)lld;
+ 	struct fhci_hcd *fhci = usb->fhci;
+@@ -180,7 +172,7 @@ static void io_port_generate_reset(struc
+ }
+ 
+ /* generate the RESET condition on the bus */
+-void usb_port_reset(void *lld)
++static void usb_port_reset(void *lld)
+ {
+ 	struct fhci_usb *usb = (struct fhci_usb *)lld;
+ 	struct fhci_hcd *fhci = usb->fhci;
+@@ -191,21 +183,21 @@ void usb_port_reset(void *lld)
+ 
+ 	fhci_stop_sof_timer(fhci);
+ 	/* disable the USB controller */
+-	mode = fhci->regs->usb_mod;
+-	fhci->regs->usb_mod = mode & (~USB_MODE_EN);
++	mode = in_8(&fhci->regs->usb_mod);
++	out_8(&fhci->regs->usb_mod, mode & (~USB_MODE_EN));
+ 
+ 	/* disable idle interrupts */
+-	mask = fhci->regs->usb_mask;
+-	fhci->regs->usb_mask = mask & (~USB_E_IDLE_MASK);
++	mask = in_be16(&fhci->regs->usb_mask);
++	out_be16(&fhci->regs->usb_mask, mask & (~USB_E_IDLE_MASK));
+ 
+ 	io_port_generate_reset(fhci);
+ 
+ 	/* enable interrupt on this endpoint */
+-	fhci->regs->usb_mask = mask;
++	out_be16(&fhci->regs->usb_mask, mask);
+ 
+ 	/* enable the USB controller */
+-	mode = fhci->regs->usb_mod;
+-	fhci->regs->usb_mod = (mode | USB_MODE_EN);
++	mode = in_8(&fhci->regs->usb_mod);
++	out_8(&fhci->regs->usb_mod, mode | USB_MODE_EN);
+ 	fhci_start_sof_timer(fhci);
+ 
+ 	fhci_dbg(fhci, "<- %s\n", __func__);
+Index: linux-2.6.18/drivers/usb/host/fhci-q.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/fhci-q.c
++++ linux-2.6.18/drivers/usb/host/fhci-q.c
+@@ -382,7 +382,7 @@ static void queue_urb(struct fhci_hcd *f
+ 	if (data_len > 0)
+ 		data = urb->transfer_buffer;
+ 	else
+-		data = 0;
++		data = NULL;
+ 
+ 
+ 	/*
+Index: linux-2.6.18/drivers/usb/host/fhci-tds.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/fhci-tds.c
++++ linux-2.6.18/drivers/usb/host/fhci-tds.c
+@@ -56,21 +56,21 @@
+ #define TD_ENDP_SHIFT 7
+ 
+ struct usb_td {
+-	u16 status;
+-	u16 length;
+-	u32 buf_ptr;
+-	u16 extra;
+-	u16 reserved;
++	__be16 status;
++	__be16 length;
++	__be32 buf_ptr;
++	__be16 extra;
++	__be16 reserved;
+ };
+ 
+ struct endpoint {
+ 	/* Pointer to ep parameter RAM */
+-	struct fhci_ep_pram *ep_pram_ptr;
++	struct fhci_ep_pram __iomem *ep_pram_ptr;
+ 
+ 	/* Host transactions */
+-	struct usb_td *td_base;	/* first TD in the ring */
+-	struct usb_td *conf_td;	/* next TD for confirm after transac */
+-	struct usb_td *empty_td;/* next TD for new transaction request */
++	struct usb_td __iomem *td_base; /* first TD in the ring */
++	struct usb_td __iomem *conf_td; /* next TD for confirm after transac */
++	struct usb_td __iomem *empty_td; /* next TD for new transaction request */
+ 	void *empty_frame_Q;	/* Empty frames list to use */
+ 	void *conf_frame_Q;	/* frames passed to TDs,waiting for tx */
+ 	void *dummy_packets_Q;	/* dummy packets for the CRC overun */
+@@ -78,7 +78,9 @@ struct endpoint {
+ 	bool already_pushed_dummy_bd;
+ };
+ 
+-struct usb_td *next_bd(struct usb_td *base, struct usb_td *td, u16 status)
++static struct usb_td __iomem *next_bd(struct usb_td __iomem *base,
++				      struct usb_td __iomem *td,
++				      u16 status)
+ {
+ 	if (status & TD_W)
+ 		return base;
+@@ -89,9 +91,9 @@ struct usb_td *next_bd(struct usb_td *ba
+ static void push_dummy_bd(struct endpoint *ep)
+ {
+ 	if (ep->already_pushed_dummy_bd == false) {
+-		u16 td_status = ep->empty_td->status;
++		u16 td_status = in_be16(&ep->empty_td->status);
+ 
+-		ep->empty_td->buf_ptr = DUMMY_BD_BUFFER;
++		out_be32(&ep->empty_td->buf_ptr, DUMMY_BD_BUFFER);
+ 		/* get the next TD in the ring */
+ 		ep->empty_td = next_bd(ep->td_base, ep->empty_td, td_status);
+ 		ep->already_pushed_dummy_bd = true;
+@@ -99,7 +101,7 @@ static void push_dummy_bd(struct endpoin
+ }
+ 
+ /* destroy an USB endpoint */
+-void endpoint_zero_free(struct fhci_usb *usb)
++static void endpoint_zero_free(struct fhci_usb *usb)
+ {
+ 	struct endpoint *ep;
+ 	int size;
+@@ -152,11 +154,11 @@ void endpoint_zero_free(struct fhci_usb 
+  * data_mem	The data memory partition(BUS)
+  * ring_len	TD ring length
+  */
+-u32 create_endpoint(struct fhci_usb *usb, enum fhci_mem_alloc data_mem,
+-		    u32 ring_len)
++static u32 create_endpoint(struct fhci_usb *usb, enum fhci_mem_alloc data_mem,
++			   u32 ring_len)
+ {
+ 	struct endpoint *ep;
+-	struct usb_td *td;
++	struct usb_td __iomem *td;
+ 	unsigned long ep_offset;
+ 	char *err_for = "enpoint PRAM";
+ 	int ep_mem_size;
+@@ -208,7 +210,7 @@ u32 create_endpoint(struct fhci_usb *usb
+ 	}
+ 
+ 	/* we put the endpoint parameter RAM right behind the TD ring */
+-	ep->ep_pram_ptr = (void *)ep->td_base + sizeof(*td) * ring_len;
++	ep->ep_pram_ptr = (void __iomem *)ep->td_base + sizeof(*td) * ring_len;
+ 
+ 	ep->conf_td = ep->td_base;
+ 	ep->empty_td = ep->td_base;
+@@ -218,15 +220,15 @@ u32 create_endpoint(struct fhci_usb *usb
+ 	/* initialize tds */
+ 	td = ep->td_base;
+ 	for (i = 0; i < ring_len; i++) {
+-		td->buf_ptr = 0;
+-		td->status = 0;
+-		td->length = 0;
+-		td->extra = 0;
++		out_be32(&td->buf_ptr, 0);
++		out_be16(&td->status, 0);
++		out_be16(&td->length, 0);
++		out_be16(&td->extra, 0);
+ 		td++;
+ 	}
+ 	td--;
+-	td->status = TD_W; /* for last TD set Wrap bit */
+-	td->length = 0;
++	out_be16(&td->status, TD_W); /* for last TD set Wrap bit */
++	out_be16(&td->length, 0);
+ 
+ 	/* endpoint structure has been created */
+ 	usb->ep0 = ep;
+@@ -247,33 +249,37 @@ err:
+  * ep		A pointer to the endpoint structre
+  * data_mem	The data memory partition(BUS)
+  */
+-void init_endpoint_registers(struct fhci_usb *usb,
+-			     struct endpoint *ep, enum fhci_mem_alloc data_mem)
++static void init_endpoint_registers(struct fhci_usb *usb,
++				    struct endpoint *ep,
++				    enum fhci_mem_alloc data_mem)
+ {
+ 	u8 rt;
+ 
+ 	/* set the endpoint registers according to the endpoint */
+-	usb->fhci->regs->usb_ep[0] = (USB_TRANS_CTR | USB_EP_MF | USB_EP_RTE);
+-	usb->fhci->pram->ep_ptr[0] = qe_muram_offset(ep->ep_pram_ptr);
++	out_be16(&usb->fhci->regs->usb_ep[0],
++		 USB_TRANS_CTR | USB_EP_MF | USB_EP_RTE);
++	out_be16(&usb->fhci->pram->ep_ptr[0],
++		 qe_muram_offset(ep->ep_pram_ptr));
+ 
+ 	rt = (BUS_MODE_BO_BE | BUS_MODE_GBL);
+ #ifdef MULTI_DATA_BUS
+ 	if (data_mem == MEM_SECONDARY)
+ 		rt |= BUS_MODE_DTB;
+ #endif
+-	ep->ep_pram_ptr->rx_func_code = rt;
+-	ep->ep_pram_ptr->tx_func_code = rt;
+-	ep->ep_pram_ptr->rx_buff_len = 1028;
+-	ep->ep_pram_ptr->rx_base = 0;
+-	ep->ep_pram_ptr->tx_base = qe_muram_offset(ep->td_base);
+-	ep->ep_pram_ptr->rx_bd_ptr = 0;
+-	ep->ep_pram_ptr->tx_bd_ptr = qe_muram_offset(ep->td_base);
+-	ep->ep_pram_ptr->tx_state = 0;
++	out_8(&ep->ep_pram_ptr->rx_func_code, rt);
++	out_8(&ep->ep_pram_ptr->tx_func_code, rt);
++	out_be16(&ep->ep_pram_ptr->rx_buff_len, 1028);
++	out_be16(&ep->ep_pram_ptr->rx_base, 0);
++	out_be16(&ep->ep_pram_ptr->tx_base, qe_muram_offset(ep->td_base));
++	out_be16(&ep->ep_pram_ptr->rx_bd_ptr, 0);
++	out_be16(&ep->ep_pram_ptr->tx_bd_ptr, qe_muram_offset(ep->td_base));
++	out_be32(&ep->ep_pram_ptr->tx_state, 0);
+ 	/*
+ 	 * FIXME: what the is this? I presume it is needed for u-code
+ 	 * 	  patched FHCIs, but this needs checking.
+ 	 */
+-	ep->ep_pram_ptr->reserved = (u16)((u32)qe_muram_addr(0) >> 16);
++	out_be16(&ep->ep_pram_ptr->reserved,
++		 (u16)((u32)qe_muram_addr(0) >> 16));
+ }
+ 
+ /* Collect the submitted frames and inform the application about them
+@@ -287,7 +293,7 @@ static void td_transaction_confirm(struc
+ {
+ 	struct endpoint *ep = usb->ep0;
+ 	struct packet *pkt;
+-	struct usb_td *td;
++	struct usb_td __iomem *td;
+ 	u16 extra_data;
+ 	u16 td_status;
+ 	u16 td_length;
+@@ -300,10 +306,10 @@ static void td_transaction_confirm(struc
+ 	 */
+ 	do {
+ 		td = ep->conf_td;
+-		td_status = td->status;
+-		td_length = td->length;
+-		buf = td->buf_ptr;
+-		extra_data = td->extra;
++		td_status = in_be16(&td->status);
++		td_length = in_be16(&td->length);
++		buf = in_be32(&td->buf_ptr);
++		extra_data = in_be16(&td->extra);
+ 
+ 		/* check if the TD is empty */
+ 		if (!(!(td_status & TD_R) && ((td_status & ~TD_W) || buf)))
+@@ -313,10 +319,10 @@ static void td_transaction_confirm(struc
+ 			break;
+ 
+ 		/* mark TD as empty */
+-		td->status &= TD_W;
+-		td->length = 0;
+-		td->buf_ptr = 0;
+-		td->extra = 0;
++		clrbits16(&td->status, ~TD_W);
++		out_be16(&td->length, 0);
++		out_be32(&td->buf_ptr, 0);
++		out_be16(&td->extra, 0);
+ 		/* advance the TD pointer */
+ 		ep->conf_td = next_bd(ep->td_base, ep->conf_td, td_status);
+ 
+@@ -383,25 +389,25 @@ static void td_transaction_confirm(struc
+  * dest_speed   USB speed - Low speed or FULL speed
+  * data_toggle  Data sequence toggle - 0 or 1
+  */
+-u32 host_transaction(struct fhci_usb *usb,
+-		     struct packet *pkt,
+-		     enum fhci_ta_type trans_type,
+-		     u8 dest_addr,
+-		     u8 dest_ep,
+-		     enum fhci_tf_mode trans_mode,
+-		     enum fhci_speed dest_speed, u8 data_toggle)
++static u32 host_transaction(struct fhci_usb *usb,
++			    struct packet *pkt,
++			    enum fhci_ta_type trans_type,
++			    u8 dest_addr,
++			    u8 dest_ep,
++			    enum fhci_tf_mode trans_mode,
++			    enum fhci_speed dest_speed, u8 data_toggle)
+ {
+ 	struct endpoint *ep = usb->ep0;
+-	struct usb_td *td;
++	struct usb_td __iomem *td;
+ 	u16 extra_data;
+ 	u16 td_status;
+ 
+ 	fhci_usb_disable_interrupt(usb);
+ 	/* start from the next BD that should be filled */
+ 	td = ep->empty_td;
+-	td_status = td->status;
++	td_status = in_be16(&td->status);
+ 
+-	if (td_status & TD_R && td->length) {
++	if (td_status & TD_R && in_be16(&td->length)) {
+ 		/* if the TD is not free */
+ 		fhci_usb_enable_interrupt(usb);
+ 		return -1;
+@@ -411,7 +417,7 @@ u32 host_transaction(struct fhci_usb *us
+ 	ep->empty_td = next_bd(ep->td_base, ep->empty_td, td_status);
+ 	fhci_usb_enable_interrupt(usb);
+ 	pkt->priv_data = td;
+-	td->buf_ptr = virt_to_phys(pkt->data);
++	out_be32(&td->buf_ptr, virt_to_phys(pkt->data));
+ 	/* sets up transaction parameters - addr,endp,dir,and type */
+ 	extra_data = (dest_ep << TD_ENDP_SHIFT) | dest_addr;
+ 	switch (trans_type) {
+@@ -427,7 +433,7 @@ u32 host_transaction(struct fhci_usb *us
+ 	}
+ 	if (trans_mode == FHCI_TF_ISO)
+ 		extra_data |= TD_ISO;
+-	td->extra = extra_data;
++	out_be16(&td->extra, extra_data);
+ 
+ 	/* sets up the buffer descriptor */
+ 	td_status = ((td_status & TD_W) | TD_R | TD_L | TD_I | TD_CNF);
+@@ -457,44 +463,44 @@ u32 host_transaction(struct fhci_usb *us
+ 	    (usb->port_status == FHCI_PORT_FULL))
+ 		td_status |= TD_LSP;
+ 
+-	td->status = td_status;
++	out_be16(&td->status, td_status);
+ 
+ 	/* set up buffer length */
+ 	if (trans_type == FHCI_TA_IN)
+-		td->length = pkt->len + CRC_SIZE;
++		out_be16(&td->length, pkt->len + CRC_SIZE);
+ 	else
+-		td->length = pkt->len;
++		out_be16(&td->length, pkt->len);
+ 
+ 	/* put the frame to the confirmation queue */
+ 	cq_put(ep->conf_frame_Q, pkt);
+ 
+ 	if (cq_howmany(ep->conf_frame_Q) == 1)
+-		usb->fhci->regs->usb_comm = USB_CMD_STR_FIFO;
++		out_8(&usb->fhci->regs->usb_comm, USB_CMD_STR_FIFO);
+ 
+ 	return 0;
+ }
+ 
+ /* Reset the Tx BD ring*/
+-void flush_bds(struct fhci_usb *usb)
++static void flush_bds(struct fhci_usb *usb)
+ {
+ 	u16 extra_data;
+ 	u16 td_status;
+ 	u32 buf;
+-	struct usb_td *td;
++	struct usb_td __iomem *td;
+ 	struct endpoint *ep = usb->ep0;
+ 
+ 	td = ep->td_base;
+ 	do {
+-		td_status = td->status;
+-		buf = td->buf_ptr;
+-		extra_data = td->extra;
++		td_status = in_be16(&td->status);
++		buf = in_be32(&td->buf_ptr);
++		extra_data = in_be16(&td->extra);
+ 
+ 		/* if the TD is not empty - we'll confirm it as Timeout */
+ 		if (td_status & TD_R)
+-			td->status = (td_status & ~TD_R) | TD_TO;
++			out_be16(&td->status, (td_status & ~TD_R) | TD_TO);
+ 		/* if this TD is dummy - let's skip this TD */
+-		else if (td->buf_ptr == DUMMY_BD_BUFFER)
+-			td->buf_ptr = DUMMY2_BD_BUFFER;
++		else if (in_be32(&td->buf_ptr) == DUMMY_BD_BUFFER)
++			out_be32(&td->buf_ptr, DUMMY2_BD_BUFFER);
+ 		/* if this is the last TD - break */
+ 		if (td_status & TD_W)
+ 			break;
+@@ -506,20 +512,21 @@ void flush_bds(struct fhci_usb *usb)
+ 
+ 	td = ep->td_base;
+ 	do {
+-		td->status = 0;
+-		td->length = 0;
+-		td->buf_ptr = 0;
+-		td->extra = 0;
++		out_be16(&td->status, 0);
++		out_be16(&td->length, 0);
++		out_be32(&td->buf_ptr, 0);
++		out_be16(&td->extra, 0);
+ 		td++;
+-	} while (!(td->status & TD_W));
+-	td->status = TD_W; /* for last TD set Wrap bit */
+-	td->length = 0;
+-	td->buf_ptr = 0;
+-	td->extra = 0;
+-
+-	ep->ep_pram_ptr->tx_bd_ptr = ep->ep_pram_ptr->tx_base;
+-	ep->ep_pram_ptr->tx_state = 0;
+-	ep->ep_pram_ptr->tx_cnt = 0;
++	} while (!(in_be16(&td->status) & TD_W));
++	out_be16(&td->status, TD_W); /* for last TD set Wrap bit */
++	out_be16(&td->length, 0);
++	out_be32(&td->buf_ptr, 0);
++	out_be16(&td->extra, 0);
++
++	out_be16(&ep->ep_pram_ptr->tx_bd_ptr,
++		 in_be16(&ep->ep_pram_ptr->tx_base));
++	out_be32(&ep->ep_pram_ptr->tx_state, 0);
++	out_be16(&ep->ep_pram_ptr->tx_cnt, 0);
+ 	ep->conf_td = ep->empty_td = ep->td_base;
+ }
+ 
+@@ -528,58 +535,59 @@ void flush_bds(struct fhci_usb *usb)
+  * This routine is called when something wrong with the controller and
+  * we want to get rid of the actual frame and start again next frame
+  */
+-void flush_actual_frame(struct fhci_usb *usb)
++static void flush_actual_frame(struct fhci_usb *usb)
+ {
+ 	u8 mode;
+ 	u16 tb_ptr;
+ 	u16 extra_data;
+ 	u16 td_status;
+ 	u32 buf_ptr;
+-	struct usb_td *td;
++	struct usb_td __iomem *td;
+ 	struct endpoint *ep = usb->ep0;
+ 
+ 	/* disable the USB controller */
+-	mode = usb->fhci->regs->usb_mod;
+-	usb->fhci->regs->usb_mod = (u8) (mode & ~USB_MODE_EN);
++	mode = in_8(&usb->fhci->regs->usb_mod);
++	out_8(&usb->fhci->regs->usb_mod, mode & ~USB_MODE_EN);
+ 
+-	tb_ptr = ep->ep_pram_ptr->tx_bd_ptr;
++	tb_ptr = in_be16(&ep->ep_pram_ptr->tx_bd_ptr);
+ 	td = qe_muram_addr(tb_ptr);
+-	td_status = td->status;
+-	buf_ptr = td->buf_ptr;
+-	extra_data = td->extra;
++	td_status = in_be16(&td->status);
++	buf_ptr = in_be32(&td->buf_ptr);
++	extra_data = in_be16(&td->extra);
+ 	do {
+ 		if (td_status & TD_R) {
+-			td->status = (td_status & ~TD_R) | TD_TO;
++			out_be16(&td->status, (td_status & ~TD_R) | TD_TO);
+ 		} else {
+-			td->buf_ptr = 0;
++			out_be32(&td->buf_ptr, 0);
+ 			ep->already_pushed_dummy_bd = false;
+ 			break;
+ 		}
+ 
+ 		/* advance the TD pointer */
+ 		td = next_bd(ep->td_base, td, td_status);
+-		td_status = td->status;
+-		buf_ptr = td->buf_ptr;
+-		extra_data = td->extra;
++		td_status = in_be16(&td->status);
++		buf_ptr = in_be32(&td->buf_ptr);
++		extra_data = in_be16(&td->extra);
+ 	} while ((td_status & TD_R) || buf_ptr);
+ 
+ 	td_transaction_confirm(usb);
+ 
+-	ep->ep_pram_ptr->tx_bd_ptr = ep->ep_pram_ptr->tx_base;
+-	ep->ep_pram_ptr->tx_state = 0;
+-	ep->ep_pram_ptr->tx_cnt = 0;
++	out_be16(&ep->ep_pram_ptr->tx_bd_ptr,
++		 in_be16(&ep->ep_pram_ptr->tx_base));
++	out_be32(&ep->ep_pram_ptr->tx_state, 0);
++	out_be16(&ep->ep_pram_ptr->tx_cnt, 0);
+ 	ep->conf_td = ep->empty_td = ep->td_base;
+ 
+ 	usb->actual_frame->frame_status = FRAME_TIMER_END_TRANSMISSION;
+ 
+ 	/* reset the event register */
+-	usb->fhci->regs->usb_event = 0xffff;
++	out_be16(&usb->fhci->regs->usb_event, 0xffff);
+ 	/* enable the USB controller */
+-	usb->fhci->regs->usb_mod = (u8) (mode | USB_MODE_EN);
++	out_8(&usb->fhci->regs->usb_mod, mode | USB_MODE_EN);
+ }
+ 
+ /* handles Tx confirm and Tx error interrupt */
+-void tx_conf_interrupt(struct fhci_usb *usb)
++static void tx_conf_interrupt(struct fhci_usb *usb)
+ {
+ 	td_transaction_confirm(usb);
+ 
+@@ -593,36 +601,36 @@ void tx_conf_interrupt(struct fhci_usb *
+ 		schedule_transactions(usb);
+ }
+ 
+-void host_transmit_actual_frame(struct fhci_usb *usb)
++static void host_transmit_actual_frame(struct fhci_usb *usb)
+ {
+ 	u16 tb_ptr;
+ 	u16 td_status;
+-	struct usb_td *td;
++	struct usb_td __iomem *td;
+ 	struct endpoint *ep = usb->ep0;
+ 
+-	tb_ptr = ep->ep_pram_ptr->tx_bd_ptr;
++	tb_ptr = in_be16(&ep->ep_pram_ptr->tx_bd_ptr);
+ 	td = qe_muram_addr(tb_ptr);
+ 
+-	if (td->buf_ptr == DUMMY_BD_BUFFER) {
+-		struct usb_td *old_td = td;
++	if (in_be32(&td->buf_ptr) == DUMMY_BD_BUFFER) {
++		struct usb_td __iomem *old_td = td;
+ 
+ 		ep->already_pushed_dummy_bd = false;
+-		td_status = td->status;
++		td_status = in_be16(&td->status);
+ 		/* gets the next TD in the ring */
+ 		td = next_bd(ep->td_base, td, td_status);
+ 		tb_ptr = qe_muram_offset(td);
+-		ep->ep_pram_ptr->tx_bd_ptr = tb_ptr;
++		out_be16(&ep->ep_pram_ptr->tx_bd_ptr, tb_ptr);
+ 
+ 		/* start transmit only if we have something in the TDs */
+-		if (td->status & TD_R)
+-			usb->fhci->regs->usb_comm = USB_CMD_STR_FIFO;
++		if (in_be16(&td->status) & TD_R)
++			out_8(&usb->fhci->regs->usb_comm, USB_CMD_STR_FIFO);
+ 
+-		if (ep->conf_td->buf_ptr == DUMMY_BD_BUFFER) {
+-			old_td->buf_ptr = 0;
++		if (in_be32(&ep->conf_td->buf_ptr) == DUMMY_BD_BUFFER) {
++			out_be32(&old_td->buf_ptr, 0);
+ 			ep->conf_td = next_bd(ep->td_base, ep->conf_td,
+ 					      td_status);
+ 		} else {
+-			old_td->buf_ptr = DUMMY2_BD_BUFFER;
++			out_be32(&old_td->buf_ptr, DUMMY2_BD_BUFFER);
+ 		}
+ 	}
+ }
+Index: linux-2.6.18/drivers/usb/host/fhci.h
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/fhci.h
++++ linux-2.6.18/drivers/usb/host/fhci.h
+@@ -178,51 +178,51 @@ struct fhci_regs {
+ 	u8 usb_addr;		/* address register */
+ 	u8 usb_comm;		/* command register */
+ 	u8 reserved1[1];
+-	u16 usb_ep[4];		/* endpoint register */
++	__be16 usb_ep[4];	/* endpoint register */
+ 	u8 reserved2[4];
+-	u16 usb_event;		/* event register */
++	__be16 usb_event;	/* event register */
+ 	u8 reserved3[2];
+-	u16 usb_mask;		/* mask register */
++	__be16 usb_mask;	/* mask register */
+ 	u8 reserved4[1];
+ 	u8 usb_status;		/* status register */
+-	u16 usb_sof_tmr;	/* Start Of Frame timer */
++	__be16 usb_sof_tmr;	/* Start Of Frame timer */
+ 	u8 reserved5[2];
+-	u16 usb_frame_num;	/* frame number register */
++	__be16 usb_frame_num;	/* frame number register */
+ 	u8 reserved6[1];
+ };
+ 
+ /* Freescale USB HOST */
+ struct fhci_pram {
+-	u16 ep_ptr[4];		/* Endpoint porter reg */
+-	u32 rx_state;		/* Rx internal state */
+-	u32 rx_ptr;		/* Rx internal data pointer */
+-	u16 frame_num;		/* Frame number */
+-	u16 rx_cnt;		/* Rx byte count */
+-	u32 rx_temp;		/* Rx temp */
+-	u32 rx_data_temp;	/* Rx data temp */
+-	u16 rx_u_ptr;		/* Rx microcode return address temp */
++	__be16 ep_ptr[4];	/* Endpoint porter reg */
++	__be32 rx_state;	/* Rx internal state */
++	__be32 rx_ptr;		/* Rx internal data pointer */
++	__be16 frame_num;	/* Frame number */
++	__be16 rx_cnt;		/* Rx byte count */
++	__be32 rx_temp;		/* Rx temp */
++	__be32 rx_data_temp;	/* Rx data temp */
++	__be16 rx_u_ptr;	/* Rx microcode return address temp */
+ 	u8 reserved1[2];	/* reserved area */
+-	u32 sof_tbl;		/* SOF lookup table pointer */
++	__be32 sof_tbl;		/* SOF lookup table pointer */
+ 	u8 sof_u_crc_temp;	/* SOF micorcode CRC5 temp reg */
+ 	u8 reserved2[0xdb];
+ };
+ 
+ /* Freescale USB Endpoint*/
+ struct fhci_ep_pram {
+-	u16 rx_base;		/* Rx BD base address */
+-	u16 tx_base;		/* Tx BD base address */
++	__be16 rx_base;		/* Rx BD base address */
++	__be16 tx_base;		/* Tx BD base address */
+ 	u8 rx_func_code;	/* Rx function code */
+ 	u8 tx_func_code;	/* Tx function code */
+-	u16 rx_buff_len;	/* Rx buffer length */
+-	u16 rx_bd_ptr;		/* Rx BD pointer */
+-	u16 tx_bd_ptr;		/* Tx BD pointer */
+-	u32 tx_state;		/* Tx internal state */
+-	u32 tx_ptr;		/* Tx internal data pointer */
+-	u16 tx_crc;		/* temp transmit CRC */
+-	u16 tx_cnt;		/* Tx byte count */
+-	u32 tx_temp;		/* Tx temp */
+-	u16 tx_u_ptr;		/* Tx microcode return address temp */
+-	u16 reserved;
++	__be16 rx_buff_len;	/* Rx buffer length */
++	__be16 rx_bd_ptr;	/* Rx BD pointer */
++	__be16 tx_bd_ptr;	/* Tx BD pointer */
++	__be32 tx_state;	/* Tx internal state */
++	__be32 tx_ptr;		/* Tx internal data pointer */
++	__be16 tx_crc;		/* temp transmit CRC */
++	__be16 tx_cnt;		/* Tx byte count */
++	__be32 tx_temp;		/* Tx temp */
++	__be16 tx_u_ptr;	/* Tx microcode return address temp */
++	__be16 reserved;
+ };
+ 
+ struct fhci_controller_list {
+@@ -378,7 +378,7 @@ struct packet {
+ 	u32 status;	/* status of the packet - equivalent to the status
+ 			 * field for the corresponding structure td */
+ 	u32 info;	/* packet information */
+-	void *priv_data;/* private data of the driver */
++	void __iomem *priv_data; /* private data of the driver (TDs or BDs) */
+ };
+ 
+ /* struct for each URB */
+@@ -484,7 +484,7 @@ static int status_to_error(u32 status)
+ 
+ static u16 get_frame_num(struct fhci_hcd *fhci)
+ {
+-	return fhci->pram->frame_num & 0x07ff;
++	return in_be16(&fhci->pram->frame_num) & 0x07ff;
+ }
+ 
+ 
+Index: linux-2.6.18/mvl_patches/pro50-0963.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0963.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(963);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

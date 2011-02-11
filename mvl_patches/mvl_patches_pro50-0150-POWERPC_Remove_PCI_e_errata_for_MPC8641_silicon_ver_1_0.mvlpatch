@@ -1,0 +1,370 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Remove_PCI_e_errata_for_MPC8641_silicon_ver_1_0
+# Date: Thu Sep  6 08:26:51 2007
+# MR:23289
+# Disposition: backport from
+# git://git.kernel.org/pub/scm/linux/kernel/git/galak/powerpc.git
+# 
+# [POWERPC] Remove PCI-e errata for MPC8641 silicon ver 1.0
+# 
+# Remove errata for PCI-e support of Rev 1.0 of MPC8641 since its considered
+# obselete and is not production level silicon from Freescale.
+# 
+# Signed-off-by: Zhang Wei <wei.zhang@freescale.com>
+# Acked-by: Roy Zang <tie-fei.zang@freescale.com>
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+# commit 33a9ca66c84e2577dd39d904d88cb41909c36c98
+# tree 598d8bc6850690af96ac353d68169f43c7121feb
+# parent c24365c6af0aa4dc02aa6c632d6efc15f7841351
+# author Zhang Wei <wei.zhang@freescale.com> Tue, 22 May 2007 11:38:26 +0800
+# committer Kumar Gala <galak@kernel.crashing.org> Wed, 27 Jun 2007 01:40:28 -0500
+# 
+#  arch/powerpc/Kconfig                       |    3 +--
+#  arch/powerpc/boot/dts/mpc8641_hpcn.dts     |    2 +-
+#  arch/powerpc/platforms/86xx/mpc86xx.h      |    6 ------
+#  arch/powerpc/platforms/86xx/mpc86xx_hpcn.c |    1 -
+#  arch/powerpc/platforms/86xx/pci.c          |   18 ++----------------
+#  5 files changed, 4 insertions(+), 26 deletions(-)
+# 
+
+PATCHNUM=150
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR:23289
+Disposition: backport from
+git://git.kernel.org/pub/scm/linux/kernel/git/galak/powerpc.git
+
+[POWERPC] Remove PCI-e errata for MPC8641 silicon ver 1.0
+
+Remove errata for PCI-e support of Rev 1.0 of MPC8641 since its considered
+obselete and is not production level silicon from Freescale.
+
+Signed-off-by: Zhang Wei <wei.zhang@freescale.com>
+Acked-by: Roy Zang <tie-fei.zang@freescale.com>
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+commit 33a9ca66c84e2577dd39d904d88cb41909c36c98
+tree 598d8bc6850690af96ac353d68169f43c7121feb
+parent c24365c6af0aa4dc02aa6c632d6efc15f7841351
+author Zhang Wei <wei.zhang@freescale.com> Tue, 22 May 2007 11:38:26 +0800
+committer Kumar Gala <galak@kernel.crashing.org> Wed, 27 Jun 2007 01:40:28 -0500
+
+ arch/powerpc/Kconfig                       |    3 +--
+ arch/powerpc/boot/dts/mpc8641_hpcn.dts     |    2 +-
+ arch/powerpc/platforms/86xx/mpc86xx.h      |    6 ------
+ arch/powerpc/platforms/86xx/mpc86xx_hpcn.c |    1 -
+ arch/powerpc/platforms/86xx/pci.c          |   18 ++----------------
+ mvl_patches/pro50-0150.c                   |   16 ++++++++++++++++
+ 6 files changed, 20 insertions(+), 26 deletions(-)
+
+diff --git a/arch/powerpc/Kconfig b/arch/powerpc/Kconfig
+index 6324abd..b79256a 100644
+
+Index: linux-2.6.18/arch/powerpc/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/Kconfig
++++ linux-2.6.18/arch/powerpc/Kconfig
+@@ -152,7 +152,6 @@ config PPC_86xx
+ 	bool "Freescale 86xx"
+ 	select 6xx
+ 	select FSL_SOC
+-	select FSL_PCIE
+ 	select PPC_FPU
+ 	select ALTIVEC
+ 	help
+@@ -968,7 +967,7 @@ config FSL_SOC
+ 
+ config FSL_PCIE
+ 	bool
+-	depends on MPC85xx_CDS || PPC_86xx
++	depends on MPC85xx_CDS
+ 
+ # Yes MCA RS/6000s exist but Linux-PPC does not currently support any
+ config MCA
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8641_hpcn.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8641_hpcn.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8641_hpcn.dts
+@@ -187,7 +187,7 @@
+ 			#size-cells = <2>;
+ 			#address-cells = <3>;
+ 			reg = <8000 1000>;
+-			bus-range = <0 fe>;
++			bus-range = <0 ff>;
+ 			ranges = <02000000 0 80000000 80000000 0 20000000
+ 				  01000000 0 00000000 e2000000 0 00100000>;
+ 			clock-frequency = <1fca055>;
+Index: linux-2.6.18/arch/powerpc/platforms/86xx/mpc86xx.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/86xx/mpc86xx.h
++++ linux-2.6.18/arch/powerpc/platforms/86xx/mpc86xx.h
+@@ -20,12 +20,6 @@ extern int add_bridge(struct device_node
+ extern int mpc86xx_exclude_device(struct pci_controller *hose,
+ 				  u_char bus, u_char devfn);
+ 
+-extern void setup_indirect_pcie(struct pci_controller *hose,
+-				       u32 cfg_addr, u32 cfg_data);
+-extern void setup_indirect_pcie_nomap(struct pci_controller *hose,
+-					     void __iomem *cfg_addr,
+-					     void __iomem *cfg_data);
+-
+ extern void __init mpc86xx_smp_init(void);
+ 
+ #endif	/* __MPC86XX_H__ */
+Index: linux-2.6.18/arch/powerpc/platforms/86xx/mpc86xx_hpcn.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/86xx/mpc86xx_hpcn.c
++++ linux-2.6.18/arch/powerpc/platforms/86xx/mpc86xx_hpcn.c
+@@ -365,7 +365,6 @@ mpc86xx_hpcn_setup_arch(void)
+ 	for (np = NULL; (np = of_find_node_by_type(np, "pci")) != NULL;)
+ 		add_bridge(np);
+ 
+-	ppc_md.pci_exclude_device = mpc86xx_exclude_device;
+ #endif
+ 
+ 	printk("MPC86xx HPCN board from Freescale Semiconductor\n");
+Index: linux-2.6.18/arch/powerpc/platforms/86xx/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/86xx/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/86xx/pci.c
+@@ -133,19 +133,6 @@ mpc86xx_setup_pcie(struct pci_controller
+ 	early_write_config_word(hose, 0, 0, PCI_COMMAND, cmd);
+ 
+ 	early_write_config_byte(hose, 0, 0, PCI_LATENCY_TIMER, 0x80);
+-
+-	/* PCIE Bus, Fix the MPC8641D host bridge's location to bus 0xFF. */
+-	early_read_config_dword(hose, 0, 0, PCI_PRIMARY_BUS, &temps);
+-	temps = (temps & 0xff000000) | (0xff) | (0x0 << 8) | (0xfe << 16);
+-	early_write_config_dword(hose, 0, 0, PCI_PRIMARY_BUS, temps);
+-}
+-
+-int mpc86xx_exclude_device(struct pci_controller *hose, u_char bus, u_char devfn)
+-{
+-	if (bus == 0 && PCI_SLOT(devfn) == 0)
+-		return PCIBIOS_DEVICE_NOT_FOUND;
+-
+-	return PCIBIOS_SUCCESSFUL;
+ }
+ 
+ int __init add_bridge(struct device_node *dev)
+@@ -173,11 +160,10 @@ int __init add_bridge(struct device_node
+ 		return -ENOMEM;
+ 	hose->arch_data = dev;
+ 
+-	/* last_busno = 0xfe cause by MPC8641 PCIE bug */
+ 	hose->first_busno = bus_range ? bus_range[0] : 0x0;
+-	hose->last_busno = bus_range ? bus_range[1] : 0xfe;
++	hose->last_busno = bus_range ? bus_range[1] : 0xff;
+ 
+-	setup_indirect_pcie(hose, rsrc.start, rsrc.start + 0x4);
++	setup_indirect_pci(hose, rsrc.start, rsrc.start + 0x4);
+ 
+ 	/* Setup the PCIE host controller. */
+ 	mpc86xx_setup_pcie(hose, rsrc.start, rsrc.end - rsrc.start + 1);
+Index: linux-2.6.18/mvl_patches/pro50-0150.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0150.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(150);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

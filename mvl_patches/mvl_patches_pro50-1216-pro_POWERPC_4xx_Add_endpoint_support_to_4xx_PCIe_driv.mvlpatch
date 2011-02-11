@@ -1,0 +1,509 @@
+#! /usr/bin/env bash
+# Patch: -pro_POWERPC_4xx_Add_endpoint_support_to_4xx_PCIe_driv
+# Date: Wed Jun 11 14:51:39 2008
+# MR: 27840
+# Source: DENX Software Engineering
+# Type: Enhancement
+# Disposition: merged from git://git.kernel.org/pub/scm/linux/kernel/git/jwboyer/powerpc-4xx.git
+# Adjustments: none
+# 
+# From 80daac3f86d4f5aafc9d3e79addb90fa118244e2 Mon Sep 17 00:00:00 2001
+# From: Stefan Roese <sr@denx.de>
+# Date: Tue, 22 Apr 2008 00:54:30 +1000
+# Subject: [PATCH] [POWERPC] 4xx: Add endpoint support to 4xx PCIe driver
+# 
+# This patch adds basic endpoint support to the 4xx PCIe driver.
+# 
+# This is done by checking the device_type property of the PCIe
+# device node ("pci" for root-complex and "pci-endpoint" for endpoint
+# configuration).
+# 
+# Note: Currently we map a fixed 64MByte window to PLB address 0 (SDRAM).
+# This should probably be configurable via a dts property.
+# 
+# Signed-off-by: Stefan Roese <sr@denx.de>
+# Acked-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+
+PATCHNUM=1216
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 27840
+Source: DENX Software Engineering
+Type: Enhancement
+Disposition: merged from git://git.kernel.org/pub/scm/linux/kernel/git/jwboyer/powerpc-4xx.git
+Adjustments: none
+
+From 80daac3f86d4f5aafc9d3e79addb90fa118244e2 Mon Sep 17 00:00:00 2001
+From: Stefan Roese <sr@denx.de>
+Date: Tue, 22 Apr 2008 00:54:30 +1000
+Subject: [PATCH] [POWERPC] 4xx: Add endpoint support to 4xx PCIe driver
+
+This patch adds basic endpoint support to the 4xx PCIe driver.
+
+This is done by checking the device_type property of the PCIe
+device node ("pci" for root-complex and "pci-endpoint" for endpoint
+configuration).
+
+Note: Currently we map a fixed 64MByte window to PLB address 0 (SDRAM).
+This should probably be configurable via a dts property.
+
+Signed-off-by: Stefan Roese <sr@denx.de>
+Acked-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+Index: linux-2.6.18/arch/powerpc/sysdev/ppc4xx_pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/ppc4xx_pci.c
++++ linux-2.6.18/arch/powerpc/sysdev/ppc4xx_pci.c
+@@ -1395,28 +1395,59 @@ static void __init ppc4xx_configure_pcie
+ 	resource_size_t size = res->end - res->start + 1;
+ 	u64 sa;
+ 
+-	/* Calculate window size */
+-	sa = (0xffffffffffffffffull << ilog2(size));;
+-	if (res->flags & IORESOURCE_PREFETCH)
+-		sa |= 0x8;
+-
+-	out_le32(mbase + PECFG_BAR0HMPA, RES_TO_U32_HIGH(sa));
+-	out_le32(mbase + PECFG_BAR0LMPA, RES_TO_U32_LOW(sa));
+-
+-	/* The setup of the split looks weird to me ... let's see if it works */
+-	out_le32(mbase + PECFG_PIM0LAL, 0x00000000);
+-	out_le32(mbase + PECFG_PIM0LAH, 0x00000000);
+-	out_le32(mbase + PECFG_PIM1LAL, 0x00000000);
+-	out_le32(mbase + PECFG_PIM1LAH, 0x00000000);
+-	out_le32(mbase + PECFG_PIM01SAH, 0xffff0000);
+-	out_le32(mbase + PECFG_PIM01SAL, 0x00000000);
++	if (port->endpoint) {
++		resource_size_t ep_addr = 0;
++		resource_size_t ep_size = 32 << 20;
++
++		/* Currently we map a fixed 64MByte window to PLB address
++		 * 0 (SDRAM). This should probably be configurable via a dts
++		 * property.
++		 */
++
++		/* Calculate window size */
++		sa = (0xffffffffffffffffull << ilog2(ep_size));;
++
++		/* Setup BAR0 */
++		out_le32(mbase + PECFG_BAR0HMPA, RES_TO_U32_HIGH(sa));
++		out_le32(mbase + PECFG_BAR0LMPA, RES_TO_U32_LOW(sa) |
++			 PCI_BASE_ADDRESS_MEM_TYPE_64);
++
++		/* Disable BAR1 & BAR2 */
++		out_le32(mbase + PECFG_BAR1MPA, 0);
++		out_le32(mbase + PECFG_BAR2HMPA, 0);
++		out_le32(mbase + PECFG_BAR2LMPA, 0);
++
++		out_le32(mbase + PECFG_PIM01SAH, RES_TO_U32_HIGH(sa));
++		out_le32(mbase + PECFG_PIM01SAL, RES_TO_U32_LOW(sa));
++
++		out_le32(mbase + PCI_BASE_ADDRESS_0, RES_TO_U32_LOW(ep_addr));
++		out_le32(mbase + PCI_BASE_ADDRESS_1, RES_TO_U32_HIGH(ep_addr));
++	} else {
++		/* Calculate window size */
++		sa = (0xffffffffffffffffull << ilog2(size));;
++		if (res->flags & IORESOURCE_PREFETCH)
++			sa |= 0x8;
++
++		out_le32(mbase + PECFG_BAR0HMPA, RES_TO_U32_HIGH(sa));
++		out_le32(mbase + PECFG_BAR0LMPA, RES_TO_U32_LOW(sa));
++
++		/* The setup of the split looks weird to me ... let's see
++		 * if it works
++		 */
++		out_le32(mbase + PECFG_PIM0LAL, 0x00000000);
++		out_le32(mbase + PECFG_PIM0LAH, 0x00000000);
++		out_le32(mbase + PECFG_PIM1LAL, 0x00000000);
++		out_le32(mbase + PECFG_PIM1LAH, 0x00000000);
++		out_le32(mbase + PECFG_PIM01SAH, 0xffff0000);
++		out_le32(mbase + PECFG_PIM01SAL, 0x00000000);
++
++		out_le32(mbase + PCI_BASE_ADDRESS_0, RES_TO_U32_LOW(res->start));
++		out_le32(mbase + PCI_BASE_ADDRESS_1, RES_TO_U32_HIGH(res->start));
++	}
+ 
+ 	/* Enable inbound mapping */
+ 	out_le32(mbase + PECFG_PIMEN, 0x1);
+ 
+-	out_le32(mbase + PCI_BASE_ADDRESS_0, RES_TO_U32_LOW(res->start));
+-	out_le32(mbase + PCI_BASE_ADDRESS_1, RES_TO_U32_HIGH(res->start));
+-
+ 	/* Enable I/O, Mem, and Busmaster cycles */
+ 	out_le16(mbase + PCI_COMMAND,
+ 		 in_le16(mbase + PCI_COMMAND) |
+@@ -1430,13 +1461,8 @@ static void __init ppc4xx_pciex_port_set
+ 	const int *bus_range;
+ 	int primary = 0, busses;
+ 	void __iomem *mbase = NULL, *cfg_data = NULL;
+-
+-	/* XXX FIXME: Handle endpoint mode properly */
+-	if (port->endpoint) {
+-		printk(KERN_WARNING "PCIE%d: Port in endpoint mode !\n",
+-		       port->index);
+-		return;
+-	}
++	const u32 *pval;
++	u32 val;
+ 
+ 	/* Check if primary bridge */
+ 	if (of_get_property(port->node, "primary", NULL))
+@@ -1470,21 +1496,30 @@ static void __init ppc4xx_pciex_port_set
+ 		hose->last_busno = hose->first_busno + busses;
+ 	}
+ 
+-	/* We map the external config space in cfg_data and the host config
+-	 * space in cfg_addr. External space is 1M per bus, internal space
+-	 * is 4K
+-	 */
+-	cfg_data = ioremap(port->cfg_space.start +
+-				 (hose->first_busno + 1) * 0x100000,
+-				 busses * 0x100000);
++	if (!port->endpoint) {
++		/* Only map the external config space in cfg_data for
++		 * PCIe root-complexes. External space is 1M per bus
++		 */
++		cfg_data = ioremap(port->cfg_space.start +
++				   (hose->first_busno + 1) * 0x100000,
++				   busses * 0x100000);
++		if (cfg_data == NULL) {
++			printk(KERN_ERR "%s: Can't map external config space !",
++			       port->node->full_name);
++			goto fail;
++		}
++		hose->cfg_data = cfg_data;
++	}
++
++	/* Always map the host config space in cfg_addr.
++	 * Internal space is 4K
++	 */
+ 	mbase = ioremap(port->cfg_space.start + 0x10000000, 0x1000);
+-	if (cfg_data == NULL || mbase == NULL) {
+-		printk(KERN_ERR "%s: Can't map config space !",
++	if (mbase == NULL) {
++		printk(KERN_ERR "%s: Can't map internal config space !",
+ 		       port->node->full_name);
+ 		goto fail;
+ 	}
+-
+-	hose->cfg_data = cfg_data;
+ 	hose->cfg_addr = mbase;
+ 
+ 	pr_debug("PCIE %s, bus %d..%d\n", port->node->full_name,
+@@ -1497,12 +1532,14 @@ static void __init ppc4xx_pciex_port_set
+ 	port->hose = hose;
+ 	mbase = (void __iomem *)hose->cfg_addr;
+ 
+-	/*
+-	 * Set bus numbers on our root port
+-	 */
+-	out_8(mbase + PCI_PRIMARY_BUS, hose->first_busno);
+-	out_8(mbase + PCI_SECONDARY_BUS, hose->first_busno + 1);
+-	out_8(mbase + PCI_SUBORDINATE_BUS, hose->last_busno);
++	if (!port->endpoint) {
++		/*
++		 * Set bus numbers on our root port
++		 */
++		out_8(mbase + PCI_PRIMARY_BUS, hose->first_busno);
++		out_8(mbase + PCI_SECONDARY_BUS, hose->first_busno + 1);
++		out_8(mbase + PCI_SUBORDINATE_BUS, hose->last_busno);
++	}
+ 
+ 	/*
+ 	 * OMRs are already reset, also disable PIMs
+@@ -1523,17 +1560,49 @@ static void __init ppc4xx_pciex_port_set
+ 	ppc4xx_configure_pciex_PIMs(port, hose, mbase, &dma_window);
+ 
+ 	/* The root complex doesn't show up if we don't set some vendor
+-	 * and device IDs into it. Those are the same bogus one that the
+-	 * initial code in arch/ppc add. We might want to change that.
++	 * and device IDs into it. The defaults below are the same bogus
++	 * one that the initial code in arch/ppc had. This can be
++	 * overwritten by setting the "vendor-id/device-id" properties
++	 * in the pciex node.
+ 	 */
+-	out_le16(mbase + 0x200, 0xaaa0 + port->index);
+-	out_le16(mbase + 0x202, 0xbed0 + port->index);
+ 
+-	/* Set Class Code to PCI-PCI bridge and Revision Id to 1 */
+-	out_le32(mbase + 0x208, 0x06040001);
++	/* Get the (optional) vendor-/device-id from the device-tree */
++	pval = of_get_property(port->node, "vendor-id", NULL);
++	if (pval) {
++		val = *pval;
++	} else {
++		if (!port->endpoint)
++			val = 0xaaa0 + port->index;
++		else
++			val = 0xeee0 + port->index;
++	}
++	out_le16(mbase + 0x200, val);
++
++	pval = of_get_property(port->node, "device-id", NULL);
++	if (pval) {
++		val = *pval;
++	} else {
++		if (!port->endpoint)
++			val = 0xbed0 + port->index;
++		else
++			val = 0xfed0 + port->index;
++	}
++	out_le16(mbase + 0x202, val);
++
++	if (!port->endpoint) {
++		/* Set Class Code to PCI-PCI bridge and Revision Id to 1 */
++		out_le32(mbase + 0x208, 0x06040001);
++
++		printk(KERN_INFO "PCIE%d: successfully set as root-complex\n",
++		       port->index);
++	} else {
++		/* Set Class Code to Processor/PPC */
++		out_le32(mbase + 0x208, 0x0b200001);
++
++		printk(KERN_INFO "PCIE%d: successfully set as endpoint\n",
++		       port->index);
++	}
+ 
+-	printk(KERN_INFO "PCIE%d: successfully set as root-complex\n",
+-	       port->index);
+ 	return;
+  fail:
+ 	if (hose)
+@@ -1550,6 +1619,7 @@ static void __init ppc4xx_probe_pciex_br
+ 	const u32 *pval;
+ 	int portno;
+ 	unsigned int dcrs;
++	const char *val;
+ 
+ 	/* First, proceed to core initialization as we assume there's
+ 	 * only one PCIe core in the system
+@@ -1581,8 +1651,20 @@ static void __init ppc4xx_probe_pciex_br
+ 	}
+ 	port->sdr_base = *pval;
+ 
+-	/* XXX Currently, we only support root complex mode */
+-	port->endpoint = 0;
++	/* Check if device_type property is set to "pci" or "pci-endpoint".
++	 * Resulting from this setup this PCIe port will be configured
++	 * as root-complex or as endpoint.
++	 */
++	val = of_get_property(port->node, "device_type", NULL);
++	if (!strcmp(val, "pci-endpoint")) {
++		port->endpoint = 1;
++	} else if (!strcmp(val, "pci")) {
++		port->endpoint = 0;
++	} else {
++		printk(KERN_ERR "PCIE: missing or incorrect device_type for %s\n",
++		       np->full_name);
++		return;
++	}
+ 
+ 	/* Fetch config space registers address */
+ 	if (of_address_to_resource(np, 0, &port->cfg_space)) {
+Index: linux-2.6.18/mvl_patches/pro50-1216.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1216.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1216);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

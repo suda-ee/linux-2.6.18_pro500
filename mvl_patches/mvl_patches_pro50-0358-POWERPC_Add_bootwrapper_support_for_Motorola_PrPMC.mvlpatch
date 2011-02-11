@@ -1,0 +1,862 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Add_bootwrapper_support_for_Motorola_PrPMC
+# Date: Wed Sep 26 11:18:00 2007
+# MR: 24856
+# From c368d921daed3c7cfba9752a45b2a8804cd54128 Mon Sep 17 00:00:00 2001
+# From: Mark A. Greer <mgreer@mvista.com>
+# Date: Sat, 12 May 2007 10:58:18 +1000
+# Subject: [PATCH] [POWERPC] Add bootwrapper support for Motorola PrPMC2800 platform
+# 
+# The Motorola PrPMC280 and PrPMC2800 processor modules sit on an F101 or
+# PrPMC2800 baseboard, respectively.  There are several variants of each
+# type of processor module which can have different amounts of memory,
+# amounts of FLASH, cpu frequencies, and an mv64360 or an mv64362.
+# 
+# The bootwrapper code for that platform reads VPD from an I2C EEPROM
+# to determine the processor module variant.  From the variant, the
+# amount of memory, etc. is determined and the device tree is updated
+# accordingly.  If the variant cannot be determined (e.g., corrupted
+# VPD or a previously unknown variant), the property values already
+# in the device tree are used.
+# 
+# Also, the firmware for those platforms does not completely configure
+# the mv64x60 host bridge so that configuration is done here.
+# 
+# Signed-off-by: Mark A. Greer <mgreer@mvista.com>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=358
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From c368d921daed3c7cfba9752a45b2a8804cd54128 Mon Sep 17 00:00:00 2001
+From: Mark A. Greer <mgreer@mvista.com>
+Date: Sat, 12 May 2007 10:58:18 +1000
+Subject: [PATCH] [POWERPC] Add bootwrapper support for Motorola PrPMC2800 platform
+
+The Motorola PrPMC280 and PrPMC2800 processor modules sit on an F101 or
+PrPMC2800 baseboard, respectively.  There are several variants of each
+type of processor module which can have different amounts of memory,
+amounts of FLASH, cpu frequencies, and an mv64360 or an mv64362.
+
+The bootwrapper code for that platform reads VPD from an I2C EEPROM
+to determine the processor module variant.  From the variant, the
+amount of memory, etc. is determined and the device tree is updated
+accordingly.  If the variant cannot be determined (e.g., corrupted
+VPD or a previously unknown variant), the property values already
+in the device tree are used.
+
+Also, the firmware for those platforms does not completely configure
+the mv64x60 host bridge so that configuration is done here.
+
+Signed-off-by: Mark A. Greer <mgreer@mvista.com>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/boot/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/Makefile
++++ linux-2.6.18/arch/powerpc/boot/Makefile
+@@ -53,7 +53,7 @@ src-wlib := string.S crt0.S stdio.c main
+ 		gunzip_util.c elf_util.c $(zlib) devtree.c \
+ 		44x.c ebony.c mv64x60.c mpsc.c mv64x60_i2c.c
+ src-plat := of.c cuboot-83xx.c cuboot-85xx.c holly.c \
+-		cuboot-ebony.c treeboot-ebony.c
++		cuboot-ebony.c treeboot-ebony.c prpmc2800.c
+ src-boot := $(src-wlib) $(src-plat) empty.c
+ 
+ src-boot := $(addprefix $(obj)/, $(src-boot))
+@@ -140,6 +140,7 @@ image-$(CONFIG_PPC_CHRP)		+= zImage.chrp
+ image-$(CONFIG_PPC_EFIKA)		+= zImage.chrp
+ image-$(CONFIG_PPC_PMAC)		+= zImage.pmac
+ image-$(CONFIG_PPC_HOLLY)		+= zImage.holly-elf
++image-$(CONFIG_PPC_PRPMC2800)		+= zImage.prpmc2800
+ image-$(CONFIG_DEFAULT_UIMAGE)		+= uImage
+ 
+ ifneq ($(CONFIG_DEVICE_TREE),"")
+Index: linux-2.6.18/arch/powerpc/boot/prpmc2800.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/boot/prpmc2800.c
+@@ -0,0 +1,577 @@
++/*
++ * Motorola ECC prpmc280/f101 & prpmc2800/f101e platform code.
++ *
++ * Author: Mark A. Greer <mgreer@mvista.com>
++ *
++ * 2007 (c) MontaVista, Software, Inc.  This file is licensed under
++ * the terms of the GNU General Public License version 2.  This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++
++#include <stdarg.h>
++#include <stddef.h>
++#include "types.h"
++#include "elf.h"
++#include "page.h"
++#include "string.h"
++#include "stdio.h"
++#include "io.h"
++#include "ops.h"
++#include "gunzip_util.h"
++#include "mv64x60.h"
++
++extern char _end[];
++extern char _vmlinux_start[], _vmlinux_end[];
++extern char _dtb_start[], _dtb_end[];
++
++extern void udelay(long delay);
++
++#define KB	1024U
++#define MB	(KB*KB)
++#define GB	(KB*MB)
++#define MHz	(1000U*1000U)
++#define GHz	(1000U*MHz)
++
++#define BOARD_MODEL	"PrPMC2800"
++#define BOARD_MODEL_MAX	32 /* max strlen(BOARD_MODEL) + 1 */
++
++#define EEPROM2_ADDR	0xa4
++#define EEPROM3_ADDR	0xa8
++
++BSS_STACK(16*KB);
++
++static u8 *bridge_base;
++
++typedef enum {
++	BOARD_MODEL_PRPMC280,
++	BOARD_MODEL_PRPMC2800,
++} prpmc2800_board_model;
++
++typedef enum {
++	BRIDGE_TYPE_MV64360,
++	BRIDGE_TYPE_MV64362,
++} prpmc2800_bridge_type;
++
++struct prpmc2800_board_info {
++	prpmc2800_board_model model;
++	char variant;
++	prpmc2800_bridge_type bridge_type;
++	u8 subsys0;
++	u8 subsys1;
++	u8 vpd4;
++	u8 vpd4_mask;
++	u32 core_speed;
++	u32 mem_size;
++	u32 boot_flash;
++	u32 user_flash;
++};
++
++static struct prpmc2800_board_info prpmc2800_board_info[] = {
++	{
++		.model		= BOARD_MODEL_PRPMC280,
++		.variant	= 'a',
++		.bridge_type	= BRIDGE_TYPE_MV64360,
++		.subsys0	= 0xff,
++		.subsys1	= 0xff,
++		.vpd4		= 0x00,
++		.vpd4_mask	= 0x0f,
++		.core_speed	= 1*GHz,
++		.mem_size	= 512*MB,
++		.boot_flash	= 1*MB,
++		.user_flash	= 64*MB,
++	},
++	{
++		.model		= BOARD_MODEL_PRPMC280,
++		.variant	= 'b',
++		.bridge_type	= BRIDGE_TYPE_MV64362,
++		.subsys0	= 0xff,
++		.subsys1	= 0xff,
++		.vpd4		= 0x01,
++		.vpd4_mask	= 0x0f,
++		.core_speed	= 1*GHz,
++		.mem_size	= 512*MB,
++		.boot_flash	= 0,
++		.user_flash	= 0,
++	},
++	{
++		.model		= BOARD_MODEL_PRPMC280,
++		.variant	= 'c',
++		.bridge_type	= BRIDGE_TYPE_MV64360,
++		.subsys0	= 0xff,
++		.subsys1	= 0xff,
++		.vpd4		= 0x02,
++		.vpd4_mask	= 0x0f,
++		.core_speed	= 733*MHz,
++		.mem_size	= 512*MB,
++		.boot_flash	= 1*MB,
++		.user_flash	= 64*MB,
++	},
++	{
++		.model		= BOARD_MODEL_PRPMC280,
++		.variant	= 'd',
++		.bridge_type	= BRIDGE_TYPE_MV64360,
++		.subsys0	= 0xff,
++		.subsys1	= 0xff,
++		.vpd4		= 0x03,
++		.vpd4_mask	= 0x0f,
++		.core_speed	= 1*GHz,
++		.mem_size	= 1*GB,
++		.boot_flash	= 1*MB,
++		.user_flash	= 64*MB,
++	},
++	{
++		.model		= BOARD_MODEL_PRPMC280,
++		.variant	= 'e',
++		.bridge_type	= BRIDGE_TYPE_MV64360,
++		.subsys0	= 0xff,
++		.subsys1	= 0xff,
++		.vpd4		= 0x04,
++		.vpd4_mask	= 0x0f,
++		.core_speed	= 1*GHz,
++		.mem_size	= 512*MB,
++		.boot_flash	= 1*MB,
++		.user_flash	= 64*MB,
++	},
++	{
++		.model		= BOARD_MODEL_PRPMC280,
++		.variant	= 'f',
++		.bridge_type	= BRIDGE_TYPE_MV64362,
++		.subsys0	= 0xff,
++		.subsys1	= 0xff,
++		.vpd4		= 0x05,
++		.vpd4_mask	= 0x0f,
++		.core_speed	= 733*MHz,
++		.mem_size	= 128*MB,
++		.boot_flash	= 1*MB,
++		.user_flash	= 0,
++	},
++	{
++		.model		= BOARD_MODEL_PRPMC280,
++		.variant	= 'g',
++		.bridge_type	= BRIDGE_TYPE_MV64360,
++		.subsys0	= 0xff,
++		.subsys1	= 0xff,
++		.vpd4		= 0x06,
++		.vpd4_mask	= 0x0f,
++		.core_speed	= 1*GHz,
++		.mem_size	= 256*MB,
++		.boot_flash	= 1*MB,
++		.user_flash	= 0,
++	},
++	{
++		.model		= BOARD_MODEL_PRPMC280,
++		.variant	= 'h',
++		.bridge_type	= BRIDGE_TYPE_MV64360,
++		.subsys0	= 0xff,
++		.subsys1	= 0xff,
++		.vpd4		= 0x07,
++		.vpd4_mask	= 0x0f,
++		.core_speed	= 1*GHz,
++		.mem_size	= 1*GB,
++		.boot_flash	= 1*MB,
++		.user_flash	= 64*MB,
++	},
++	{
++		.model		= BOARD_MODEL_PRPMC2800,
++		.variant	= 'a',
++		.bridge_type	= BRIDGE_TYPE_MV64360,
++		.subsys0	= 0xb2,
++		.subsys1	= 0x8c,
++		.vpd4		= 0x00,
++		.vpd4_mask	= 0x00,
++		.core_speed	= 1*GHz,
++		.mem_size	= 512*MB,
++		.boot_flash	= 2*MB,
++		.user_flash	= 64*MB,
++	},
++	{
++		.model		= BOARD_MODEL_PRPMC2800,
++		.variant	= 'b',
++		.bridge_type	= BRIDGE_TYPE_MV64362,
++		.subsys0	= 0xb2,
++		.subsys1	= 0x8d,
++		.vpd4		= 0x00,
++		.vpd4_mask	= 0x00,
++		.core_speed	= 1*GHz,
++		.mem_size	= 512*MB,
++		.boot_flash	= 0,
++		.user_flash	= 0,
++	},
++	{
++		.model		= BOARD_MODEL_PRPMC2800,
++		.variant	= 'c',
++		.bridge_type	= BRIDGE_TYPE_MV64360,
++		.subsys0	= 0xb2,
++		.subsys1	= 0x8e,
++		.vpd4		= 0x00,
++		.vpd4_mask	= 0x00,
++		.core_speed	= 733*MHz,
++		.mem_size	= 512*MB,
++		.boot_flash	= 2*MB,
++		.user_flash	= 64*MB,
++	},
++	{
++		.model		= BOARD_MODEL_PRPMC2800,
++		.variant	= 'd',
++		.bridge_type	= BRIDGE_TYPE_MV64360,
++		.subsys0	= 0xb2,
++		.subsys1	= 0x8f,
++		.vpd4		= 0x00,
++		.vpd4_mask	= 0x00,
++		.core_speed	= 1*GHz,
++		.mem_size	= 1*GB,
++		.boot_flash	= 2*MB,
++		.user_flash	= 64*MB,
++	},
++	{
++		.model		= BOARD_MODEL_PRPMC2800,
++		.variant	= 'e',
++		.bridge_type	= BRIDGE_TYPE_MV64360,
++		.subsys0	= 0xa2,
++		.subsys1	= 0x8a,
++		.vpd4		= 0x00,
++		.vpd4_mask	= 0x00,
++		.core_speed	= 1*GHz,
++		.mem_size	= 512*MB,
++		.boot_flash	= 2*MB,
++		.user_flash	= 64*MB,
++	},
++	{
++		.model		= BOARD_MODEL_PRPMC2800,
++		.variant	= 'f',
++		.bridge_type	= BRIDGE_TYPE_MV64362,
++		.subsys0	= 0xa2,
++		.subsys1	= 0x8b,
++		.vpd4		= 0x00,
++		.vpd4_mask	= 0x00,
++		.core_speed	= 733*MHz,
++		.mem_size	= 128*MB,
++		.boot_flash	= 2*MB,
++		.user_flash	= 0,
++	},
++	{
++		.model		= BOARD_MODEL_PRPMC2800,
++		.variant	= 'g',
++		.bridge_type	= BRIDGE_TYPE_MV64360,
++		.subsys0	= 0xa2,
++		.subsys1	= 0x8c,
++		.vpd4		= 0x00,
++		.vpd4_mask	= 0x00,
++		.core_speed	= 1*GHz,
++		.mem_size	= 2*GB,
++		.boot_flash	= 2*MB,
++		.user_flash	= 64*MB,
++	},
++	{
++		.model		= BOARD_MODEL_PRPMC2800,
++		.variant	= 'h',
++		.bridge_type	= BRIDGE_TYPE_MV64360,
++		.subsys0	= 0xa2,
++		.subsys1	= 0x8d,
++		.vpd4		= 0x00,
++		.vpd4_mask	= 0x00,
++		.core_speed	= 733*MHz,
++		.mem_size	= 1*GB,
++		.boot_flash	= 2*MB,
++		.user_flash	= 64*MB,
++	},
++};
++
++static struct prpmc2800_board_info *prpmc2800_get_board_info(u8 *vpd)
++{
++	struct prpmc2800_board_info *bip;
++	int i;
++
++	for (i=0,bip=prpmc2800_board_info; i<ARRAY_SIZE(prpmc2800_board_info);
++			i++,bip++)
++		if ((vpd[0] == bip->subsys0) && (vpd[1] == bip->subsys1)
++				&& ((vpd[4] & bip->vpd4_mask) == bip->vpd4))
++			return bip;
++
++	return NULL;
++}
++
++/* Get VPD from i2c eeprom 2, then match it to a board info entry */
++static struct prpmc2800_board_info *prpmc2800_get_bip(void)
++{
++	struct prpmc2800_board_info *bip;
++	u8 vpd[5];
++	int rc;
++
++	if (mv64x60_i2c_open())
++		fatal("Error: Can't open i2c device\n\r");
++
++	/* Get VPD from i2c eeprom-2 */
++	memset(vpd, 0, sizeof(vpd));
++	rc = mv64x60_i2c_read(EEPROM2_ADDR, vpd, 0x1fde, 2, sizeof(vpd));
++	if (rc < 0)
++		fatal("Error: Couldn't read eeprom2\n\r");
++	mv64x60_i2c_close();
++
++	/* Get board type & related info */
++	bip = prpmc2800_get_board_info(vpd);
++	if (bip == NULL) {
++		printf("Error: Unsupported board or corrupted VPD:\n\r");
++		printf("  0x%x 0x%x 0x%x 0x%x 0x%x\n\r",
++				vpd[0], vpd[1], vpd[2], vpd[3], vpd[4]);
++		printf("Using device tree defaults...\n\r");
++	}
++
++	return bip;
++}
++
++static void prpmc2800_bridge_setup(u32 mem_size)
++{
++	u32 i, v[12], enables, acc_bits;
++	u32 pci_base_hi, pci_base_lo, size, buf[2];
++	unsigned long cpu_base;
++	int rc;
++	void *devp;
++	u8 *bridge_pbase, is_coherent;
++	struct mv64x60_cpu2pci_win *tbl;
++
++	bridge_pbase = mv64x60_get_bridge_pbase();
++	is_coherent = mv64x60_is_coherent();
++
++	if (is_coherent)
++		acc_bits = MV64x60_PCI_ACC_CNTL_SNOOP_WB
++			| MV64x60_PCI_ACC_CNTL_SWAP_NONE
++			| MV64x60_PCI_ACC_CNTL_MBURST_32_BYTES
++			| MV64x60_PCI_ACC_CNTL_RDSIZE_32_BYTES;
++	else
++		acc_bits = MV64x60_PCI_ACC_CNTL_SNOOP_NONE
++			| MV64x60_PCI_ACC_CNTL_SWAP_NONE
++			| MV64x60_PCI_ACC_CNTL_MBURST_128_BYTES
++			| MV64x60_PCI_ACC_CNTL_RDSIZE_256_BYTES;
++
++	mv64x60_config_ctlr_windows(bridge_base, bridge_pbase, is_coherent);
++	mv64x60_config_pci_windows(bridge_base, bridge_pbase, 0, 0, mem_size,
++			acc_bits);
++
++	/* Get the cpu -> pci i/o & mem mappings from the device tree */
++	devp = finddevice("/mv64x60/pci@80000000");
++	if (devp == NULL)
++		fatal("Error: Missing /mv64x60/pci@80000000"
++				" device tree node\n\r");
++
++	rc = getprop(devp, "ranges", v, sizeof(v));
++	if (rc != sizeof(v))
++		fatal("Error: Can't find /mv64x60/pci@80000000/ranges"
++				" property\n\r");
++
++	/* Get the cpu -> pci i/o & mem mappings from the device tree */
++	devp = finddevice("/mv64x60");
++	if (devp == NULL)
++		fatal("Error: Missing /mv64x60 device tree node\n\r");
++
++	enables = in_le32((u32 *)(bridge_base + MV64x60_CPU_BAR_ENABLE));
++	enables |= 0x0007fe00; /* Disable all cpu->pci windows */
++	out_le32((u32 *)(bridge_base + MV64x60_CPU_BAR_ENABLE), enables);
++
++	for (i=0; i<12; i+=6) {
++		switch (v[i] & 0xff000000) {
++		case 0x01000000: /* PCI I/O Space */
++			tbl = mv64x60_cpu2pci_io;
++			break;
++		case 0x02000000: /* PCI MEM Space */
++			tbl = mv64x60_cpu2pci_mem;
++			break;
++		default:
++			continue;
++		}
++
++		pci_base_hi = v[i+1];
++		pci_base_lo = v[i+2];
++		cpu_base = v[i+3];
++		size = v[i+5];
++
++		buf[0] = cpu_base;
++		buf[1] = size;
++
++		if (!dt_xlate_addr(devp, buf, sizeof(buf), &cpu_base))
++			fatal("Error: Can't translate PCI address 0x%x\n\r",
++					(u32)cpu_base);
++
++		mv64x60_config_cpu2pci_window(bridge_base, 0, pci_base_hi,
++				pci_base_lo, cpu_base, size, tbl);
++	}
++
++	enables &= ~0x00000600; /* Enable cpu->pci0 i/o, cpu->pci0 mem0 */
++	out_le32((u32 *)(bridge_base + MV64x60_CPU_BAR_ENABLE), enables);
++}
++
++static void prpmc2800_fixups(void)
++{
++	u32 v[2], l, mem_size;
++	int rc;
++	void *devp;
++	char model[BOARD_MODEL_MAX];
++	struct prpmc2800_board_info *bip;
++
++	bip = prpmc2800_get_bip(); /* Get board info based on VPD */
++
++	mem_size = (bip) ? bip->mem_size : mv64x60_get_mem_size(bridge_base);
++	prpmc2800_bridge_setup(mem_size); /* Do necessary bridge setup */
++
++	/* If the VPD doesn't match what we know about, just use the
++	 * defaults already in the device tree.
++	 */
++	if (!bip)
++		return;
++
++	/* Know the board type so override device tree defaults */
++	/* Set /model appropriately */
++	devp = finddevice("/");
++	if (devp == NULL)
++		fatal("Error: Missing '/' device tree node\n\r");
++	memset(model, 0, BOARD_MODEL_MAX);
++	strncpy(model, BOARD_MODEL, BOARD_MODEL_MAX - 2);
++	l = strlen(model);
++	if (bip->model == BOARD_MODEL_PRPMC280)
++		l--;
++	model[l++] = bip->variant;
++	model[l++] = '\0';
++	setprop(devp, "model", model, l);
++
++	/* Set /cpus/PowerPC,7447/clock-frequency */
++	devp = finddevice("/cpus/PowerPC,7447");
++	if (devp == NULL)
++		fatal("Error: Missing proper /cpus device tree node\n\r");
++	v[0] = bip->core_speed;
++	setprop(devp, "clock-frequency", &v[0], sizeof(v[0]));
++
++	/* Set /memory/reg size */
++	devp = finddevice("/memory");
++	if (devp == NULL)
++		fatal("Error: Missing /memory device tree node\n\r");
++	v[0] = 0;
++	v[1] = bip->mem_size;
++	setprop(devp, "reg", v, sizeof(v));
++
++	/* Update /mv64x60/model, if this is a mv64362 */
++	if (bip->bridge_type == BRIDGE_TYPE_MV64362) {
++		devp = finddevice("/mv64x60");
++		if (devp == NULL)
++			fatal("Error: Missing /mv64x60 device tree node\n\r");
++		setprop(devp, "model", "mv64362", strlen("mv64362") + 1);
++	}
++
++	/* Set User FLASH size */
++	devp = finddevice("/mv64x60/flash@a0000000");
++	if (devp == NULL)
++		fatal("Error: Missing User FLASH device tree node\n\r");
++	rc = getprop(devp, "reg", v, sizeof(v));
++	if (rc != sizeof(v))
++		fatal("Error: Can't find User FLASH reg property\n\r");
++	v[1] = bip->user_flash;
++	setprop(devp, "reg", v, sizeof(v));
++}
++
++#define MV64x60_MPP_CNTL_0	0xf000
++#define MV64x60_MPP_CNTL_2	0xf008
++#define MV64x60_GPP_IO_CNTL	0xf100
++#define MV64x60_GPP_LEVEL_CNTL	0xf110
++#define MV64x60_GPP_VALUE_SET	0xf118
++
++static void prpmc2800_reset(void)
++{
++	u32 temp;
++
++	udelay(5000000);
++
++	if (bridge_base != 0) {
++		temp = in_le32((u32 *)(bridge_base + MV64x60_MPP_CNTL_0));
++		temp &= 0xFFFF0FFF;
++		out_le32((u32 *)(bridge_base + MV64x60_MPP_CNTL_0), temp);
++
++		temp = in_le32((u32 *)(bridge_base + MV64x60_GPP_LEVEL_CNTL));
++		temp |= 0x00000004;
++		out_le32((u32 *)(bridge_base + MV64x60_GPP_LEVEL_CNTL), temp);
++
++		temp = in_le32((u32 *)(bridge_base + MV64x60_GPP_IO_CNTL));
++		temp |= 0x00000004;
++		out_le32((u32 *)(bridge_base + MV64x60_GPP_IO_CNTL), temp);
++
++		temp = in_le32((u32 *)(bridge_base + MV64x60_MPP_CNTL_2));
++		temp &= 0xFFFF0FFF;
++		out_le32((u32 *)(bridge_base + MV64x60_MPP_CNTL_2), temp);
++
++		temp = in_le32((u32 *)(bridge_base + MV64x60_GPP_LEVEL_CNTL));
++		temp |= 0x00080000;
++		out_le32((u32 *)(bridge_base + MV64x60_GPP_LEVEL_CNTL), temp);
++
++		temp = in_le32((u32 *)(bridge_base + MV64x60_GPP_IO_CNTL));
++		temp |= 0x00080000;
++		out_le32((u32 *)(bridge_base + MV64x60_GPP_IO_CNTL), temp);
++
++		out_le32((u32 *)(bridge_base + MV64x60_GPP_VALUE_SET),
++				0x00080004);
++	}
++
++	for (;;);
++}
++
++#define HEAP_SIZE	(16*MB)
++static struct gunzip_state gzstate;
++
++void platform_init(unsigned long r3, unsigned long r4, unsigned long r5,
++                   unsigned long r6, unsigned long r7)
++{
++	struct elf_info ei;
++	char *heap_start, *dtb;
++	int dt_size = _dtb_end - _dtb_start;
++	void *vmlinuz_addr = _vmlinux_start;
++	unsigned long vmlinuz_size = _vmlinux_end - _vmlinux_start;
++	char elfheader[256];
++
++	if (dt_size <= 0) /* No fdt */
++		exit();
++
++	/*
++	 * Start heap after end of the kernel (after decompressed to
++	 * address 0) or the end of the zImage, whichever is higher.
++	 * That's so things allocated by simple_alloc won't overwrite
++	 * any part of the zImage and the kernel won't overwrite the dtb
++	 * when decompressed & relocated.
++	 */
++	gunzip_start(&gzstate, vmlinuz_addr, vmlinuz_size);
++	gunzip_exactly(&gzstate, elfheader, sizeof(elfheader));
++
++	if (!parse_elf32(elfheader, &ei))
++		exit();
++
++	heap_start = (char *)(ei.memsize + ei.elfoffset); /* end of kernel*/
++	heap_start = max(heap_start, (char *)_end); /* end of zImage */
++
++	if ((unsigned)simple_alloc_init(heap_start, HEAP_SIZE, 2*KB, 16)
++			> (128*MB))
++		exit();
++
++	/* Relocate dtb to safe area past end of zImage & kernel */
++	dtb = malloc(dt_size);
++	if (!dtb)
++		exit();
++	memmove(dtb, _dtb_start, dt_size);
++	if (ft_init(dtb, dt_size, 16))
++		exit();
++
++	bridge_base = mv64x60_get_bridge_base();
++
++	platform_ops.fixups = prpmc2800_fixups;
++	platform_ops.exit = prpmc2800_reset;
++
++	if (serial_console_init() < 0)
++		exit();
++}
++
++/* _zimage_start called very early--need to turn off external interrupts */
++asm ("	.globl _zimage_start\n\
++	_zimage_start:\n\
++		mfmsr	10\n\
++		rlwinm	10,10,0,~(1<<15)	/* Clear MSR_EE */\n\
++		sync\n\
++		mtmsr	10\n\
++		isync\n\
++		b _zimage_start_lib\n\
++");
+Index: linux-2.6.18/mvl_patches/pro50-0358.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0358.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(358);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

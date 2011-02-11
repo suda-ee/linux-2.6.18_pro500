@@ -1,0 +1,362 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Celleb_support_udbg
+# Date: Wed Sep 26 11:13:28 2007
+# MR: 24856
+# From d7480a9feaa970d9c37462f21bc27ebab2c56b0b Mon Sep 17 00:00:00 2001
+# From: Ishizaki Kou <kou.ishizaki@toshiba.co.jp>
+# Date: Fri, 2 Feb 2007 16:43:21 +0900
+# Subject: [PATCH] [POWERPC] Celleb: support udbg
+# 
+# This patch adds udbg support for Celleb platform.
+# 
+# Signed-off-by: Kou Ishizaki <kou.ishizaki@toshiba.co.jp>
+# Acked-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=250
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From d7480a9feaa970d9c37462f21bc27ebab2c56b0b Mon Sep 17 00:00:00 2001
+From: Ishizaki Kou <kou.ishizaki@toshiba.co.jp>
+Date: Fri, 2 Feb 2007 16:43:21 +0900
+Subject: [PATCH] [POWERPC] Celleb: support udbg
+
+This patch adds udbg support for Celleb platform.
+
+Signed-off-by: Kou Ishizaki <kou.ishizaki@toshiba.co.jp>
+Acked-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/kernel/udbg.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/udbg.c
++++ linux-2.6.18/arch/powerpc/kernel/udbg.c
+@@ -45,6 +45,8 @@ void __init udbg_early_init(void)
+ #elif defined(CONFIG_PPC_EARLY_DEBUG_ISERIES)
+ 	/* For iSeries - hit Ctrl-x Ctrl-x to see the output */
+ 	udbg_init_iseries();
++#elif defined(CONFIG_PPC_EARLY_DEBUG_BEAT)
++	udbg_init_debug_beat();
+ #endif
+ }
+ 
+Index: linux-2.6.18/arch/powerpc/platforms/celleb/udbg_beat.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/celleb/udbg_beat.c
+@@ -0,0 +1,97 @@
++/*
++ * udbg function for Beat
++ *
++ * (C) Copyright 2006 TOSHIBA CORPORATION
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++#include <linux/kernel.h>
++#include <linux/console.h>
++
++#include <asm/machdep.h>
++#include <asm/prom.h>
++#include <asm/udbg.h>
++
++#include "beat.h"
++
++#define	celleb_vtermno	0
++
++static void udbg_putc_beat(char c)
++{
++	unsigned long rc;
++
++	if (c == '\n')
++		udbg_putc_beat('\r');
++
++	rc = beat_put_term_char(celleb_vtermno, 1, (uint64_t)c << 56, 0);
++}
++
++/* Buffered chars getc */
++static long inbuflen;
++static long inbuf[2];	/* must be 2 longs */
++
++static int udbg_getc_poll_beat(void)
++{
++	/* The interface is tricky because it may return up to 16 chars.
++	 * We save them statically for future calls to udbg_getc().
++	 */
++	char ch, *buf = (char *)inbuf;
++	int i;
++	long rc;
++	if (inbuflen == 0) {
++		/* get some more chars. */
++		inbuflen = 0;
++		rc = beat_get_term_char(celleb_vtermno, &inbuflen, inbuf+0, inbuf+1);
++		if (rc != 0)
++			inbuflen = 0;	/* otherwise inbuflen is garbage */
++	}
++	if (inbuflen <= 0 || inbuflen > 16) {
++		/* Catch error case as well as other oddities (corruption) */
++		inbuflen = 0;
++		return -1;
++	}
++	ch = buf[0];
++	for (i = 1; i < inbuflen; i++)	/* shuffle them down. */
++		buf[i-1] = buf[i];
++	inbuflen--;
++	return ch;
++}
++
++static int udbg_getc_beat(void)
++{
++	int ch;
++	for (;;) {
++		ch = udbg_getc_poll_beat();
++		if (ch == -1) {
++			/* This shouldn't be needed...but... */
++			volatile unsigned long delay;
++			for (delay=0; delay < 2000000; delay++)
++				;
++		} else {
++			return ch;
++		}
++	}
++}
++
++/* call this from early_init() for a working debug console on
++ * vterm capable LPAR machines
++ */
++void __init udbg_init_debug_beat(void)
++{
++	udbg_putc = udbg_putc_beat;
++	udbg_getc = udbg_getc_beat;
++	udbg_getc_poll = udbg_getc_poll_beat;
++}
+Index: linux-2.6.18/include/asm-powerpc/udbg.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/udbg.h
++++ linux-2.6.18/include/asm-powerpc/udbg.h
+@@ -44,6 +44,7 @@ extern void __init udbg_init_maple_realm
+ extern void __init udbg_init_iseries(void);
+ extern void __init udbg_init_rtas_panel(void);
+ extern void __init udbg_init_rtas_console(void);
++extern void __init udbg_init_debug_beat(void);
+ 
+ #endif /* __KERNEL__ */
+ #endif /* _ASM_POWERPC_UDBG_H */
+Index: linux-2.6.18/mvl_patches/pro50-0250.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0250.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(250);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

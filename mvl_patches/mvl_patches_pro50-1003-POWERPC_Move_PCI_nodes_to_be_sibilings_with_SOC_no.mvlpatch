@@ -1,0 +1,1727 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Move_PCI_nodes_to_be_sibilings_with_SOC_no
+# Date: Wed Apr  9 10:00:10 2008
+# Source: kernel.org
+# MR: 26902
+# Type: Enhancement
+# Disposition: backported from kernel.org
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# From 1b3c5cdab49a605f0e048e1ccbf4cc61a2626485 Mon Sep 17 00:00:00 2001
+# From: Kumar Gala <galak@kernel.crashing.org>
+# Date: Wed, 12 Sep 2007 18:23:46 -0500
+# Subject: [PATCH] [POWERPC] Move PCI nodes to be sibilings with SOC nodes
+# 
+# Updated the device trees to have the PCI nodes be at the same level as
+# the SOC node.  This is to make it so that the SOC nodes children address
+# space is just on chip registers and not other bus memory as well.
+# 
+# Also, for PCIe nodes added a P2P bridge to handle the virtual P2P bridge
+# that exists in the PHB.
+# 
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+# NOTE: This patch originally contained changes to numerous DTS files. Some
+# of those changes are already in-tree from previous patches and some of the
+# modified files do not exist in our tree. Those changes have been removed from
+# this patch.
+# 
+
+PATCHNUM=1003
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: kernel.org
+MR: 26902
+Type: Enhancement
+Disposition: backported from kernel.org
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+From 1b3c5cdab49a605f0e048e1ccbf4cc61a2626485 Mon Sep 17 00:00:00 2001
+From: Kumar Gala <galak@kernel.crashing.org>
+Date: Wed, 12 Sep 2007 18:23:46 -0500
+Subject: [PATCH] [POWERPC] Move PCI nodes to be sibilings with SOC nodes
+
+Updated the device trees to have the PCI nodes be at the same level as
+the SOC node.  This is to make it so that the SOC nodes children address
+space is just on chip registers and not other bus memory as well.
+
+Also, for PCIe nodes added a P2P bridge to handle the virtual P2P bridge
+that exists in the PHB.
+
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+NOTE: This patch originally contained changes to numerous DTS files. Some
+of those changes are already in-tree from previous patches and some of the
+modified files do not exist in our tree. Those changes have been removed from
+this patch.
+
+Index: linux-2.6.18/arch/powerpc/boot/dts/lite5200.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/lite5200.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/lite5200.dts
+@@ -164,27 +164,6 @@
+ 			interrupt-parent = <500>;
+ 		};
+ 
+-		pci@0d00 {
+-			#interrupt-cells = <1>;
+-			#size-cells = <2>;
+-			#address-cells = <3>;
+-			device_type = "pci";
+-			compatible = "mpc5200-pci\0mpc52xx-pci";
+-			reg = <d00 100>;
+-			interrupt-map-mask = <f800 0 0 7>;
+-			interrupt-map = <c000 0 0 1 500 0 0 3
+-			                 c000 0 0 2 500 0 0 3
+-			                 c000 0 0 3 500 0 0 3
+-			                 c000 0 0 4 500 0 0 3>;
+-			clock-frequency = <0>; // From boot loader
+-			interrupts = <2 8 0 2 9 0 2 a 0>;
+-			interrupt-parent = <500>;
+-			bus-range = <0 0>;
+-			ranges = <42000000 0 80000000 80000000 0 20000000
+-			          02000000 0 a0000000 a0000000 0 10000000
+-			          01000000 0 00000000 b0000000 0 01000000>;
+-		};
+-
+ 		spi@f00 {
+ 			device_type = "spi";
+ 			compatible = "mpc5200-spi\0mpc52xx-spi";
+@@ -309,4 +288,25 @@
+ 			reg = <8000 4000>;
+ 		};
+ 	};
++
++	pci@f0000d00 {
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		device_type = "pci";
++		compatible = "mpc5200-pci";
++		reg = <f0000d00 100>;
++		interrupt-map-mask = <f800 0 0 7>;
++		interrupt-map = <c000 0 0 1 &mpc5200_pic 0 0 3
++				 c000 0 0 2 &mpc5200_pic 0 0 3
++				 c000 0 0 3 &mpc5200_pic 0 0 3
++				 c000 0 0 4 &mpc5200_pic 0 0 3>;
++		clock-frequency = <0>; // From boot loader
++		interrupts = <2 8 0 2 9 0 2 a 0>;
++		interrupt-parent = <&mpc5200_pic>;
++		bus-range = <0 0>;
++		ranges = <42000000 0 80000000 80000000 0 20000000
++			  02000000 0 a0000000 a0000000 0 10000000
++			  01000000 0 00000000 b0000000 0 01000000>;
++	};
+ };
+Index: linux-2.6.18/arch/powerpc/boot/dts/lite5200b.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/lite5200b.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/lite5200b.dts
+@@ -164,32 +164,6 @@
+ 			interrupt-parent = <500>;
+ 		};
+ 
+-		pci@0d00 {
+-			#interrupt-cells = <1>;
+-			#size-cells = <2>;
+-			#address-cells = <3>;
+-			device_type = "pci";
+-			compatible = "mpc5200b-pci\0mpc52xx-pci";
+-			reg = <d00 100>;
+-			interrupt-map-mask = <f800 0 0 7>;
+-			interrupt-map = <c000 0 0 1 500 0 0 3 // 1st slot
+-			                 c000 0 0 2 500 1 1 3
+-			                 c000 0 0 3 500 1 2 3
+-			                 c000 0 0 4 500 1 3 3
+-
+-			                 c800 0 0 1 500 1 1 3 // 2nd slot
+-			                 c800 0 0 2 500 1 2 3
+-			                 c800 0 0 3 500 1 3 3
+-			                 c800 0 0 4 500 0 0 3>;
+-			clock-frequency = <0>; // From boot loader
+-			interrupts = <2 8 0 2 9 0 2 a 0>;
+-			interrupt-parent = <500>;
+-			bus-range = <0 0>;
+-			ranges = <42000000 0 80000000 80000000 0 20000000
+-			          02000000 0 a0000000 a0000000 0 10000000
+-			          01000000 0 00000000 b0000000 0 01000000>;
+-		};
+-
+ 		spi@f00 {
+ 			device_type = "spi";
+ 			compatible = "mpc5200b-spi\0mpc52xx-spi";
+@@ -314,4 +288,30 @@
+ 			reg = <8000 4000>;
+ 		};
+ 	};
++
++	pci@f0000d00 {
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		device_type = "pci";
++		compatible = "mpc5200b-pci\0mpc5200-pci";
++		reg = <f0000d00 100>;
++		interrupt-map-mask = <f800 0 0 7>;
++		interrupt-map = <c000 0 0 1 &mpc5200_pic 0 0 3 // 1st slot
++				 c000 0 0 2 &mpc5200_pic 1 1 3
++				 c000 0 0 3 &mpc5200_pic 1 2 3
++				 c000 0 0 4 &mpc5200_pic 1 3 3
++
++				 c800 0 0 1 &mpc5200_pic 1 1 3 // 2nd slot
++				 c800 0 0 2 &mpc5200_pic 1 2 3
++				 c800 0 0 3 &mpc5200_pic 1 3 3
++				 c800 0 0 4 &mpc5200_pic 0 0 3>;
++		clock-frequency = <0>; // From boot loader
++		interrupts = <2 8 0 2 9 0 2 a 0>;
++		interrupt-parent = <&mpc5200_pic>;
++		bus-range = <0 0>;
++		ranges = <42000000 0 80000000 80000000 0 20000000
++			  02000000 0 a0000000 a0000000 0 10000000
++			  01000000 0 00000000 b0000000 0 01000000>;
++	};
+ };
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8540ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8540ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8540ads.dts
+@@ -173,94 +173,6 @@
+ 			interrupts = <2a 2>;
+ 			interrupt-parent = <&mpic>;
+ 		};
+-		pci@8000 {
+-			interrupt-map-mask = <f800 0 0 7>;
+-			interrupt-map = <
+-
+-				/* IDSEL 0x02 */
+-				1000 0 0 1 &mpic 1 1
+-				1000 0 0 2 &mpic 2 1
+-				1000 0 0 3 &mpic 3 1
+-				1000 0 0 4 &mpic 4 1
+-
+-				/* IDSEL 0x03 */
+-				1800 0 0 1 &mpic 4 1
+-				1800 0 0 2 &mpic 1 1
+-				1800 0 0 3 &mpic 2 1
+-				1800 0 0 4 &mpic 3 1
+-
+-				/* IDSEL 0x04 */
+-				2000 0 0 1 &mpic 3 1
+-				2000 0 0 2 &mpic 4 1
+-				2000 0 0 3 &mpic 1 1
+-				2000 0 0 4 &mpic 2 1
+-
+-				/* IDSEL 0x05 */
+-				2800 0 0 1 &mpic 2 1
+-				2800 0 0 2 &mpic 3 1
+-				2800 0 0 3 &mpic 4 1
+-				2800 0 0 4 &mpic 1 1
+-
+-				/* IDSEL 0x0c */
+-				6000 0 0 1 &mpic 1 1
+-				6000 0 0 2 &mpic 2 1
+-				6000 0 0 3 &mpic 3 1
+-				6000 0 0 4 &mpic 4 1
+-
+-				/* IDSEL 0x0d */
+-				6800 0 0 1 &mpic 4 1
+-				6800 0 0 2 &mpic 1 1
+-				6800 0 0 3 &mpic 2 1
+-				6800 0 0 4 &mpic 3 1
+-
+-				/* IDSEL 0x0e */
+-				7000 0 0 1 &mpic 3 1
+-				7000 0 0 2 &mpic 4 1
+-				7000 0 0 3 &mpic 1 1
+-				7000 0 0 4 &mpic 2 1
+-
+-				/* IDSEL 0x0f */
+-				7800 0 0 1 &mpic 2 1
+-				7800 0 0 2 &mpic 3 1
+-				7800 0 0 3 &mpic 4 1
+-				7800 0 0 4 &mpic 1 1
+-
+-				/* IDSEL 0x12 */
+-				9000 0 0 1 &mpic 1 1
+-				9000 0 0 2 &mpic 2 1
+-				9000 0 0 3 &mpic 3 1
+-				9000 0 0 4 &mpic 4 1
+-
+-				/* IDSEL 0x13 */
+-				9800 0 0 1 &mpic 4 1
+-				9800 0 0 2 &mpic 1 1
+-				9800 0 0 3 &mpic 2 1
+-				9800 0 0 4 &mpic 3 1
+-
+-				/* IDSEL 0x14 */
+-				a000 0 0 1 &mpic 3 1
+-				a000 0 0 2 &mpic 4 1
+-				a000 0 0 3 &mpic 1 1
+-				a000 0 0 4 &mpic 2 1
+-
+-				/* IDSEL 0x15 */
+-				a800 0 0 1 &mpic 2 1
+-				a800 0 0 2 &mpic 3 1
+-				a800 0 0 3 &mpic 4 1
+-				a800 0 0 4 &mpic 1 1>;
+-			interrupt-parent = <&mpic>;
+-			interrupts = <18 2>;
+-			bus-range = <0 0>;
+-			ranges = <02000000 0 80000000 80000000 0 20000000
+-				  01000000 0 00000000 e2000000 0 00100000>;
+-			clock-frequency = <3f940aa>;
+-			#interrupt-cells = <1>;
+-			#size-cells = <2>;
+-			#address-cells = <3>;
+-			reg = <8000 1000>;
+-			compatible = "fsl,mpc8540-pcix", "fsl,mpc8540-pci";
+-			device_type = "pci";
+-		};
+ 
+ 		mpic: pic@40000 {
+ 			clock-frequency = <0>;
+@@ -274,4 +186,93 @@
+ 			big-endian;
+ 		};
+ 	};
++
++	pci@e0008000 {
++		interrupt-map-mask = <f800 0 0 7>;
++		interrupt-map = <
++
++			/* IDSEL 0x02 */
++			1000 0 0 1 &mpic 1 1
++			1000 0 0 2 &mpic 2 1
++			1000 0 0 3 &mpic 3 1
++			1000 0 0 4 &mpic 4 1
++
++			/* IDSEL 0x03 */
++			1800 0 0 1 &mpic 4 1
++			1800 0 0 2 &mpic 1 1
++			1800 0 0 3 &mpic 2 1
++			1800 0 0 4 &mpic 3 1
++
++			/* IDSEL 0x04 */
++			2000 0 0 1 &mpic 3 1
++			2000 0 0 2 &mpic 4 1
++			2000 0 0 3 &mpic 1 1
++			2000 0 0 4 &mpic 2 1
++
++			/* IDSEL 0x05 */
++			2800 0 0 1 &mpic 2 1
++			2800 0 0 2 &mpic 3 1
++			2800 0 0 3 &mpic 4 1
++			2800 0 0 4 &mpic 1 1
++
++			/* IDSEL 0x0c */
++			6000 0 0 1 &mpic 1 1
++			6000 0 0 2 &mpic 2 1
++			6000 0 0 3 &mpic 3 1
++			6000 0 0 4 &mpic 4 1
++
++			/* IDSEL 0x0d */
++			6800 0 0 1 &mpic 4 1
++			6800 0 0 2 &mpic 1 1
++			6800 0 0 3 &mpic 2 1
++			6800 0 0 4 &mpic 3 1
++
++			/* IDSEL 0x0e */
++			7000 0 0 1 &mpic 3 1
++			7000 0 0 2 &mpic 4 1
++			7000 0 0 3 &mpic 1 1
++			7000 0 0 4 &mpic 2 1
++
++			/* IDSEL 0x0f */
++			7800 0 0 1 &mpic 2 1
++			7800 0 0 2 &mpic 3 1
++			7800 0 0 3 &mpic 4 1
++			7800 0 0 4 &mpic 1 1
++
++			/* IDSEL 0x12 */
++			9000 0 0 1 &mpic 1 1
++			9000 0 0 2 &mpic 2 1
++			9000 0 0 3 &mpic 3 1
++			9000 0 0 4 &mpic 4 1
++
++			/* IDSEL 0x13 */
++			9800 0 0 1 &mpic 4 1
++			9800 0 0 2 &mpic 1 1
++			9800 0 0 3 &mpic 2 1
++			9800 0 0 4 &mpic 3 1
++
++			/* IDSEL 0x14 */
++			a000 0 0 1 &mpic 3 1
++			a000 0 0 2 &mpic 4 1
++			a000 0 0 3 &mpic 1 1
++			a000 0 0 4 &mpic 2 1
++
++			/* IDSEL 0x15 */
++			a800 0 0 1 &mpic 2 1
++			a800 0 0 2 &mpic 3 1
++			a800 0 0 3 &mpic 4 1
++			a800 0 0 4 &mpic 1 1>;
++		interrupt-parent = <&mpic>;
++		interrupts = <18 2>;
++		bus-range = <0 0>;
++		ranges = <02000000 0 80000000 80000000 0 20000000
++			  01000000 0 00000000 e2000000 0 00100000>;
++		clock-frequency = <3f940aa>;
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		reg = <e0008000 1000>;
++		compatible = "fsl,mpc8540-pcix", "fsl,mpc8540-pci";
++		device_type = "pci";
++  	};
+ };
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8541cds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8541cds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8541cds.dts
+@@ -45,7 +45,7 @@
+ 		#interrupt-cells = <2>;
+ 		device_type = "soc";
+ 		ranges = <0 e0000000 00100000>;
+-		reg = <e0000000 00100000>;	// CCSRBAR 1M
++		reg = <e0000000 00001000>;	// CCSRBAR 1M
+ 		bus-frequency = <0>;
+ 
+ 		memory-controller@2000 {
+@@ -137,103 +137,6 @@
+ 			interrupt-parent = <&mpic>;
+ 		};
+ 
+-		pci1: pci@8000 {
+-			interrupt-map-mask = <1f800 0 0 7>;
+-			interrupt-map = <
+-
+-				/* IDSEL 0x10 */
+-				08000 0 0 1 &mpic 0 1
+-				08000 0 0 2 &mpic 1 1
+-				08000 0 0 3 &mpic 2 1
+-				08000 0 0 4 &mpic 3 1
+-
+-				/* IDSEL 0x11 */
+-				08800 0 0 1 &mpic 0 1
+-				08800 0 0 2 &mpic 1 1
+-				08800 0 0 3 &mpic 2 1
+-				08800 0 0 4 &mpic 3 1
+-
+-				/* IDSEL 0x12 (Slot 1) */
+-				09000 0 0 1 &mpic 0 1
+-				09000 0 0 2 &mpic 1 1
+-				09000 0 0 3 &mpic 2 1
+-				09000 0 0 4 &mpic 3 1
+-
+-				/* IDSEL 0x13 (Slot 2) */
+-				09800 0 0 1 &mpic 1 1
+-				09800 0 0 2 &mpic 2 1
+-				09800 0 0 3 &mpic 3 1
+-				09800 0 0 4 &mpic 0 1
+-
+-				/* IDSEL 0x14 (Slot 3) */
+-				0a000 0 0 1 &mpic 2 1
+-				0a000 0 0 2 &mpic 3 1
+-				0a000 0 0 3 &mpic 0 1
+-				0a000 0 0 4 &mpic 1 1
+-
+-				/* IDSEL 0x15 (Slot 4) */
+-				0a800 0 0 1 &mpic 3 1
+-				0a800 0 0 2 &mpic 0 1
+-				0a800 0 0 3 &mpic 1 1
+-				0a800 0 0 4 &mpic 2 1
+-
+-				/* Bus 1 (Tundra Bridge) */
+-				/* IDSEL 0x12 (ISA bridge) */
+-				19000 0 0 1 &mpic 0 1
+-				19000 0 0 2 &mpic 1 1
+-				19000 0 0 3 &mpic 2 1
+-				19000 0 0 4 &mpic 3 1>;
+-			interrupt-parent = <&mpic>;
+-			interrupts = <18 2>;
+-			bus-range = <0 0>;
+-			ranges = <02000000 0 80000000 80000000 0 20000000
+-				  01000000 0 00000000 e2000000 0 00100000>;
+-			clock-frequency = <3f940aa>;
+-			#interrupt-cells = <1>;
+-			#size-cells = <2>;
+-			#address-cells = <3>;
+-			reg = <8000 1000>;
+-			compatible = "fsl,mpc8540-pci";
+-			device_type = "pci";
+-
+-			i8259@19000 {
+-				clock-frequency = <0>;
+-				interrupt-controller;
+-				device_type = "interrupt-controller";
+-				reg = <19000 0 0 0 1>;
+-				#address-cells = <0>;
+-				#interrupt-cells = <2>;
+-				built-in;
+-				compatible = "chrp,iic";
+-				big-endian;
+-				interrupts = <1>;
+-				interrupt-parent = <&pci1>;
+-			};
+-		};
+-
+-		pci@9000 {
+-			interrupt-map-mask = <f800 0 0 7>;
+-			interrupt-map = <
+-
+-				/* IDSEL 0x15 */
+-				a800 0 0 1 &mpic b 1
+-				a800 0 0 2 &mpic b 1
+-				a800 0 0 3 &mpic b 1
+-				a800 0 0 4 &mpic b 1>;
+-			interrupt-parent = <&mpic>;
+-			interrupts = <19 2>;
+-			bus-range = <0 0>;
+-			ranges = <02000000 0 a0000000 a0000000 0 20000000
+-				  01000000 0 00000000 e3000000 0 00100000>;
+-			clock-frequency = <3f940aa>;
+-			#interrupt-cells = <1>;
+-			#size-cells = <2>;
+-			#address-cells = <3>;
+-			reg = <9000 1000>;
+-			compatible = "fsl,mpc8540-pci";
+-			device_type = "pci";
+-		};
+-
+ 		mpic: pic@40000 {
+ 			clock-frequency = <0>;
+ 			interrupt-controller;
+@@ -246,4 +149,98 @@
+                         big-endian;
+ 		};
+ 	};
++
++	pci1: pci@e0008000 {
++		interrupt-map-mask = <1f800 0 0 7>;
++		interrupt-map = <
++
++			/* IDSEL 0x10 */
++			08000 0 0 1 &mpic 0 1
++			08000 0 0 2 &mpic 1 1
++			08000 0 0 3 &mpic 2 1
++			08000 0 0 4 &mpic 3 1
++
++			/* IDSEL 0x11 */
++			08800 0 0 1 &mpic 0 1
++			08800 0 0 2 &mpic 1 1
++			08800 0 0 3 &mpic 2 1
++			08800 0 0 4 &mpic 3 1
++
++			/* IDSEL 0x12 (Slot 1) */
++			09000 0 0 1 &mpic 0 1
++			09000 0 0 2 &mpic 1 1
++			09000 0 0 3 &mpic 2 1
++			09000 0 0 4 &mpic 3 1
++
++			/* IDSEL 0x13 (Slot 2) */
++			09800 0 0 1 &mpic 1 1
++			09800 0 0 2 &mpic 2 1
++			09800 0 0 3 &mpic 3 1
++			09800 0 0 4 &mpic 0 1
++
++			/* IDSEL 0x14 (Slot 3) */
++			0a000 0 0 1 &mpic 2 1
++			0a000 0 0 2 &mpic 3 1
++			0a000 0 0 3 &mpic 0 1
++			0a000 0 0 4 &mpic 1 1
++
++			/* IDSEL 0x15 (Slot 4) */
++			0a800 0 0 1 &mpic 3 1
++			0a800 0 0 2 &mpic 0 1
++			0a800 0 0 3 &mpic 1 1
++			0a800 0 0 4 &mpic 2 1
++
++			/* Bus 1 (Tundra Bridge) */
++			/* IDSEL 0x12 (ISA bridge) */
++			19000 0 0 1 &mpic 0 1
++			19000 0 0 2 &mpic 1 1
++			19000 0 0 3 &mpic 2 1
++			19000 0 0 4 &mpic 3 1>;
++		interrupt-parent = <&mpic>;
++		interrupts = <18 2>;
++		bus-range = <0 0>;
++		ranges = <02000000 0 80000000 80000000 0 20000000
++			  01000000 0 00000000 e2000000 0 00100000>;
++		clock-frequency = <3f940aa>;
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		reg = <e0008000 1000>;
++		compatible = "fsl,mpc8540-pci";
++		device_type = "pci";
++
++		i8259@19000 {
++			interrupt-controller;
++			device_type = "interrupt-controller";
++			reg = <19000 0 0 0 1>;
++			#address-cells = <0>;
++			#interrupt-cells = <2>;
++			compatible = "chrp,iic";
++			interrupts = <1>;
++			interrupt-parent = <&pci1>;
++		};
++	};
++
++	pci@e0009000 {
++		interrupt-map-mask = <f800 0 0 7>;
++		interrupt-map = <
++
++			/* IDSEL 0x15 */
++			a800 0 0 1 &mpic b 1
++			a800 0 0 2 &mpic b 1
++			a800 0 0 3 &mpic b 1
++			a800 0 0 4 &mpic b 1>;
++		interrupt-parent = <&mpic>;
++		interrupts = <19 2>;
++		bus-range = <0 0>;
++		ranges = <02000000 0 a0000000 a0000000 0 20000000
++			  01000000 0 00000000 e3000000 0 00100000>;
++		clock-frequency = <3f940aa>;
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		reg = <e0009000 1000>;
++		compatible = "fsl,mpc8540-pci";
++		device_type = "pci";
++	};
+ };
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8544ds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8544ds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8544ds.dts
+@@ -45,16 +45,7 @@
+ 		#interrupt-cells = <2>;
+ 		device_type = "soc";
+ 
+-
+-		ranges = <00001000 e0001000 000ff000
+-			  80000000 80000000 20000000
+-			  a0000000 a0000000 10000000
+-			  b0000000 b0000000 00100000
+-			  c0000000 c0000000 20000000
+-			  b0100000 b0100000 00100000
+-			  e1000000 e1000000 00010000
+-			  e1010000 e1010000 00010000
+-			  e1020000 e1020000 00010000>;
++		ranges = <00000000 e0000000 00100000>;
+ 		reg = <e0000000 00001000>;	// CCSRBAR 1M
+ 		bus-frequency = <0>;		// Filled out by uboot.
+ 
+@@ -147,115 +138,173 @@
+ 			interrupt-parent = <&mpic>;
+ 		};
+ 
+-		pci@8000 {
+-			compatible = "fsl,mpc8540-pci";
+-			device_type = "pci";
+-			interrupt-map-mask = <f800 0 0 7>;
+-			interrupt-map = <
+-
+-				/* IDSEL 0x11 J17 Slot 1 */
+-				8800 0 0 1 &mpic 2 1
+-				8800 0 0 2 &mpic 3 1
+-				8800 0 0 3 &mpic 4 1
+-				8800 0 0 4 &mpic 1 1
+-
+-				/* IDSEL 0x12 J16 Slot 2 */
+-
+-				9000 0 0 1 &mpic 3 1
+-				9000 0 0 2 &mpic 4 1
+-				9000 0 0 3 &mpic 2 1
+-				9000 0 0 4 &mpic 1 1>;
++		global-utilities@e0000 {	//global utilities block
++			compatible = "fsl,mpc8548-guts";
++			reg = <e0000 1000>;
++			fsl,has-rstcr;
++		};
+ 
+-			interrupt-parent = <&mpic>;
+-			interrupts = <18 2>;
+-			bus-range = <0 ff>;
+-			ranges = <02000000 0 c0000000 c0000000 0 20000000
+-				  01000000 0 00000000 e1000000 0 00010000>;
+-			clock-frequency = <3f940aa>;
+-			#interrupt-cells = <1>;
+-			#size-cells = <2>;
+-			#address-cells = <3>;
+-			reg = <8000 1000>;
++		mpic: pic@40000 {
++			clock-frequency = <0>;
++			interrupt-controller;
++			#address-cells = <0>;
++			#interrupt-cells = <2>;
++			reg = <40000 40000>;
++			compatible = "chrp,open-pic";
++			device_type = "open-pic";
++			big-endian;
+ 		};
++	};
+ 
+-		pcie@9000 {
+-			compatible = "fsl,mpc8548-pcie";
+-			device_type = "pci";
+-			#interrupt-cells = <1>;
++	pci@e0008000 {
++		compatible = "fsl,mpc8540-pci";
++		device_type = "pci";
++		interrupt-map-mask = <f800 0 0 7>;
++		interrupt-map = <
++
++			/* IDSEL 0x11 J17 Slot 1 */
++			8800 0 0 1 &mpic 2 1
++			8800 0 0 2 &mpic 3 1
++			8800 0 0 3 &mpic 4 1
++			8800 0 0 4 &mpic 1 1
++
++			/* IDSEL 0x12 J16 Slot 2 */
++
++			9000 0 0 1 &mpic 3 1
++			9000 0 0 2 &mpic 4 1
++			9000 0 0 3 &mpic 2 1
++			9000 0 0 4 &mpic 1 1>;
++
++		interrupt-parent = <&mpic>;
++		interrupts = <18 2>;
++		bus-range = <0 ff>;
++		ranges = <02000000 0 c0000000 c0000000 0 20000000
++			  01000000 0 00000000 e1000000 0 00010000>;
++		clock-frequency = <3f940aa>;
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		reg = <e0008000 1000>;
++	};
++
++	pcie@e0009000 {
++		compatible = "fsl,mpc8548-pcie";
++		device_type = "pci";
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		reg = <e0009000 1000>;
++		bus-range = <0 ff>;
++		ranges = <02000000 0 80000000 80000000 0 20000000
++			  01000000 0 00000000 e1010000 0 00010000>;
++		clock-frequency = <1fca055>;
++		interrupt-parent = <&mpic>;
++		interrupts = <1a 2>;
++		interrupt-map-mask = <f800 0 0 7>;
++		interrupt-map = <
++			/* IDSEL 0x0 */
++			0000 0 0 1 &mpic 4 1
++			0000 0 0 2 &mpic 5 1
++			0000 0 0 3 &mpic 6 1
++			0000 0 0 4 &mpic 7 1
++			>;
++		pcie@0 {
++			reg = <0 0 0 0 0>;
+ 			#size-cells = <2>;
+ 			#address-cells = <3>;
+-			reg = <9000 1000>;
+-			bus-range = <0 ff>;
+-			ranges = <02000000 0 80000000 80000000 0 20000000
+-				  01000000 0 00000000 e1010000 0 00010000>;
+-			clock-frequency = <1fca055>;
+-			interrupt-parent = <&mpic>;
+-			interrupts = <1a 2>;
+-			interrupt-map-mask = <f800 0 0 7>;
+-			interrupt-map = <
+-				/* IDSEL 0x0 */
+-				0000 0 0 1 &mpic 4 1
+-				0000 0 0 2 &mpic 5 1
+-				0000 0 0 3 &mpic 6 1
+-				0000 0 0 4 &mpic 7 1
+-				>;
++			device_type = "pci";
++			ranges = <02000000 0 80000000
++				  02000000 0 80000000
++				  0 20000000
++
++				  01000000 0 00000000
++				  01000000 0 00000000
++				  0 00010000>;
+ 		};
++	};
+ 
+-		pcie@a000 {
+-			compatible = "fsl,mpc8548-pcie";
+-			device_type = "pci";
+-			#interrupt-cells = <1>;
++	pcie@e000a000 {
++		compatible = "fsl,mpc8548-pcie";
++		device_type = "pci";
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		reg = <e000a000 1000>;
++		bus-range = <0 ff>;
++		ranges = <02000000 0 a0000000 a0000000 0 10000000
++			  01000000 0 00000000 e1020000 0 00010000>;
++		clock-frequency = <1fca055>;
++		interrupt-parent = <&mpic>;
++		interrupts = <19 2>;
++		interrupt-map-mask = <f800 0 0 7>;
++		interrupt-map = <
++			/* IDSEL 0x0 */
++			0000 0 0 1 &mpic 0 1
++			0000 0 0 2 &mpic 1 1
++			0000 0 0 3 &mpic 2 1
++			0000 0 0 4 &mpic 3 1
++			>;
++		pcie@0 {
++			reg = <0 0 0 0 0>;
+ 			#size-cells = <2>;
+ 			#address-cells = <3>;
+-			reg = <a000 1000>;
+-			bus-range = <0 ff>;
+-			ranges = <02000000 0 a0000000 a0000000 0 10000000
+-				  01000000 0 00000000 e1020000 0 00010000>;
+-			clock-frequency = <1fca055>;
+-			interrupt-parent = <&mpic>;
+-			interrupts = <19 2>;
+-			interrupt-map-mask = <f800 0 0 7>;
+-			interrupt-map = <
+-				/* IDSEL 0x0 */
+-				0000 0 0 1 &mpic 0 1
+-				0000 0 0 2 &mpic 1 1
+-				0000 0 0 3 &mpic 2 1
+-				0000 0 0 4 &mpic 3 1
+-				>;
++			device_type = "pci";
++			ranges = <02000000 0 a0000000
++				  02000000 0 a0000000
++				  0 10000000
++
++				  01000000 0 00000000
++				  01000000 0 00000000
++				  0 00010000>;
+ 		};
++	};
+ 
+-		pcie@b000 {
+-			compatible = "fsl,mpc8548-pcie";
+-			device_type = "pci";
+-			#interrupt-cells = <1>;
++	pcie@e000b000 {
++		compatible = "fsl,mpc8548-pcie";
++		device_type = "pci";
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		reg = <e000b000 1000>;
++		bus-range = <0 ff>;
++		ranges = <02000000 0 b0000000 b0000000 0 00100000
++			  01000000 0 00000000 b0100000 0 00100000>;
++		clock-frequency = <1fca055>;
++		interrupt-parent = <&mpic>;
++		interrupts = <1b 2>;
++		interrupt-map-mask = <fb00 0 0 0>;
++		interrupt-map = <
++			// IDSEL 0x1c  USB
++			e000 0 0 0 &i8259 c 2
++			e100 0 0 0 &i8259 9 2
++			e200 0 0 0 &i8259 a 2
++			e300 0 0 0 &i8259 b 2
++
++			// IDSEL 0x1d  Audio
++			e800 0 0 0 &i8259 6 2
++
++			// IDSEL 0x1e Legacy
++			f000 0 0 0 &i8259 7 2
++			f100 0 0 0 &i8259 7 2
++
++			// IDSEL 0x1f IDE/SATA
++			f800 0 0 0 &i8259 e 2
++			f900 0 0 0 &i8259 5 2
++		>;
++
++		pcie@0 {
++			reg = <0 0 0 0 0>;
+ 			#size-cells = <2>;
+ 			#address-cells = <3>;
+-			reg = <b000 1000>;
+-			bus-range = <0 ff>;
+-			ranges = <02000000 0 b0000000 b0000000 0 00100000
+-				  01000000 0 00000000 b0100000 0 00100000>;
+-			clock-frequency = <1fca055>;
+-			interrupt-parent = <&mpic>;
+-			interrupts = <1b 2>;
+-			interrupt-map-mask = <fb00 0 0 0>;
+-			interrupt-map = <
+-				// IDSEL 0x1c  USB
+-				e000 0 0 0 &i8259 c 2
+-				e100 0 0 0 &i8259 9 2
+-				e200 0 0 0 &i8259 a 2
+-				e300 0 0 0 &i8259 b 2
+-
+-				// IDSEL 0x1d  Audio
+-				e800 0 0 0 &i8259 6 2
+-
+-				// IDSEL 0x1e Legacy
+-				f000 0 0 0 &i8259 7 2
+-				f100 0 0 0 &i8259 7 2
+-
+-				// IDSEL 0x1f IDE/SATA
+-				f800 0 0 0 &i8259 e 2
+-				f900 0 0 0 &i8259 5 2
+-			>;
++			device_type = "pci";
++			ranges = <02000000 0 b0000000
++				  02000000 0 b0000000
++				  0 00100000
++
++				  01000000 0 00000000
++				  01000000 0 00000000
++				  0 00100000>;
++
+ 			uli1575@0 {
+ 				reg = <0 0 0 0 0>;
+ 				#size-cells = <2>;
+@@ -336,23 +385,6 @@
+ 
+ 		};
+ 
+-		global-utilities@e0000 {	//global utilities block
+-			compatible = "fsl,mpc8548-guts";
+-			reg = <e0000 1000>;
+-			fsl,has-rstcr;
+-		};
+-
+-		mpic: pic@40000 {
+-			clock-frequency = <0>;
+-			interrupt-controller;
+-			#address-cells = <0>;
+-			#interrupt-cells = <2>;
+-			reg = <40000 40000>;
+-			built-in;
+-			compatible = "chrp,open-pic";
+-			device_type = "open-pic";
+-			big-endian;
+-		};
+ 	};
+ 
+ 	flash@ff800000 {
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8555cds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8555cds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8555cds.dts
+@@ -45,7 +45,7 @@
+ 		#interrupt-cells = <2>;
+ 		device_type = "soc";
+ 		ranges = <0 e0000000 00100000>;
+-		reg = <e0000000 00100000>;	// CCSRBAR 1M
++		reg = <e0000000 00001000>;	// CCSRBAR 1M
+ 		bus-frequency = <0>;
+ 
+ 		memory-controller@2000 {
+@@ -137,103 +137,6 @@
+ 			interrupt-parent = <&mpic>;
+ 		};
+ 
+-		pci1: pci@8000 {
+-			interrupt-map-mask = <1f800 0 0 7>;
+-			interrupt-map = <
+-
+-				/* IDSEL 0x10 */
+-				08000 0 0 1 &mpic 0 1
+-				08000 0 0 2 &mpic 1 1
+-				08000 0 0 3 &mpic 2 1
+-				08000 0 0 4 &mpic 3 1
+-
+-				/* IDSEL 0x11 */
+-				08800 0 0 1 &mpic 0 1
+-				08800 0 0 2 &mpic 1 1
+-				08800 0 0 3 &mpic 2 1
+-				08800 0 0 4 &mpic 3 1
+-
+-				/* IDSEL 0x12 (Slot 1) */
+-				09000 0 0 1 &mpic 0 1
+-				09000 0 0 2 &mpic 1 1
+-				09000 0 0 3 &mpic 2 1
+-				09000 0 0 4 &mpic 3 1
+-
+-				/* IDSEL 0x13 (Slot 2) */
+-				09800 0 0 1 &mpic 1 1
+-				09800 0 0 2 &mpic 2 1
+-				09800 0 0 3 &mpic 3 1
+-				09800 0 0 4 &mpic 0 1
+-
+-				/* IDSEL 0x14 (Slot 3) */
+-				0a000 0 0 1 &mpic 2 1
+-				0a000 0 0 2 &mpic 3 1
+-				0a000 0 0 3 &mpic 0 1
+-				0a000 0 0 4 &mpic 1 1
+-
+-				/* IDSEL 0x15 (Slot 4) */
+-				0a800 0 0 1 &mpic 3 1
+-				0a800 0 0 2 &mpic 0 1
+-				0a800 0 0 3 &mpic 1 1
+-				0a800 0 0 4 &mpic 2 1
+-
+-				/* Bus 1 (Tundra Bridge) */
+-				/* IDSEL 0x12 (ISA bridge) */
+-				19000 0 0 1 &mpic 0 1
+-				19000 0 0 2 &mpic 1 1
+-				19000 0 0 3 &mpic 2 1
+-				19000 0 0 4 &mpic 3 1>;
+-			interrupt-parent = <&mpic>;
+-			interrupts = <18 2>;
+-			bus-range = <0 0>;
+-			ranges = <02000000 0 80000000 80000000 0 20000000
+-				  01000000 0 00000000 e2000000 0 00100000>;
+-			clock-frequency = <3f940aa>;
+-			#interrupt-cells = <1>;
+-			#size-cells = <2>;
+-			#address-cells = <3>;
+-			reg = <8000 1000>;
+-			compatible = "fsl,mpc8540-pci";
+-			device_type = "pci";
+-
+-			i8259@19000 {
+-				clock-frequency = <0>;
+-				interrupt-controller;
+-				device_type = "interrupt-controller";
+-				reg = <19000 0 0 0 1>;
+-				#address-cells = <0>;
+-				#interrupt-cells = <2>;
+-				built-in;
+-				compatible = "chrp,iic";
+-				big-endian;
+-				interrupts = <1>;
+-				interrupt-parent = <&pci1>;
+-			};
+-		};
+-
+-		pci@9000 {
+-			interrupt-map-mask = <f800 0 0 7>;
+-			interrupt-map = <
+-
+-				/* IDSEL 0x15 */
+-				a800 0 0 1 &mpic b 1
+-				a800 0 0 2 &mpic b 1
+-				a800 0 0 3 &mpic b 1
+-				a800 0 0 4 &mpic b 1>;
+-			interrupt-parent = <&mpic>;
+-			interrupts = <19 2>;
+-			bus-range = <0 0>;
+-			ranges = <02000000 0 a0000000 a0000000 0 20000000
+-				  01000000 0 00000000 e3000000 0 00100000>;
+-			clock-frequency = <3f940aa>;
+-			#interrupt-cells = <1>;
+-			#size-cells = <2>;
+-			#address-cells = <3>;
+-			reg = <9000 1000>;
+-			compatible = "fsl,mpc8540-pci";
+-			device_type = "pci";
+-		};
+-
+ 		mpic: pic@40000 {
+ 			clock-frequency = <0>;
+ 			interrupt-controller;
+@@ -246,4 +149,98 @@
+                         big-endian;
+ 		};
+ 	};
++
++	pci1: pci@e0008000 {
++		interrupt-map-mask = <1f800 0 0 7>;
++		interrupt-map = <
++
++			/* IDSEL 0x10 */
++			08000 0 0 1 &mpic 0 1
++			08000 0 0 2 &mpic 1 1
++			08000 0 0 3 &mpic 2 1
++			08000 0 0 4 &mpic 3 1
++
++			/* IDSEL 0x11 */
++			08800 0 0 1 &mpic 0 1
++			08800 0 0 2 &mpic 1 1
++			08800 0 0 3 &mpic 2 1
++			08800 0 0 4 &mpic 3 1
++
++			/* IDSEL 0x12 (Slot 1) */
++			09000 0 0 1 &mpic 0 1
++			09000 0 0 2 &mpic 1 1
++			09000 0 0 3 &mpic 2 1
++			09000 0 0 4 &mpic 3 1
++
++			/* IDSEL 0x13 (Slot 2) */
++			09800 0 0 1 &mpic 1 1
++			09800 0 0 2 &mpic 2 1
++			09800 0 0 3 &mpic 3 1
++			09800 0 0 4 &mpic 0 1
++
++			/* IDSEL 0x14 (Slot 3) */
++			0a000 0 0 1 &mpic 2 1
++			0a000 0 0 2 &mpic 3 1
++			0a000 0 0 3 &mpic 0 1
++			0a000 0 0 4 &mpic 1 1
++
++			/* IDSEL 0x15 (Slot 4) */
++			0a800 0 0 1 &mpic 3 1
++			0a800 0 0 2 &mpic 0 1
++			0a800 0 0 3 &mpic 1 1
++			0a800 0 0 4 &mpic 2 1
++
++			/* Bus 1 (Tundra Bridge) */
++			/* IDSEL 0x12 (ISA bridge) */
++			19000 0 0 1 &mpic 0 1
++			19000 0 0 2 &mpic 1 1
++			19000 0 0 3 &mpic 2 1
++			19000 0 0 4 &mpic 3 1>;
++		interrupt-parent = <&mpic>;
++		interrupts = <18 2>;
++		bus-range = <0 0>;
++		ranges = <02000000 0 80000000 80000000 0 20000000
++			  01000000 0 00000000 e2000000 0 00100000>;
++		clock-frequency = <3f940aa>;
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		reg = <e0008000 1000>;
++		compatible = "fsl,mpc8540-pci";
++		device_type = "pci";
++
++		i8259@19000 {
++			interrupt-controller;
++			device_type = "interrupt-controller";
++			reg = <19000 0 0 0 1>;
++			#address-cells = <0>;
++			#interrupt-cells = <2>;
++			compatible = "chrp,iic";
++			interrupts = <1>;
++			interrupt-parent = <&pci1>;
++		};
++	};
++
++	pci@e0009000 {
++		interrupt-map-mask = <f800 0 0 7>;
++		interrupt-map = <
++
++			/* IDSEL 0x15 */
++			a800 0 0 1 &mpic b 1
++			a800 0 0 2 &mpic b 1
++			a800 0 0 3 &mpic b 1
++			a800 0 0 4 &mpic b 1>;
++		interrupt-parent = <&mpic>;
++		interrupts = <19 2>;
++		bus-range = <0 0>;
++		ranges = <02000000 0 a0000000 a0000000 0 20000000
++			  01000000 0 00000000 e3000000 0 00100000>;
++		clock-frequency = <3f940aa>;
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		reg = <e0009000 1000>;
++		compatible = "fsl,mpc8540-pci";
++		device_type = "pci";
++	};
+ };
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8560ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8560ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8560ads.dts
+@@ -133,96 +133,6 @@
+ 			phy-handle = <&phy1>;
+ 		};
+ 
+-		pci@8000 {
+-			#interrupt-cells = <1>;
+-			#size-cells = <2>;
+-			#address-cells = <3>;
+-			compatible = "fsl,mpc8540-pcix", "fsl,mpc8540-pci";
+-			device_type = "pci";
+-			reg = <8000 1000>;
+-			clock-frequency = <3f940aa>;
+-			interrupt-map-mask = <f800 0 0 7>;
+-			interrupt-map = <
+-
+-					/* IDSEL 0x2 */
+-					 1000 0 0 1 &mpic 1 1
+-					 1000 0 0 2 &mpic 2 1
+-					 1000 0 0 3 &mpic 3 1
+-					 1000 0 0 4 &mpic 4 1
+-
+-					/* IDSEL 0x3 */
+-					 1800 0 0 1 &mpic 4 1
+-					 1800 0 0 2 &mpic 1 1
+-					 1800 0 0 3 &mpic 2 1
+-					 1800 0 0 4 &mpic 3 1
+-
+-					/* IDSEL 0x4 */
+-					 2000 0 0 1 &mpic 3 1
+-					 2000 0 0 2 &mpic 4 1
+-					 2000 0 0 3 &mpic 1 1
+-					 2000 0 0 4 &mpic 2 1
+-
+-					/* IDSEL 0x5  */
+-					 2800 0 0 1 &mpic 2 1
+-					 2800 0 0 2 &mpic 3 1
+-					 2800 0 0 3 &mpic 4 1
+-					 2800 0 0 4 &mpic 1 1
+-
+-					/* IDSEL 12 */
+-					 6000 0 0 1 &mpic 1 1
+-					 6000 0 0 2 &mpic 2 1
+-					 6000 0 0 3 &mpic 3 1
+-					 6000 0 0 4 &mpic 4 1
+-
+-					/* IDSEL 13 */
+-					 6800 0 0 1 &mpic 4 1
+-					 6800 0 0 2 &mpic 1 1
+-					 6800 0 0 3 &mpic 2 1
+-					 6800 0 0 4 &mpic 3 1
+-
+-					/* IDSEL 14*/
+-					 7000 0 0 1 &mpic 3 1
+-					 7000 0 0 2 &mpic 4 1
+-					 7000 0 0 3 &mpic 1 1
+-					 7000 0 0 4 &mpic 2 1
+-
+-					/* IDSEL 15 */
+-					 7800 0 0 1 &mpic 2 1
+-					 7800 0 0 2 &mpic 3 1
+-					 7800 0 0 3 &mpic 4 1
+-					 7800 0 0 4 &mpic 1 1
+-
+-					/* IDSEL 18 */
+-					 9000 0 0 1 &mpic 1 1
+-					 9000 0 0 2 &mpic 2 1
+-					 9000 0 0 3 &mpic 3 1
+-					 9000 0 0 4 &mpic 4 1
+-
+-					/* IDSEL 19 */
+-					 9800 0 0 1 &mpic 4 1
+-					 9800 0 0 2 &mpic 1 1
+-					 9800 0 0 3 &mpic 2 1
+-					 9800 0 0 4 &mpic 3 1
+-
+-					/* IDSEL 20 */
+-					 a000 0 0 1 &mpic 3 1
+-					 a000 0 0 2 &mpic 4 1
+-					 a000 0 0 3 &mpic 1 1
+-					 a000 0 0 4 &mpic 2 1
+-
+-					/* IDSEL 21 */
+-					 a800 0 0 1 &mpic 2 1
+-					 a800 0 0 2 &mpic 3 1
+-					 a800 0 0 3 &mpic 4 1
+-					 a800 0 0 4 &mpic 1 1>;
+-
+-			interrupt-parent = <&mpic>;
+-			interrupts = <18 2>;
+-			bus-range = <0 0>;
+-			ranges = <02000000 0 80000000 80000000 0 20000000
+-				  01000000 0 00000000 e2000000 0 01000000>;
+-		};
+-
+ 		mpic: pic@40000 {
+ 			interrupt-controller;
+ 			#address-cells = <0>;
+@@ -325,4 +235,94 @@
+ 			};
+ 		};
+ 	};
++
++	pci@e0008000 {
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		compatible = "fsl,mpc8540-pcix", "fsl,mpc8540-pci";
++		device_type = "pci";
++		reg = <e0008000 1000>;
++		clock-frequency = <3f940aa>;
++		interrupt-map-mask = <f800 0 0 7>;
++		interrupt-map = <
++
++				/* IDSEL 0x2 */
++				 1000 0 0 1 &mpic 1 1
++				 1000 0 0 2 &mpic 2 1
++				 1000 0 0 3 &mpic 3 1
++				 1000 0 0 4 &mpic 4 1
++
++				/* IDSEL 0x3 */
++				 1800 0 0 1 &mpic 4 1
++				 1800 0 0 2 &mpic 1 1
++				 1800 0 0 3 &mpic 2 1
++				 1800 0 0 4 &mpic 3 1
++
++				/* IDSEL 0x4 */
++				 2000 0 0 1 &mpic 3 1
++				 2000 0 0 2 &mpic 4 1
++				 2000 0 0 3 &mpic 1 1
++				 2000 0 0 4 &mpic 2 1
++
++				/* IDSEL 0x5  */
++				 2800 0 0 1 &mpic 2 1
++				 2800 0 0 2 &mpic 3 1
++				 2800 0 0 3 &mpic 4 1
++				 2800 0 0 4 &mpic 1 1
++
++				/* IDSEL 12 */
++				 6000 0 0 1 &mpic 1 1
++				 6000 0 0 2 &mpic 2 1
++				 6000 0 0 3 &mpic 3 1
++				 6000 0 0 4 &mpic 4 1
++
++				/* IDSEL 13 */
++				 6800 0 0 1 &mpic 4 1
++				 6800 0 0 2 &mpic 1 1
++				 6800 0 0 3 &mpic 2 1
++				 6800 0 0 4 &mpic 3 1
++
++				/* IDSEL 14*/
++				 7000 0 0 1 &mpic 3 1
++				 7000 0 0 2 &mpic 4 1
++				 7000 0 0 3 &mpic 1 1
++				 7000 0 0 4 &mpic 2 1
++
++				/* IDSEL 15 */
++				 7800 0 0 1 &mpic 2 1
++				 7800 0 0 2 &mpic 3 1
++				 7800 0 0 3 &mpic 4 1
++				 7800 0 0 4 &mpic 1 1
++
++				/* IDSEL 18 */
++				 9000 0 0 1 &mpic 1 1
++				 9000 0 0 2 &mpic 2 1
++				 9000 0 0 3 &mpic 3 1
++				 9000 0 0 4 &mpic 4 1
++
++				/* IDSEL 19 */
++				 9800 0 0 1 &mpic 4 1
++				 9800 0 0 2 &mpic 1 1
++				 9800 0 0 3 &mpic 2 1
++				 9800 0 0 4 &mpic 3 1
++
++				/* IDSEL 20 */
++				 a000 0 0 1 &mpic 3 1
++				 a000 0 0 2 &mpic 4 1
++				 a000 0 0 3 &mpic 1 1
++				 a000 0 0 4 &mpic 2 1
++
++				/* IDSEL 21 */
++				 a800 0 0 1 &mpic 2 1
++				 a800 0 0 2 &mpic 3 1
++				 a800 0 0 3 &mpic 4 1
++				 a800 0 0 4 &mpic 1 1>;
++
++		interrupt-parent = <&mpic>;
++		interrupts = <18 2>;
++		bus-range = <0 0>;
++		ranges = <02000000 0 80000000 80000000 0 20000000
++			  01000000 0 00000000 e2000000 0 01000000>;
++	};
+ };
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8641_hpcn.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8641_hpcn.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8641_hpcn.dts
+@@ -57,11 +57,7 @@
+ 		#size-cells = <1>;
+ 		#interrupt-cells = <2>;
+ 		device_type = "soc";
+-		ranges = <00001000 f8001000 000ff000
+-			  80000000 80000000 20000000
+-			  e2000000 e2000000 00100000
+-			  a0000000 a0000000 20000000
+-			  e3000000 e3000000 00100000>;
++		ranges = <00000000 f8000000 00100000>;
+ 		reg = <f8000000 00001000>;	// CCSRBAR
+ 		bus-frequency = <0>;
+ 
+@@ -208,50 +204,75 @@
+ 			interrupt-parent = <&mpic>;
+ 		};
+ 
+-		pcie@8000 {
+-			compatible = "fsl,mpc8641-pcie";
+-			device_type = "pci";
+-			#interrupt-cells = <1>;
++		mpic: pic@40000 {
++			clock-frequency = <0>;
++			interrupt-controller;
++			#address-cells = <0>;
++			#interrupt-cells = <2>;
++			reg = <40000 40000>;
++			compatible = "chrp,open-pic";
++			device_type = "open-pic";
++			big-endian;
++		};
++	};
++
++	pcie@f8008000 {
++		compatible = "fsl,mpc8641-pcie";
++		device_type = "pci";
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		reg = <f8008000 1000>;
++		bus-range = <0 ff>;
++		ranges = <02000000 0 80000000 80000000 0 20000000
++			  01000000 0 00000000 e2000000 0 00100000>;
++		clock-frequency = <1fca055>;
++		interrupt-parent = <&mpic>;
++		interrupts = <18 2>;
++		interrupt-map-mask = <fb00 0 0 0>;
++		interrupt-map = <
++			/* IDSEL 0x11 */
++			8800 0 0 1 &i8259 9 2
++			8800 0 0 2 &i8259 a 2
++			8800 0 0 3 &i8259 b 2
++			8800 0 0 4 &i8259 c 2
++
++			/* IDSEL 0x12 */
++			9000 0 0 1 &i8259 a 2
++			9000 0 0 2 &i8259 b 2
++			9000 0 0 3 &i8259 c 2
++			9000 0 0 4 &i8259 9 2
++
++			// IDSEL 0x1c  USB
++			e000 0 0 0 &i8259 c 2
++			e100 0 0 0 &i8259 9 2
++			e200 0 0 0 &i8259 a 2
++			e300 0 0 0 &i8259 b 2
++
++			// IDSEL 0x1d  Audio
++			e800 0 0 0 &i8259 6 2
++
++			// IDSEL 0x1e Legacy
++			f000 0 0 0 &i8259 7 2
++			f100 0 0 0 &i8259 7 2
++
++			// IDSEL 0x1f IDE/SATA
++			f800 0 0 0 &i8259 e 2
++			f900 0 0 0 &i8259 5 2
++			>;
++
++		pcie@0 {
++			reg = <0 0 0 0 0>;
+ 			#size-cells = <2>;
+ 			#address-cells = <3>;
+-			reg = <8000 1000>;
+-			bus-range = <0 ff>;
+-			ranges = <02000000 0 80000000 80000000 0 20000000
+-				  01000000 0 00000000 e2000000 0 00100000>;
+-			clock-frequency = <1fca055>;
+-			interrupt-parent = <&mpic>;
+-			interrupts = <18 2>;
+-			interrupt-map-mask = <fb00 0 0 0>;
+-			interrupt-map = <
+-				/* IDSEL 0x11 */
+-				8800 0 0 1 &i8259 9 2
+-				8800 0 0 2 &i8259 a 2
+-				8800 0 0 3 &i8259 b 2
+-				8800 0 0 4 &i8259 c 2
+-
+-				/* IDSEL 0x12 */
+-				9000 0 0 1 &i8259 a 2
+-				9000 0 0 2 &i8259 b 2
+-				9000 0 0 3 &i8259 c 2
+-				9000 0 0 4 &i8259 9 2
+-
+-				// IDSEL 0x1c  USB
+-				e000 0 0 0 &i8259 c 2
+-				e100 0 0 0 &i8259 9 2
+-				e200 0 0 0 &i8259 a 2
+-				e300 0 0 0 &i8259 b 2
+-
+-				// IDSEL 0x1d  Audio
+-				e800 0 0 0 &i8259 6 2
+-
+-				// IDSEL 0x1e Legacy
+-				f000 0 0 0 &i8259 7 2
+-				f100 0 0 0 &i8259 7 2
+-
+-				// IDSEL 0x1f IDE/SATA
+-				f800 0 0 0 &i8259 e 2
+-				f900 0 0 0 &i8259 5 2
+-				>;
++			device_type = "pci";
++			ranges = <02000000 0 80000000
++				  02000000 0 80000000
++				  0 20000000
++
++				  01000000 0 00000000
++				  01000000 0 00000000
++				  0 00100000>;
+ 			uli1575@0 {
+ 				reg = <0 0 0 0 0>;
+ 				#size-cells = <2>;
+@@ -339,43 +360,30 @@
+ 					};
+ 				};
+ 			};
+-
+-		};
+-
+-		pcie@9000 {
+-			compatible = "fsl,mpc8641-pcie";
+-			device_type = "pci";
+-			#interrupt-cells = <1>;
+-			#size-cells = <2>;
+-			#address-cells = <3>;
+-			reg = <9000 1000>;
+-			bus-range = <0 ff>;
+-			ranges = <02000000 0 a0000000 a0000000 0 20000000
+-				  01000000 0 00000000 e3000000 0 00100000>;
+-			clock-frequency = <1fca055>;
+-			interrupt-parent = <&mpic>;
+-			interrupts = <19 2>;
+-			interrupt-map-mask = <f800 0 0 7>;
+-			interrupt-map = <
+-				/* IDSEL 0x0 */
+-				0000 0 0 1 &mpic 4 1
+-				0000 0 0 2 &mpic 5 1
+-				0000 0 0 3 &mpic 6 1
+-				0000 0 0 4 &mpic 7 1
+-				>;
+ 		};
++	};
+ 
+-		mpic: pic@40000 {
+-			clock-frequency = <0>;
+-			interrupt-controller;
+-			#address-cells = <0>;
+-			#interrupt-cells = <2>;
+-			reg = <40000 40000>;
+-			built-in;
+-			compatible = "chrp,open-pic";
+-			device_type = "open-pic";
+-			big-endian;
+-		};
++	pcie@f8009000 {
++		compatible = "fsl,mpc8641-pcie";
++		device_type = "pci";
++		#interrupt-cells = <1>;
++		#size-cells = <2>;
++		#address-cells = <3>;
++		reg = <f8009000 1000>;
++		bus-range = <0 ff>;
++		ranges = <02000000 0 a0000000 a0000000 0 20000000
++			  01000000 0 00000000 e3000000 0 00100000>;
++		clock-frequency = <1fca055>;
++		interrupt-parent = <&mpic>;
++		interrupts = <19 2>;
++		interrupt-map-mask = <f800 0 0 7>;
++		interrupt-map = <
++			/* IDSEL 0x0 */
++			0000 0 0 1 &mpic 4 1
++			0000 0 0 2 &mpic 5 1
++			0000 0 0 3 &mpic 6 1
++			0000 0 0 4 &mpic 7 1
++			>;
+ 	};
+ 
+ 	flash@ff800000 {
+Index: linux-2.6.18/mvl_patches/pro50-1003.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1003.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1003);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

@@ -1,0 +1,718 @@
+#! /usr/bin/env bash
+# Patch: -pro_MVL_POWERPC_Merge_pci_process_bridge_OF_ranges
+# Date: Wed Mar  5 11:42:38 2008
+# MR: 26747
+# Disposition: backport from
+# git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# Adjustments:
+#     Minor changes to make it apply and remove the previous
+#     temporary PCI version.
+# 
+# From 13dccb9e65dc0fa4de83e5bd5639f7a7f3f6fb9e Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Tue, 11 Dec 2007 14:48:18 +1100
+# Subject: [PATCH] [POWERPC] Merge pci_process_bridge_OF_ranges()
+# 
+# This merges the 32-bit and 64-bit implementations of
+# pci_process_bridge_OF_ranges().  The new function is cleaner than both
+# the old ones, and supports 64 bits ranges on ppc32 which is necessary
+# for the 4xx port.
+# 
+# It also adds some better (hopefully) output to the kernel log which
+# should help diagnose problems and makes better use of existing OF
+# parsing helpers (avoiding a few bugs of both implementations along
+# the way).
+# 
+# There are still a few unfortunate ifdef's but there is no way around
+# these for now at least not until some other bits of the PCI code are
+# made common.
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=839
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26747
+Disposition: backport from
+git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+Adjustments:
+    Minor changes to make it apply and remove the previous
+    temporary PCI version.
+
+From 13dccb9e65dc0fa4de83e5bd5639f7a7f3f6fb9e Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Tue, 11 Dec 2007 14:48:18 +1100
+Subject: [PATCH] [POWERPC] Merge pci_process_bridge_OF_ranges()
+
+This merges the 32-bit and 64-bit implementations of
+pci_process_bridge_OF_ranges().  The new function is cleaner than both
+the old ones, and supports 64 bits ranges on ppc32 which is necessary
+for the 4xx port.
+
+It also adds some better (hopefully) output to the kernel log which
+should help diagnose problems and makes better use of existing OF
+parsing helpers (avoiding a few bugs of both implementations along
+the way).
+
+There are still a few unfortunate ifdef's but there is no way around
+these for now at least not until some other bits of the PCI code are
+made common.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/kernel/pci-common.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci-common.c
++++ linux-2.6.18/arch/powerpc/kernel/pci-common.c
+@@ -464,3 +464,180 @@ void pci_resource_to_user(const struct p
+ 	*start = rsrc->start - offset;
+ 	*end = rsrc->end - offset;
+ }
++
++/**
++ * pci_process_bridge_OF_ranges - Parse PCI bridge resources from device tree
++ * @hose: newly allocated pci_controller to be setup
++ * @dev: device node of the host bridge
++ * @primary: set if primary bus (32 bits only, soon to be deprecated)
++ *
++ * This function will parse the "ranges" property of a PCI host bridge device
++ * node and setup the resource mapping of a pci controller based on its
++ * content.
++ *
++ * Life would be boring if it wasn't for a few issues that we have to deal
++ * with here:
++ *
++ *   - We can only cope with one IO space range and up to 3 Memory space
++ *     ranges. However, some machines (thanks Apple !) tend to split their
++ *     space into lots of small contiguous ranges. So we have to coalesce.
++ *
++ *   - We can only cope with all memory ranges having the same offset
++ *     between CPU addresses and PCI addresses. Unfortunately, some bridges
++ *     are setup for a large 1:1 mapping along with a small "window" which
++ *     maps PCI address 0 to some arbitrary high address of the CPU space in
++ *     order to give access to the ISA memory hole.
++ *     The way out of here that I've chosen for now is to always set the
++ *     offset based on the first resource found, then override it if we
++ *     have a different offset and the previous was set by an ISA hole.
++ *
++ *   - Some busses have IO space not starting at 0, which causes trouble with
++ *     the way we do our IO resource renumbering. The code somewhat deals with
++ *     it for 64 bits but I would expect problems on 32 bits.
++ *
++ *   - Some 32 bits platforms such as 4xx can have physical space larger than
++ *     32 bits so we need to use 64 bits values for the parsing
++ */
++void __devinit pci_process_bridge_OF_ranges(struct pci_controller *hose,
++					    struct device_node *dev,
++					    int primary)
++{
++	const u32 *ranges;
++	int rlen;
++	int pna = of_n_addr_cells(dev);
++	int np = pna + 5;
++	int memno = 0, isa_hole = -1;
++	u32 pci_space;
++	unsigned long long pci_addr, cpu_addr, pci_next, cpu_next, size;
++	unsigned long long isa_mb = 0;
++	struct resource *res;
++
++	printk(KERN_INFO "PCI host bridge %s %s ranges:\n",
++	       dev->full_name, primary ? "(primary)" : "");
++
++	/* Get ranges property */
++	ranges = of_get_property(dev, "ranges", &rlen);
++	if (ranges == NULL)
++		return;
++
++	/* Parse it */
++	while ((rlen -= np * 4) >= 0) {
++		/* Read next ranges element */
++		pci_space = ranges[0];
++		pci_addr = of_read_number(ranges + 1, 2);
++		cpu_addr = of_translate_address(dev, ranges + 3);
++		size = of_read_number(ranges + pna + 3, 2);
++		ranges += np;
++		if (cpu_addr == OF_BAD_ADDR || size == 0)
++			continue;
++
++		/* Now consume following elements while they are contiguous */
++		for (; rlen >= np * sizeof(u32);
++		     ranges += np, rlen -= np * 4) {
++			if (ranges[0] != pci_space)
++				break;
++			pci_next = of_read_number(ranges + 1, 2);
++			cpu_next = of_translate_address(dev, ranges + 3);
++			if (pci_next != pci_addr + size ||
++			    cpu_next != cpu_addr + size)
++				break;
++			size += of_read_number(ranges + pna + 3, 2);
++		}
++
++		/* Act based on address space type */
++		res = NULL;
++		switch ((pci_space >> 24) & 0x3) {
++		case 1:		/* PCI IO space */
++			printk(KERN_INFO
++			       "  IO 0x%016llx..0x%016llx -> 0x%016llx\n",
++			       cpu_addr, cpu_addr + size - 1, pci_addr);
++
++			/* We support only one IO range */
++			if (hose->pci_io_size) {
++				printk(KERN_INFO
++				       " \\--> Skipped (too many) !\n");
++				continue;
++			}
++#ifdef CONFIG_PPC32
++			/* On 32 bits, limit I/O space to 16MB */
++			if (size > 0x01000000)
++				size = 0x01000000;
++
++			/* 32 bits needs to map IOs here */
++			hose->io_base_virt = ioremap(cpu_addr, size);
++
++			/* Expect trouble if pci_addr is not 0 */
++			if (primary)
++				isa_io_base =
++					(unsigned long)hose->io_base_virt;
++#endif /* CONFIG_PPC32 */
++			/* pci_io_size and io_base_phys always represent IO
++			 * space starting at 0 so we factor in pci_addr
++			 */
++			hose->pci_io_size = pci_addr + size;
++			hose->io_base_phys = cpu_addr - pci_addr;
++
++			/* Build resource */
++			res = &hose->io_resource;
++			res->flags = IORESOURCE_IO;
++			res->start = pci_addr;
++			break;
++		case 2:		/* PCI Memory space */
++			printk(KERN_INFO
++			       " MEM 0x%016llx..0x%016llx -> 0x%016llx %s\n",
++			       cpu_addr, cpu_addr + size - 1, pci_addr,
++			       (pci_space & 0x40000000) ? "Prefetch" : "");
++
++			/* We support only 3 memory ranges */
++			if (memno >= 3) {
++				printk(KERN_INFO
++				       " \\--> Skipped (too many) !\n");
++				continue;
++			}
++			/* Handles ISA memory hole space here */
++			if (pci_addr == 0) {
++				isa_mb = cpu_addr;
++				isa_hole = memno;
++				if (primary || isa_mem_base == 0)
++					isa_mem_base = cpu_addr;
++			}
++
++			/* We get the PCI/Mem offset from the first range or
++			 * the, current one if the offset came from an ISA
++			 * hole. If they don't match, bugger.
++			 */
++			if (memno == 0 ||
++			    (isa_hole >= 0 && pci_addr != 0 &&
++			     hose->pci_mem_offset == isa_mb))
++				hose->pci_mem_offset = cpu_addr - pci_addr;
++			else if (pci_addr != 0 &&
++				 hose->pci_mem_offset != cpu_addr - pci_addr) {
++				printk(KERN_INFO
++				       " \\--> Skipped (offset mismatch) !\n");
++				continue;
++			}
++
++			/* Build resource */
++			res = &hose->mem_resources[memno++];
++			res->flags = IORESOURCE_MEM;
++			if (pci_space & 0x40000000)
++				res->flags |= IORESOURCE_PREFETCH;
++			res->start = cpu_addr;
++			break;
++		}
++		if (res != NULL) {
++			res->name = dev->full_name;
++			res->end = res->start + size - 1;
++			res->parent = NULL;
++			res->sibling = NULL;
++			res->child = NULL;
++		}
++	}
++
++	/* Out of paranoia, let's put the ISA hole last if any */
++	if (isa_hole >= 0 && memno > 0 && isa_hole != (memno-1)) {
++		struct resource tmp = hose->mem_resources[isa_hole];
++		hose->mem_resources[isa_hole] = hose->mem_resources[memno-1];
++		hose->mem_resources[memno-1] = tmp;
++	}
++}
+Index: linux-2.6.18/arch/powerpc/kernel/pci_32.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_32.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_32.c
+@@ -858,141 +858,6 @@ pci_device_from_OF_node(struct device_no
+ EXPORT_SYMBOL(pci_device_from_OF_node);
+ 
+ 
+-static inline u64 pci_get_range64(u32 *r)
+-{
+-	return (((u64)r[0] << 32) | r[1]);
+-}
+-
+-
+-void __init
+-pci_process_bridge_OF_ranges(struct pci_controller *hose,
+-			   struct device_node *dev, int primary)
+-{
+-	static unsigned int static_lc_ranges[256] __initdata;
+-	const unsigned int *dt_ranges;
+-	unsigned int *lc_ranges, *ranges, *prev;
+-	int rlen = 0, orig_rlen;
+-	int memno = 0;
+-	struct resource *res;
+-	u32 prev_pci_space, pci_space;
+-	u64 prev_pci_addr, pci_addr;
+-	u64 prev_size, size;
+-	phys_addr_t cpu_phys_addr;
+-	
+-	int np, na = of_n_addr_cells(dev);
+-	np = na + 5;
+-
+-	/* First we try to merge ranges to fix a problem with some pmacs
+-	 * that can have more than 3 ranges, fortunately using contiguous
+-	 * addresses -- BenH
+-	 */
+-	dt_ranges = of_get_property(dev, "ranges", &rlen);
+-	if (!dt_ranges)
+-		return;
+-	/* Sanity check, though hopefully that never happens */
+-	if (rlen > sizeof(static_lc_ranges)) {
+-		printk(KERN_WARNING "OF ranges property too large !\n");
+-		rlen = sizeof(static_lc_ranges);
+-	}
+-	lc_ranges = static_lc_ranges;
+-	memcpy(lc_ranges, dt_ranges, rlen);
+-	orig_rlen = rlen;
+-
+-	/* Let's work on a copy of the "ranges" property instead of damaging
+-	 * the device-tree image in memory
+-	 */
+-	ranges = lc_ranges;
+-	prev = NULL;
+-	while ((rlen -= np * sizeof(unsigned int)) >= 0) {
+-		if (prev) {
+-			prev_pci_space = prev[0];
+-			prev_pci_addr = pci_get_range64(&prev[1]);
+-			prev_size = pci_get_range64(&prev[na+3]);
+-			pci_space = ranges[0];
+-			pci_addr = pci_get_range64(&ranges[1]);
+-			if ((prev_pci_space == pci_space) && 
+-			    ((prev_pci_addr + prev_size) == pci_addr)) {
+-				size = pci_get_range64(&ranges[na+3]);
+-				prev_size += size;
+-				ranges[0] = 0;
+-				prev[na+3] = (u32)((prev_size >> 32) & 0xffffffff);
+-				prev[na+4] = (u32)(prev_size & 0xffffffff);
+-				ranges += np;
+-				continue;
+-			}
+-		}
+-		prev = ranges;
+-		ranges += np;
+-	}
+-
+-	/*
+-	 * The ranges property is laid out as an array of elements,
+-	 * each of which comprises:
+-	 *   cells 0 - 2:	a PCI address
+-	 *   cells 3 or 3+4:	a CPU physical address
+-	 *			(size depending on dev->n_addr_cells)
+-	 *   cells 4+5 or 5+6:	the size of the range
+-	 */
+-	ranges = lc_ranges;
+-	rlen = orig_rlen;
+-	while (ranges && (rlen -= np * sizeof(unsigned int)) >= 0) {
+-		res = NULL;
+-		size = pci_get_range64(&ranges[na+3]);
+-		pci_space = ranges[0] >> 24;
+-		switch (pci_space & 0x3) {
+-		case 1:		/* I/O space */
+-			if (ranges[2] != 0)
+-				break;
+-			hose->io_base_phys = of_translate_address(dev, &ranges[3]);
+-			/* limit I/O space to 16MB */
+-			if (size > 0x01000000)
+-				size = 0x01000000;
+-			hose->io_base_virt = ioremap(hose->io_base_phys, size);
+-			if (primary)
+-				isa_io_base = (unsigned long) hose->io_base_virt;
+-			res = &hose->io_resource;
+-			res->flags = IORESOURCE_IO;
+-			res->start = pci_get_range64(&ranges[1]);
+-			DBG("PCI: IO 0x%llx -> 0x%llx\n",
+-			    (u64)res->start, (u64)res->start + size - 1);
+-			break;
+-		case 2:		/* memory space */
+-			memno = 0;
+-			if (ranges[1] == 0 && ranges[2] == 0
+-			    && ranges[na+4] <= (16 << 20)) {
+-				/* 1st 16MB, i.e. ISA memory area */
+-				if (primary)
+-					isa_mem_base = ranges[na+2];
+-				memno = 1;
+-			}
+-			while (memno < 3 && hose->mem_resources[memno].flags)
+-				++memno;
+-			pci_addr = pci_get_range64(&ranges[1]);
+-			cpu_phys_addr = of_translate_address(dev, &ranges[3]);
+-			if (memno == 0)
+-				hose->pci_mem_offset = (u64)cpu_phys_addr - pci_addr;
+-			if (memno < 3) {
+-				res = &hose->mem_resources[memno];
+-				res->flags = IORESOURCE_MEM;
+-				if(ranges[0] & 0x40000000)
+-					res->flags |= IORESOURCE_PREFETCH;
+-				res->start = cpu_phys_addr;
+-				DBG("PCI: MEM[%d] 0x%llx -> 0x%llx\n", memno,
+-				    (u64)res->start, (u64)res->start + size - 1);
+-			}
+-			break;
+-		}
+-		if (res != NULL) {
+-			res->name = dev->full_name;
+-			res->end = res->start + size - 1;
+-			res->parent = NULL;
+-			res->sibling = NULL;
+-			res->child = NULL;
+-		}
+-		ranges += np;
+-	}
+-}
+-
+ /* We create the "pci-OF-bus-map" property now so it appears in the
+  * /proc device tree
+  */
+Index: linux-2.6.18/arch/powerpc/kernel/pci_64.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_64.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_64.c
+@@ -567,99 +567,6 @@ int pci_proc_domain(struct pci_bus *bus)
+ 	return hose->buid != 0;
+ }
+ 
+-void __devinit pci_process_bridge_OF_ranges(struct pci_controller *hose,
+-					    struct device_node *dev, int prim)
+-{
+-	const unsigned int *ranges;
+-	unsigned int pci_space;
+-	unsigned long size;
+-	int rlen = 0;
+-	int memno = 0;
+-	struct resource *res;
+-	int np, na = of_n_addr_cells(dev);
+-	unsigned long pci_addr, cpu_phys_addr;
+-
+-	np = na + 5;
+-
+-	/* From "PCI Binding to 1275"
+-	 * The ranges property is laid out as an array of elements,
+-	 * each of which comprises:
+-	 *   cells 0 - 2:	a PCI address
+-	 *   cells 3 or 3+4:	a CPU physical address
+-	 *			(size depending on dev->n_addr_cells)
+-	 *   cells 4+5 or 5+6:	the size of the range
+-	 */
+-	ranges = of_get_property(dev, "ranges", &rlen);
+-	if (ranges == NULL)
+-		return;
+-	hose->io_base_phys = 0;
+-	while ((rlen -= np * sizeof(unsigned int)) >= 0) {
+-		res = NULL;
+-		pci_space = ranges[0];
+-		pci_addr = ((unsigned long)ranges[1] << 32) | ranges[2];
+-		cpu_phys_addr = of_translate_address(dev, &ranges[3]);
+-		size = ((unsigned long)ranges[na+3] << 32) | ranges[na+4];
+-		ranges += np;
+-		if (size == 0)
+-			continue;
+-
+-		/* Now consume following elements while they are contiguous */
+-		while (rlen >= np * sizeof(unsigned int)) {
+-			unsigned long addr, phys;
+-
+-			if (ranges[0] != pci_space)
+-				break;
+-			addr = ((unsigned long)ranges[1] << 32) | ranges[2];
+-			phys = ranges[3];
+-			if (na >= 2)
+-				phys = (phys << 32) | ranges[4];
+-			if (addr != pci_addr + size ||
+-			    phys != cpu_phys_addr + size)
+-				break;
+-
+-			size += ((unsigned long)ranges[na+3] << 32)
+-				| ranges[na+4];
+-			ranges += np;
+-			rlen -= np * sizeof(unsigned int);
+-		}
+-
+-		switch ((pci_space >> 24) & 0x3) {
+-		case 1:		/* I/O space */
+-			hose->io_base_phys = cpu_phys_addr - pci_addr;
+-			/* handle from 0 to top of I/O window */
+-			hose->pci_io_size = pci_addr + size;
+-
+-			res = &hose->io_resource;
+-			res->flags = IORESOURCE_IO;
+-			res->start = pci_addr;
+-			DBG("phb%d: IO 0x%lx -> 0x%lx\n", hose->global_number,
+-				    res->start, res->start + size - 1);
+-			break;
+-		case 2:		/* memory space */
+-			memno = 0;
+-			while (memno < 3 && hose->mem_resources[memno].flags)
+-				++memno;
+-
+-			if (memno == 0)
+-				hose->pci_mem_offset = cpu_phys_addr - pci_addr;
+-			if (memno < 3) {
+-				res = &hose->mem_resources[memno];
+-				res->flags = IORESOURCE_MEM;
+-				res->start = cpu_phys_addr;
+-				DBG("phb%d: MEM 0x%lx -> 0x%lx\n", hose->global_number,
+-					    res->start, res->start + size - 1);
+-			}
+-			break;
+-		}
+-		if (res != NULL) {
+-			res->name = dev->full_name;
+-			res->end = res->start + size - 1;
+-			res->parent = NULL;
+-			res->sibling = NULL;
+-			res->child = NULL;
+-		}
+-	}
+-}
+ 
+ #ifdef CONFIG_HOTPLUG
+ 
+Index: linux-2.6.18/include/asm-powerpc/pci-bridge.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pci-bridge.h
++++ linux-2.6.18/include/asm-powerpc/pci-bridge.h
+@@ -37,6 +37,9 @@ struct pci_controller {
+ 	void *io_base_alloc;
+ #endif
+ 	resource_size_t io_base_phys;
++#ifndef CONFIG_PPC64
++	resource_size_t pci_io_size;
++#endif
+ 
+ 	/* Some machines (PReP) have a non 1:1 mapping of
+ 	 * the PCI memory space in the CPU bus space
+Index: linux-2.6.18/mvl_patches/pro50-0839.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0839.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(839);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

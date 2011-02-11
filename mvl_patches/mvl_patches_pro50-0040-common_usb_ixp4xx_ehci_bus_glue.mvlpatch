@@ -1,0 +1,469 @@
+#! /usr/bin/env bash
+# Patch: -common_usb_ixp4xx_ehci_bus_glue
+# Date: Fri Jun 15 10:09:43 2007
+# Source: http://www.mail-archive.com/linux-usb-devel@lists.sourceforge.net/msg53598.html
+# MR: 23304
+# Type: Enhancement
+# Disposition: Backport from linux-usb-devel
+# Description:
+#     
+# 
+# This patch adds support for Intel IXP4XX EHCI USB controller.
+# 
+# Since it's MMR and descriptors are represented in big-endian format then 
+# this patch is to be applied after the following patches posted to this list:
+#   ehci cpufreq patch 
+#   EHCI big endian data structures support 
+#   Set   CONFIG_USB_EHCI_BIG_ENDIAN_MMIO/_DESC in usb/host/Kconfig
+#   Safe endianness for transfer buffers after reset in case of HUB with TT
+# 
+# Signed-off-by: Vladimir Barinov <vbarinov@ru.mvista.com>
+# 
+
+PATCHNUM=40
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: http://www.mail-archive.com/linux-usb-devel@lists.sourceforge.net/msg53598.html
+MR: 23304
+Type: Enhancement
+Disposition: Backport from linux-usb-devel
+Description:
+    
+
+This patch adds support for Intel IXP4XX EHCI USB controller.
+
+Since it's MMR and descriptors are represented in big-endian format then 
+this patch is to be applied after the following patches posted to this list:
+  ehci cpufreq patch 
+  EHCI big endian data structures support 
+  Set   CONFIG_USB_EHCI_BIG_ENDIAN_MMIO/_DESC in usb/host/Kconfig
+  Safe endianness for transfer buffers after reset in case of HUB with TT
+
+Signed-off-by: Vladimir Barinov <vbarinov@ru.mvista.com>
+
+Index: linux-2.6.18/drivers/usb/host/ehci.h
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ehci.h
++++ linux-2.6.18/drivers/usb/host/ehci.h
+@@ -730,6 +730,11 @@ ehci_port_speed(struct ehci_hcd *ehci, u
+ #define writel_be(val, addr)	out_be32((__force unsigned *)addr, val)
+ #endif
+ 
++#if defined(CONFIG_ARM) && defined(CONFIG_ARCH_IXP4XX)
++#define readl_be(addr)		__raw_readl((__force unsigned *)addr)
++#define writel_be(val, addr)	__raw_writel(val, (__force unsigned *)addr)
++#endif
++
+ static inline unsigned int ehci_readl(const struct ehci_hcd *ehci,
+ 		__u32 __iomem * regs)
+ {
+Index: linux-2.6.18/drivers/usb/host/ehci-hcd.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ehci-hcd.c
++++ linux-2.6.18/drivers/usb/host/ehci-hcd.c
+@@ -994,6 +994,11 @@ MODULE_LICENSE ("GPL");
+ #define	PLATFORM_DRIVER		ehci_ppc_soc_driver
+ #endif
+ 
++#ifdef CONFIG_ARCH_IXP4XX
++#include "ehci-ixp4xx.c"
++#define	PLATFORM_DRIVER		ixp4xx_ehci_driver
++#endif
++
+ #if !defined(PCI_DRIVER) && !defined(PLATFORM_DRIVER) && \
+     !defined(PS3_SYSTEM_BUS_DRIVER)
+ #error "missing bus glue for ehci-hcd"
+Index: linux-2.6.18/drivers/usb/host/ehci-ixp4xx.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/usb/host/ehci-ixp4xx.c
+@@ -0,0 +1,152 @@
++/*
++ * IXP4XX EHCI Host Controller Driver
++ *
++ * Author: Vladimir Barinov <vbarinov@ru.mvista.com>
++ *
++ * Based on "ehci-fsl.c" by David Brownell <dbrownell@users.sourceforge.net>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++
++#include <linux/platform_device.h>
++
++static int ixp4xx_ehci_init(struct usb_hcd *hcd)
++{
++	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
++	int retval = 0;
++
++	ehci->big_endian_desc = 1;
++	ehci->big_endian_mmio = 1;
++
++	ehci->caps = hcd->regs + 0x100;
++	ehci->regs = hcd->regs + 0x100 + 
++	    HC_LENGTH(ehci_readl(ehci, &ehci->caps->hc_capbase));
++	ehci->hcs_params = ehci_readl(ehci, &ehci->caps->hcs_params);
++
++	ehci->is_tdi_rh_tt = 1;
++	ehci_reset(ehci);
++
++	retval = ehci_init(hcd);
++	if (retval)
++		return retval;
++
++	ehci_port_power(ehci, 0);
++
++	return retval;
++}
++
++static const struct hc_driver ixp4xx_ehci_hc_driver = {
++	.description		= hcd_name,
++	.product_desc		= "IXP4XX EHCI Host Controller",
++	.hcd_priv_size		= sizeof(struct ehci_hcd),
++	.irq			= ehci_irq,
++	.flags			= HCD_MEMORY | HCD_USB2,
++	.reset			= ixp4xx_ehci_init,
++	.start			= ehci_run,
++	.stop			= ehci_stop,
++	.shutdown		= ehci_shutdown,
++	.urb_enqueue		= ehci_urb_enqueue,
++	.urb_dequeue		= ehci_urb_dequeue,
++	.endpoint_disable	= ehci_endpoint_disable,
++	.get_frame_number	= ehci_get_frame,
++	.hub_status_data	= ehci_hub_status_data,
++	.hub_control		= ehci_hub_control,
++#if defined(CONFIG_PM)
++	.bus_suspend		= ehci_bus_suspend,
++	.bus_resume		= ehci_bus_resume,
++#endif
++};
++
++static int ixp4xx_ehci_probe(struct platform_device *pdev)
++{
++	struct usb_hcd *hcd;
++	const struct hc_driver *driver = &ixp4xx_ehci_hc_driver;
++	struct resource *res;
++	int irq;
++	int retval;
++
++	if (usb_disabled())
++		return -ENODEV;
++
++	res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
++	if (!res) {
++		dev_err(&pdev->dev,
++			"Found HC with no IRQ. Check %s setup!\n",
++			pdev->dev.bus_id);
++		return -ENODEV;
++	}
++	irq = res->start;
++
++	hcd = usb_create_hcd(driver, &pdev->dev, pdev->dev.bus_id);
++	if (!hcd) {
++		retval = -ENOMEM;
++		goto fail_create_hcd;
++	}
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res) {
++		dev_err(&pdev->dev,
++			"Found HC with no register addr. Check %s setup!\n",
++			pdev->dev.bus_id);
++		retval = -ENODEV;
++		goto fail_request_resource;
++	}
++	hcd->rsrc_start = res->start;
++	hcd->rsrc_len = res->end - res->start + 1;
++
++	if (!request_mem_region(hcd->rsrc_start, hcd->rsrc_len,
++				driver->description)) {
++		dev_dbg(&pdev->dev, "controller already in use\n");
++		retval = -EBUSY;
++		goto fail_request_resource;
++	}
++
++	hcd->regs = ioremap_nocache(hcd->rsrc_start, hcd->rsrc_len);
++	if (hcd->regs == NULL) {
++		dev_dbg(&pdev->dev, "error mapping memory\n");
++		retval = -EFAULT;
++		goto fail_ioremap;
++	}
++
++	retval = usb_add_hcd(hcd, irq, IRQF_SHARED);
++	if (retval)
++		goto fail_add_hcd;
++
++	return retval;
++
++fail_add_hcd:
++	iounmap(hcd->regs);
++fail_ioremap:
++	release_mem_region(hcd->rsrc_start, hcd->rsrc_len);
++fail_request_resource:
++	usb_put_hcd(hcd);
++fail_create_hcd:
++	dev_err(&pdev->dev, "init %s fail, %d\n", pdev->dev.bus_id, retval);
++	return retval;
++}
++
++static int ixp4xx_ehci_remove(struct platform_device *pdev)
++{
++	struct usb_hcd *hcd = platform_get_drvdata(pdev);
++
++	usb_remove_hcd(hcd);
++	iounmap(hcd->regs);
++	release_mem_region(hcd->rsrc_start, hcd->rsrc_len);
++	usb_put_hcd(hcd);
++
++	return 0;
++}
++
++MODULE_ALIAS("ixp4xx-ehci");
++
++static struct platform_driver ixp4xx_ehci_driver = {
++	.probe = ixp4xx_ehci_probe,
++	.remove = ixp4xx_ehci_remove,
++	.driver = {
++		.name = "ixp4xx-ehci",
++		.bus = &platform_bus_type
++	},
++};
+Index: linux-2.6.18/drivers/usb/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/Kconfig
++++ linux-2.6.18/drivers/usb/Kconfig
+@@ -38,6 +38,7 @@ config USB_ARCH_HAS_EHCI
+ 	boolean
+ 	default y if PPC_83xx
+ 	default y if SOC_AU1200
++	default y if ARCH_IXP4XX
+ 	default PCI
+ 
+ # ARM SA1111 chips have a non-PCI based "OHCI-compatible" USB host interface.
+Index: linux-2.6.18/drivers/usb/host/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/Kconfig
++++ linux-2.6.18/drivers/usb/host/Kconfig
+@@ -69,12 +69,12 @@ config USB_EHCI_TT_NEWSCHED
+ 
+ config USB_EHCI_BIG_ENDIAN_MMIO
+ 	bool
+-	depends on USB_EHCI_HCD && (PPC_CELLEB || PPC_PS3 || 440EPX)
++	depends on USB_EHCI_HCD && (PPC_CELLEB || PPC_PS3 || 440EPX || ARCH_IXP4XX)
+ 	default y
+ 
+ config USB_EHCI_BIG_ENDIAN_DESC
+ 	bool
+-	depends on USB_EHCI_HCD && 440EPX
++	depends on USB_EHCI_HCD && (440EPX || ARCH_IXP4XX)
+ 	default y
+ 
+ config USB_ISP116X_HCD
+Index: linux-2.6.18/mvl_patches/pro50-0040.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0040.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(40);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

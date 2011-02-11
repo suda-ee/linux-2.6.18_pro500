@@ -1,0 +1,387 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Derive_ebc_ranges_property_from_EBC_regist
+# Date: Wed Sep 26 11:18:31 2007
+# MR: 24856
+# From b2ba34f370a66d9ed4bbd440e45296ecf3e267d3 Mon Sep 17 00:00:00 2001
+# From: David Gibson <david@gibson.dropbear.id.au>
+# Date: Wed, 13 Jun 2007 14:52:59 +1000
+# Subject: [PATCH] [POWERPC] Derive ebc ranges property from EBC registers
+# 
+# In the device tree for Ebony, the 'ranges' property in the node for
+# the EBC bridge shows the mappings from the chip select / address lines
+# actually used for the EBC peripherals into the address space of the
+# OPB.  At present, these mappings are hardcoded in ebony.dts for the
+# mappings set up by the OpenBIOS firmware when it configures the EBC
+# bridge.
+# 
+# This replaces the hardcoded mappings with code in the zImage to
+# read the EBC configuration registers and create an appropriate ranges
+# property based on them.  This should make the zImage and kernel more
+# robust to changes in firmware configuration.  In particular, some of
+# the Ebony's DIP switches can change the effective address of the Flash
+# and other peripherals in OPB space.  With this patch, the kernel will
+# be able to cope with at least some of the possible variations.
+# 
+# Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=373
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From b2ba34f370a66d9ed4bbd440e45296ecf3e267d3 Mon Sep 17 00:00:00 2001
+From: David Gibson <david@gibson.dropbear.id.au>
+Date: Wed, 13 Jun 2007 14:52:59 +1000
+Subject: [PATCH] [POWERPC] Derive ebc ranges property from EBC registers
+
+In the device tree for Ebony, the 'ranges' property in the node for
+the EBC bridge shows the mappings from the chip select / address lines
+actually used for the EBC peripherals into the address space of the
+OPB.  At present, these mappings are hardcoded in ebony.dts for the
+mappings set up by the OpenBIOS firmware when it configures the EBC
+bridge.
+
+This replaces the hardcoded mappings with code in the zImage to
+read the EBC configuration registers and create an appropriate ranges
+property based on them.  This should make the zImage and kernel more
+robust to changes in firmware configuration.  In particular, some of
+the Ebony's DIP switches can change the effective address of the Flash
+and other peripherals in OPB space.  With this patch, the kernel will
+be able to cope with at least some of the possible variations.
+
+Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/boot/44x.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/44x.c
++++ linux-2.6.18/arch/powerpc/boot/44x.c
+@@ -54,3 +54,32 @@ void ibm44x_dbcr_reset(void)
+ 		);
+ 
+ }
++
++/* Read 4xx EBC bus bridge registers to get mappings of the peripheral
++ * banks into the OPB address space */
++void ibm4xx_fixup_ebc_ranges(const char *ebc)
++{
++	void *devp;
++	u32 bxcr;
++	u32 ranges[EBC_NUM_BANKS*4];
++	u32 *p = ranges;
++	int i;
++
++	for (i = 0; i < EBC_NUM_BANKS; i++) {
++		mtdcr(DCRN_EBC0_CFGADDR, EBC_BXCR(i));
++		bxcr = mfdcr(DCRN_EBC0_CFGDATA);
++
++		if ((bxcr & EBC_BXCR_BU) != EBC_BXCR_BU_OFF) {
++			*p++ = i;
++			*p++ = 0;
++			*p++ = bxcr & EBC_BXCR_BAS;
++			*p++ = EBC_BXCR_BANK_SIZE(bxcr);
++		}
++	}
++
++	devp = finddevice(ebc);
++	if (! devp)
++		fatal("Couldn't locate EBC node %s\n\r", ebc);
++
++	setprop(devp, "ranges", ranges, (p - ranges) * sizeof(u32));
++}
+Index: linux-2.6.18/arch/powerpc/boot/44x.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/44x.h
++++ linux-2.6.18/arch/powerpc/boot/44x.h
+@@ -11,6 +11,7 @@
+ #define _PPC_BOOT_44X_H_
+ 
+ void ibm44x_fixup_memsize(void);
++void ibm4xx_fixup_ebc_ranges(const char *ebc);
+ 
+ void ibm44x_dbcr_reset(void);
+ void ebony_init(void *mac0, void *mac1);
+Index: linux-2.6.18/arch/powerpc/boot/dcr.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dcr.h
++++ linux-2.6.18/arch/powerpc/boot/dcr.h
+@@ -26,6 +26,43 @@ static const unsigned long sdram_bxcr[] 
+ #define			SDRAM_CONFIG_BANK_SIZE(reg)	\
+ 	(0x00400000 << ((reg & SDRAM_CONFIG_SIZE_MASK) >> 17))
+ 
++/* 440GP External Bus Controller (EBC) */
++#define DCRN_EBC0_CFGADDR				0x012
++#define DCRN_EBC0_CFGDATA				0x013
++#define   EBC_NUM_BANKS					  8
++#define   EBC_B0CR					  0x00
++#define   EBC_B1CR					  0x01
++#define   EBC_B2CR					  0x02
++#define   EBC_B3CR					  0x03
++#define   EBC_B4CR					  0x04
++#define   EBC_B5CR					  0x05
++#define   EBC_B6CR					  0x06
++#define   EBC_B7CR					  0x07
++#define   EBC_BXCR(n)					  (n)
++#define	    EBC_BXCR_BAS				    0xfff00000
++#define	    EBC_BXCR_BS				  	    0x000e0000
++#define	    EBC_BXCR_BANK_SIZE(reg) \
++	(0x100000 << (((reg) & EBC_BXCR_BS) >> 17))
++#define	    EBC_BXCR_BU				  	    0x00018000
++#define	      EBC_BXCR_BU_OFF			  	      0x00000000
++#define	      EBC_BXCR_BU_RO			  	      0x00008000
++#define	      EBC_BXCR_BU_WO			  	      0x00010000
++#define	      EBC_BXCR_BU_RW			  	      0x00018000
++#define	    EBC_BXCR_BW				  	    0x00006000
++#define   EBC_B0AP					  0x10
++#define   EBC_B1AP					  0x11
++#define   EBC_B2AP					  0x12
++#define   EBC_B3AP					  0x13
++#define   EBC_B4AP					  0x14
++#define   EBC_B5AP					  0x15
++#define   EBC_B6AP					  0x16
++#define   EBC_B7AP					  0x17
++#define   EBC_BXAP(n)					  (0x10+(n))
++#define   EBC_BEAR					  0x20
++#define   EBC_BESR					  0x21
++#define   EBC_CFG					  0x23
++#define   EBC_CID					  0x24
++
+ /* 440GP Clock, PM, chip control */
+ #define DCRN_CPC0_SR					0x0b0
+ #define DCRN_CPC0_ER					0x0b1
+Index: linux-2.6.18/arch/powerpc/boot/dts/ebony.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/ebony.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/ebony.dts
+@@ -139,11 +139,9 @@
+ 				#address-cells = <2>;
+ 				#size-cells = <1>;
+ 				clock-frequency = <0>; // Filled in by zImage
+-				ranges = <0 00000000 fff00000 100000
+-					  1 00000000 48000000 100000
+-					  2 00000000 ff800000 400000
+-					  3 00000000 48200000 100000
+-					  7 00000000 48300000 100000>;
++				// ranges property is supplied by zImage
++				// based on firmware's configuration of the
++				// EBC bridge
+ 				interrupts = <5 4>;
+ 				interrupt-parent = <&UIC1>;
+ 
+Index: linux-2.6.18/arch/powerpc/boot/ebony.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/ebony.c
++++ linux-2.6.18/arch/powerpc/boot/ebony.c
+@@ -100,6 +100,7 @@ static void ebony_fixups(void)
+ 	ibm440gp_fixup_clocks(sysclk, 6 * 1843200);
+ 	ibm44x_fixup_memsize();
+ 	dt_fixup_mac_addresses(ebony_mac0, ebony_mac1);
++	ibm4xx_fixup_ebc_ranges("/plb/opb/ebc");
+ }
+ 
+ void ebony_init(void *mac0, void *mac1)
+Index: linux-2.6.18/mvl_patches/pro50-0373.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0373.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(373);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

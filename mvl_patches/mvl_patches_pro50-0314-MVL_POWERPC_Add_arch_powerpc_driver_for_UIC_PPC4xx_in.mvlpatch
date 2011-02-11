@@ -1,0 +1,630 @@
+#! /usr/bin/env bash
+# Patch: -MVL_POWERPC_Add_arch_powerpc_driver_for_UIC_PPC4xx_in
+# Date: Wed Sep 26 11:16:28 2007
+# MR: 24856
+# Adjustments:
+#     We still have pt_regs *regs structure passed to the irq handlers.
+#     Added pt_regs * parameter to some functions.
+# From e58923ed14370e0facc5eb2c3923216adc3bf260 Mon Sep 17 00:00:00 2001
+# From: David Gibson <david@gibson.dropbear.id.au>
+# Date: Wed, 18 Apr 2007 16:36:26 +1000
+# Subject: [PATCH] [POWERPC] Add arch/powerpc driver for UIC, PPC4xx interrupt controller
+# 
+# This patch adds a driver to arch/powerpc/sysdev for the UIC, the
+# on-chip interrupt controller from IBM/AMCC 4xx chips.  It uses the new
+# irq host mapping infrastructure.
+# 
+# Signed-off-by: David Gibson <dwg@au1.ibm.com>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=314
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+Adjustments:
+    We still have pt_regs *regs structure passed to the irq handlers.
+    Added pt_regs * parameter to some functions.
+From e58923ed14370e0facc5eb2c3923216adc3bf260 Mon Sep 17 00:00:00 2001
+From: David Gibson <david@gibson.dropbear.id.au>
+Date: Wed, 18 Apr 2007 16:36:26 +1000
+Subject: [PATCH] [POWERPC] Add arch/powerpc driver for UIC, PPC4xx interrupt controller
+
+This patch adds a driver to arch/powerpc/sysdev for the UIC, the
+on-chip interrupt controller from IBM/AMCC 4xx chips.  It uses the new
+irq host mapping infrastructure.
+
+Signed-off-by: David Gibson <dwg@au1.ibm.com>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/sysdev/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/Makefile
++++ linux-2.6.18/arch/powerpc/sysdev/Makefile
+@@ -19,6 +19,7 @@ ifeq ($(CONFIG_PPC_MERGE),y)
+ obj-$(CONFIG_PPC_INDIRECT_PCI)	+= indirect_pci.o
+ obj-$(CONFIG_PPC_I8259)		+= i8259.o
+ obj-$(CONFIG_PPC_83xx)		+= ipic.o
++obj-$(CONFIG_4xx)		+= uic.o
+ endif
+ 
+ # Temporary hack until we have migrated to asm-powerpc
+Index: linux-2.6.18/arch/powerpc/sysdev/uic.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/sysdev/uic.c
+@@ -0,0 +1,342 @@
++/*
++ * arch/powerpc/sysdev/uic.c
++ *
++ * IBM PowerPC 4xx Universal Interrupt Controller
++ *
++ * Copyright 2007 David Gibson <dwg@au1.ibm.com>, IBM Corporation.
++ *
++ * This program is free software; you can redistribute  it and/or modify it
++ * under  the terms of  the GNU General  Public License as published by the
++ * Free Software Foundation;  either version 2 of the  License, or (at your
++ * option) any later version.
++ */
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/errno.h>
++#include <linux/reboot.h>
++#include <linux/slab.h>
++#include <linux/stddef.h>
++#include <linux/sched.h>
++#include <linux/signal.h>
++#include <linux/sysdev.h>
++#include <linux/device.h>
++#include <linux/bootmem.h>
++#include <linux/spinlock.h>
++#include <linux/irq.h>
++#include <linux/interrupt.h>
++#include <asm/irq.h>
++#include <asm/io.h>
++#include <asm/prom.h>
++#include <asm/dcr.h>
++
++#define NR_UIC_INTS	32
++
++#define UIC_SR		0x0
++#define UIC_ER		0x2
++#define UIC_CR		0x3
++#define UIC_PR		0x4
++#define UIC_TR		0x5
++#define UIC_MSR		0x6
++#define UIC_VR		0x7
++#define UIC_VCR		0x8
++
++#define uic_irq_to_hw(virq)	(irq_map[virq].hwirq)
++
++struct uic *primary_uic;
++
++struct uic {
++	int index;
++	int dcrbase;
++
++	spinlock_t lock;
++
++	/* The remapper for this UIC */
++	struct irq_host	*irqhost;
++
++	/* For secondary UICs, the cascade interrupt's irqaction */
++	struct irqaction cascade;
++
++	/* The device node of the interrupt controller */
++	struct device_node *of_node;
++};
++
++static void uic_unmask_irq(unsigned int virq)
++{
++	struct uic *uic = get_irq_chip_data(virq);
++	unsigned int src = uic_irq_to_hw(virq);
++	unsigned long flags;
++	u32 er;
++
++	spin_lock_irqsave(&uic->lock, flags);
++	er = mfdcr(uic->dcrbase + UIC_ER);
++	er |= 1 << (31 - src);
++	mtdcr(uic->dcrbase + UIC_ER, er);
++	spin_unlock_irqrestore(&uic->lock, flags);
++}
++
++static void uic_mask_irq(unsigned int virq)
++{
++	struct uic *uic = get_irq_chip_data(virq);
++	unsigned int src = uic_irq_to_hw(virq);
++	unsigned long flags;
++	u32 er;
++
++	spin_lock_irqsave(&uic->lock, flags);
++	er = mfdcr(uic->dcrbase + UIC_ER);
++	er &= ~(1 << (31 - src));
++	mtdcr(uic->dcrbase + UIC_ER, er);
++	spin_unlock_irqrestore(&uic->lock, flags);
++}
++
++static void uic_ack_irq(unsigned int virq)
++{
++	struct uic *uic = get_irq_chip_data(virq);
++	unsigned int src = uic_irq_to_hw(virq);
++	unsigned long flags;
++
++	spin_lock_irqsave(&uic->lock, flags);
++	mtdcr(uic->dcrbase + UIC_SR, 1 << (31-src));
++	spin_unlock_irqrestore(&uic->lock, flags);
++}
++
++static int uic_set_irq_type(unsigned int virq, unsigned int flow_type)
++{
++	struct uic *uic = get_irq_chip_data(virq);
++	unsigned int src = uic_irq_to_hw(virq);
++	struct irq_desc *desc = get_irq_desc(virq);
++	unsigned long flags;
++	int trigger, polarity;
++	u32 tr, pr, mask;
++
++	switch (flow_type & IRQ_TYPE_SENSE_MASK) {
++	case IRQ_TYPE_NONE:
++		uic_mask_irq(virq);
++		return 0;
++
++	case IRQ_TYPE_EDGE_RISING:
++		trigger = 1; polarity = 1;
++		break;
++	case IRQ_TYPE_EDGE_FALLING:
++		trigger = 1; polarity = 0;
++		break;
++	case IRQ_TYPE_LEVEL_HIGH:
++		trigger = 0; polarity = 1;
++		break;
++	case IRQ_TYPE_LEVEL_LOW:
++		trigger = 0; polarity = 0;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	mask = ~(1 << (31 - src));
++
++	spin_lock_irqsave(&uic->lock, flags);
++	tr = mfdcr(uic->dcrbase + UIC_TR);
++	pr = mfdcr(uic->dcrbase + UIC_PR);
++	tr = (tr & mask) | (trigger << (31-src));
++	pr = (pr & mask) | (polarity << (31-src));
++
++	mtdcr(uic->dcrbase + UIC_PR, pr);
++	mtdcr(uic->dcrbase + UIC_TR, tr);
++
++	desc->status &= ~(IRQ_TYPE_SENSE_MASK | IRQ_LEVEL);
++	desc->status |= flow_type & IRQ_TYPE_SENSE_MASK;
++	if (trigger)
++		desc->status |= IRQ_LEVEL;
++
++	spin_unlock_irqrestore(&uic->lock, flags);
++
++	return 0;
++}
++
++static struct irq_chip uic_irq_chip = {
++	.typename	= " UIC  ",
++	.unmask		= uic_unmask_irq,
++	.mask		= uic_mask_irq,
++/* 	.mask_ack	= uic_mask_irq_and_ack, */
++	.ack		= uic_ack_irq,
++	.set_type	= uic_set_irq_type,
++};
++
++static int uic_host_match(struct irq_host *h, struct device_node *node)
++{
++	struct uic *uic = h->host_data;
++	return uic->of_node == node;
++}
++
++static int uic_host_map(struct irq_host *h, unsigned int virq,
++			irq_hw_number_t hw)
++{
++	struct uic *uic = h->host_data;
++
++	set_irq_chip_data(virq, uic);
++	/* Despite the name, handle_level_irq() works for both level
++	 * and edge irqs on UIC.  FIXME: check this is correct */
++	set_irq_chip_and_handler(virq, &uic_irq_chip, handle_level_irq);
++
++	/* Set default irq type */
++	set_irq_type(virq, IRQ_TYPE_NONE);
++
++	return 0;
++}
++
++static int uic_host_xlate(struct irq_host *h, struct device_node *ct,
++			  u32 *intspec, unsigned int intsize,
++			  irq_hw_number_t *out_hwirq, unsigned int *out_type)
++
++{
++	/* UIC intspecs must have 2 cells */
++	BUG_ON(intsize != 2);
++	*out_hwirq = intspec[0];
++	*out_type = intspec[1];
++	return 0;
++}
++
++static struct irq_host_ops uic_host_ops = {
++	.match	= uic_host_match,
++	.map	= uic_host_map,
++	.xlate	= uic_host_xlate,
++};
++
++irqreturn_t uic_cascade(int virq, void *data, struct pt_regs *regs)
++{
++	struct uic *uic = data;
++	u32 msr;
++	int src;
++	int subvirq;
++
++	msr = mfdcr(uic->dcrbase + UIC_MSR);
++	src = 32 - ffs(msr);
++
++	subvirq = irq_linear_revmap(uic->irqhost, src);
++	generic_handle_irq(subvirq, regs);
++
++	return IRQ_HANDLED;
++}
++
++static struct uic * __init uic_init_one(struct device_node *node)
++{
++	struct uic *uic;
++	const u32 *indexp, *dcrreg;
++	int len;
++
++	BUG_ON(! device_is_compatible(node, "ibm,uic"));
++
++	uic = alloc_bootmem(sizeof(*uic));
++	if (! uic)
++		return NULL; /* FIXME: panic? */
++
++	memset(uic, 0, sizeof(*uic));
++	spin_lock_init(&uic->lock);
++	uic->of_node = of_node_get(node);
++	indexp = get_property(node, "cell-index", &len);
++	if (!indexp || (len != sizeof(u32))) {
++		printk(KERN_ERR "uic: Device node %s has missing or invalid "
++		       "cell-index property\n", node->full_name);
++		return NULL;
++	}
++	uic->index = *indexp;
++
++	dcrreg = get_property(node, "dcr-reg", &len);
++	if (!dcrreg || (len != 2*sizeof(u32))) {
++		printk(KERN_ERR "uic: Device node %s has missing or invalid "
++		       "dcr-reg property\n", node->full_name);
++		return NULL;
++	}
++	uic->dcrbase = *dcrreg;
++
++	uic->irqhost = irq_alloc_host(IRQ_HOST_MAP_LINEAR, NR_UIC_INTS,
++				      &uic_host_ops, -1);
++	if (! uic->irqhost) {
++		of_node_put(node);
++		return NULL; /* FIXME: panic? */
++	}
++
++	uic->irqhost->host_data = uic;
++
++	/* Start with all interrupts disabled, level and non-critical */
++	mtdcr(uic->dcrbase + UIC_ER, 0);
++	mtdcr(uic->dcrbase + UIC_CR, 0);
++	mtdcr(uic->dcrbase + UIC_TR, 0);
++	/* Clear any pending interrupts, in case the firmware left some */
++	mtdcr(uic->dcrbase + UIC_SR, 0xffffffff);
++
++	printk ("UIC%d (%d IRQ sources) at DCR 0x%x\n", uic->index,
++		NR_UIC_INTS, uic->dcrbase);
++
++	return uic;
++}
++
++void __init uic_init_tree(void)
++{
++	struct device_node *np;
++	struct uic *uic;
++	const u32 *interrupts;
++
++	/* First locate and initialize the top-level UIC */
++
++	np = of_find_compatible_node(NULL, NULL, "ibm,uic");
++	while (np) {
++		interrupts = get_property(np, "interrupts", NULL);
++		if (! interrupts)
++			break;
++
++		np = of_find_compatible_node(np, NULL, "ibm,uic");
++	}
++
++	BUG_ON(!np); /* uic_init_tree() assumes there's a UIC as the
++		      * top-level interrupt controller */
++	primary_uic = uic_init_one(np);
++	if (! primary_uic)
++		panic("Unable to initialize primary UIC %s\n", np->full_name);
++
++	irq_set_default_host(primary_uic->irqhost);
++	of_node_put(np);
++
++	/* The scan again for cascaded UICs */
++	np = of_find_compatible_node(NULL, NULL, "ibm,uic");
++	while (np) {
++		interrupts = get_property(np, "interrupts", NULL);
++		if (interrupts) {
++			/* Secondary UIC */
++			int cascade_virq;
++			int ret;
++
++			uic = uic_init_one(np);
++			if (! uic)
++				panic("Unable to initialize a secondary UIC %s\n",
++				      np->full_name);
++
++			cascade_virq = irq_of_parse_and_map(np, 0);
++
++			uic->cascade.handler = uic_cascade;
++			uic->cascade.name = "UIC cascade";
++			uic->cascade.dev_id = uic;
++
++			ret = setup_irq(cascade_virq, &uic->cascade);
++			if (ret)
++				printk(KERN_ERR "Failed to setup_irq(%d) for "
++				       "UIC%d cascade\n", cascade_virq,
++				       uic->index);
++
++			/* FIXME: setup critical cascade?? */
++		}
++
++		np = of_find_compatible_node(np, NULL, "ibm,uic");
++	}
++}
++
++/* Return an interrupt vector or NO_IRQ if no interrupt is pending. */
++unsigned int uic_get_irq(struct pt_regs *regs)
++{
++	u32 msr;
++	int src;
++
++	BUG_ON(! primary_uic);
++
++	msr = mfdcr(primary_uic->dcrbase + UIC_MSR);
++	src = 32 - ffs(msr);
++
++	return irq_linear_revmap(primary_uic->irqhost, src);
++}
+Index: linux-2.6.18/include/asm-powerpc/uic.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-powerpc/uic.h
+@@ -0,0 +1,23 @@
++/*
++ * include/asm-powerpc/uic.h
++ *
++ * IBM PPC4xx UIC external definitions and structure.
++ *
++ * Maintainer: David Gibson <dwg@au1.ibm.com>
++ * Copyright 2007 IBM Corporation.
++ *
++ * This program is free software; you can redistribute  it and/or modify it
++ * under  the terms of  the GNU General  Public License as published by the
++ * Free Software Foundation;  either version 2 of the  License, or (at your
++ * option) any later version.
++ */
++#ifndef _ASM_POWERPC_UIC_H
++#define _ASM_POWERPC_UIC_H
++
++#ifdef __KERNEL__
++
++extern void __init uic_init_tree(void);
++extern unsigned int uic_get_irq(struct pt_regs *regs);
++
++#endif /* __KERNEL__ */
++#endif /* _ASM_POWERPC_UIC_H */
+Index: linux-2.6.18/mvl_patches/pro50-0314.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0314.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(314);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

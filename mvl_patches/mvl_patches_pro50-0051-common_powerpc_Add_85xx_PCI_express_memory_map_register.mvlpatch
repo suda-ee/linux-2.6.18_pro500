@@ -1,0 +1,326 @@
+#! /usr/bin/env bash
+# Patch: -common_powerpc_Add_85xx_PCI_express_memory_map_register
+# Date: Wed Jun 20 09:52:30 2007
+# MR: 22933
+# From d9109326dd07e19501127bd6767b9529bb9c39dc Mon Sep 17 00:00:00 2001
+# From: Andy Fleming <afleming@freescale.com>
+# Date: Thu, 1 Feb 2007 21:56:11 -0600
+# Subject: [PATCH] Add 85xx PCI express memory map register.
+# 
+# Signed-off-by: Roy Zang <tie-fei.zang@freescale.com>
+# Acked-by: Andy Fleming <afleming@freescale.com>
+# 
+#  include/asm-ppc/immap_85xx.h |   75 ++++++++++++++++++++++++++++++++++++++++++
+#  1 files changed, 75 insertions(+), 0 deletions(-)
+# 
+
+PATCHNUM=51
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 22933
+From d9109326dd07e19501127bd6767b9529bb9c39dc Mon Sep 17 00:00:00 2001
+From: Andy Fleming <afleming@freescale.com>
+Date: Thu, 1 Feb 2007 21:56:11 -0600
+Subject: [PATCH] Add 85xx PCI express memory map register.
+
+Signed-off-by: Roy Zang <tie-fei.zang@freescale.com>
+Acked-by: Andy Fleming <afleming@freescale.com>
+
+ include/asm-ppc/immap_85xx.h |   75 +++++++++++++++++++++++++++++++++++++++++++
+ mvl_patches/pro50-0051.c     |   16 +++++++++
+ 2 files changed, 91 insertions(+)
+
+diff --git a/include/asm-ppc/immap_85xx.h b/include/asm-ppc/immap_85xx.h
+index b35cd6a..adef8c7 100644
+Index: linux-2.6.18/include/asm-ppc/immap_85xx.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-ppc/immap_85xx.h
++++ linux-2.6.18/include/asm-ppc/immap_85xx.h
+@@ -87,6 +87,81 @@ typedef struct ccsr_pci {
+ 	char	res19[472];
+ } ccsr_pci_t;
+ 
++/* PCI Express Registers */
++typedef struct ccsr_pex {
++	uint    pex_config_addr;        /* 0x.000 - PCI Express Configuration Address Register */
++	uint    pex_config_data;        /* 0x.004 - PCI Express Configuration Data Register */
++	char    res1[4];
++	uint    pex_otb_cpl_tor;        /* 0x.00c - PCI Express Outbound completion timeout register */
++	uint    pex_conf_tor;           /* 0x.010 - PCI Express configuration timeout register */
++	char    res2[12];
++	uint    pex_pme_mes_dr;         /* 0x.020 - PCI Express PME and message detect register */
++	uint    pex_pme_mes_disr;       /* 0x.024 - PCI Express PME and message disable register */
++	uint    pex_pme_mes_ier;        /* 0x.028 - PCI Express PME and message interrupt enable register */
++	uint    pex_pmcr;               /* 0x.02c - PCI Express power management command register */
++	char    res3[3024];
++	uint    pexotar0;               /* 0x.c00 - PCI Express outbound translation address register 0 */
++	uint    pexotear0;              /* 0x.c04 - PCI Express outbound translation extended address register 0*/
++	char    res4[8];
++	uint    pexowar0;               /* 0x.c10 - PCI Express outbound window attributes register 0*/
++	char    res5[12];
++	uint    pexotar1;               /* 0x.c20 - PCI Express outbound translation address register 1 */
++	uint    pexotear1;              /* 0x.c24 - PCI Express outbound translation extended address register 1*/
++	uint    pexowbar1;              /* 0x.c28 - PCI Express outbound window base address register 1*/
++	char    res6[4];
++	uint    pexowar1;               /* 0x.c30 - PCI Express outbound window attributes register 1*/
++	char    res7[12];
++	uint    pexotar2;               /* 0x.c40 - PCI Express outbound translation address register 2 */
++	uint    pexotear2;              /* 0x.c44 - PCI Express outbound translation extended address register 2*/
++	uint    pexowbar2;              /* 0x.c48 - PCI Express outbound window base address register 2*/
++	char    res8[4];
++	uint    pexowar2;               /* 0x.c50 - PCI Express outbound window attributes register 2*/
++	char    res9[12];
++	uint    pexotar3;               /* 0x.c60 - PCI Express outbound translation address register 3 */
++	uint    pexotear3;              /* 0x.c64 - PCI Express outbound translation extended address register 3*/
++	uint    pexowbar3;              /* 0x.c68 - PCI Express outbound window base address register 3*/
++	char    res10[4];
++	uint    pexowar3;               /* 0x.c70 - PCI Express outbound window attributes register 3*/
++	char    res11[12];
++	uint    pexotar4;               /* 0x.c80 - PCI Express outbound translation address register 4 */
++	uint    pexotear4;              /* 0x.c84 - PCI Express outbound translation extended address register 4*/
++	uint    pexowbar4;              /* 0x.c88 - PCI Express outbound window base address register 4*/
++	char    res12[4];
++	uint    pexowar4;               /* 0x.c90 - PCI Express outbound window attributes register 4*/
++	char    res13[12];
++	char    res14[256];
++	uint    pexitar3;               /* 0x.da0 - PCI Express inbound translation address register 3 */
++	char    res15[4];
++	uint    pexiwbar3;              /* 0x.da8 - PCI Express inbound window base address register 3 */
++	uint    pexiwbear3;             /* 0x.dac - PCI Express inbound window base extended address register 3 */
++	uint    pexiwar3;               /* 0x.db0 - PCI Express inbound window attributes register 3 */
++	char    res16[12];
++	uint    pexitar2;               /* 0x.dc0 - PCI Express inbound translation address register 2 */
++	char    res17[4];
++	uint    pexiwbar2;              /* 0x.dc8 - PCI Express inbound window base address register 2 */
++	uint    pexiwbear2;             /* 0x.dcc - PCI Express inbound window base extended address register 2 */
++	uint    pexiwar2;               /* 0x.dd0 - PCI Express inbound window attributes register 2 */
++	char    res18[12];
++	uint    pexitar1;               /* 0x.de0 - PCI Express inbound translation address register 2 */
++	char    res19[4];
++	uint    pexiwbar1;              /* 0x.de8 - PCI Express inbound window base address register 2 */
++	uint    pexiwbear1;             /* 0x.dec - PCI Express inbound window base extended address register 2 */
++	uint    pexiwar1;               /* 0x.df0 - PCI Express inbound window attributes register 2 */
++	char    res20[12];
++	uint    pex_err_dr;             /* 0x.e00 - PCI Express error detect register */
++	char    res21[4];
++	uint    pex_err_en;             /* 0x.e08 - PCI Express error interrupt enable register */
++	char    res22[4];
++	uint    pex_err_disr;           /* 0x.e10 - PCI Express error disable register */
++	char    res23[12];
++	uint    pex_err_cap_stat;       /* 0x.e20 - PCI Express error capture status register */
++	char    res24[4];
++	uint    pex_err_cap_r0;         /* 0x.e28 - PCI Express error capture register 0 */
++	uint    pex_err_cap_r1;         /* 0x.e2c - PCI Express error capture register 0 */
++	uint    pex_err_cap_r2;         /* 0x.e30 - PCI Express error capture register 0 */
++	uint    pex_err_cap_r3;         /* 0x.e34 - PCI Express error capture register 0 */
++} ccsr_pex_t;
++
+ /* Global Utility Registers */
+ typedef struct ccsr_guts {
+ 	uint	porpllsr;	/* 0x.0000 - POR PLL Ratio Status Register */
+Index: linux-2.6.18/mvl_patches/pro50-0051.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0051.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(51);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

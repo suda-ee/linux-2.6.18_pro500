@@ -1,0 +1,2822 @@
+#! /usr/bin/env bash
+# Patch: -common_arm_freescale_mxc_gpio
+# Date: Wed Aug 29 07:24:16 2007
+
+PATCHNUM=108
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Index: linux-2.6.18/arch/arm/mach-mx2/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-mx2/Makefile
++++ linux-2.6.18/arch/arm/mach-mx2/Makefile
+@@ -4,5 +4,5 @@
+ 
+ # Object file lists.
+ 
+-obj-y		:= mm.o time.o clock.o cpu.o dma.o
+-obj-$(CONFIG_MACH_MX27ADS)	+= mx27ads.o
++obj-y		:= mm.o time.o clock.o cpu.o dma.o gpio_mux.o devices.o
++obj-$(CONFIG_MACH_MX27ADS)	+= mx27ads.o mx27ads_gpio.o
+Index: linux-2.6.18/arch/arm/mach-mx2/devices.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/mach-mx2/devices.c
+@@ -0,0 +1,68 @@
++/*
++ * Author: MontaVista Software, Inc.
++ *       <source@mvista.com>
++ *
++ * Based on the OMAP devices.c
++ *
++ * 2005 (c) MontaVista Software, Inc. This file is licensed under the
++ * terms of the GNU General Public License version 2. This program is
++ * licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ *
++ * Copyright 2006-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <asm/arch/gpio.h>
++
++/*!
++ * @file mach-mx27/devices.c
++ * @brief device configurations for mx27.
++ */
++
++struct mxc_gpio_port mxc_gpio_ports[GPIO_PORT_NUM] = {
++	{
++	 .num = 0,
++	 .base = IO_ADDRESS(GPIO_BASE_ADDR),
++	 .irq = MXC_INT_GPIO,
++	 .virtual_irq_start = MXC_GPIO_INT_BASE,
++	 },
++	{
++	 .num = 1,
++	 .base = IO_ADDRESS(GPIO_BASE_ADDR) + 0x100,
++	 .irq = MXC_INT_GPIO,
++	 .virtual_irq_start = MXC_GPIO_INT_BASE + GPIO_NUM_PIN,
++	 },
++	{
++	 .num = 2,
++	 .base = IO_ADDRESS(GPIO_BASE_ADDR) + 0x200,
++	 .irq = MXC_INT_GPIO,
++	 .virtual_irq_start = MXC_GPIO_INT_BASE + GPIO_NUM_PIN * 2,
++	 },
++	{
++	 .num = 3,
++	 .base = IO_ADDRESS(GPIO_BASE_ADDR) + 0x300,
++	 .irq = MXC_INT_GPIO,
++	 .virtual_irq_start = MXC_GPIO_INT_BASE + GPIO_NUM_PIN * 3,
++	 },
++	{
++	 .num = 4,
++	 .base = IO_ADDRESS(GPIO_BASE_ADDR) + 0x400,
++	 .irq = MXC_INT_GPIO,
++	 .virtual_irq_start = MXC_GPIO_INT_BASE + GPIO_NUM_PIN * 4,
++	 },
++	{
++	 .num = 5,
++	 .base = IO_ADDRESS(GPIO_BASE_ADDR) + 0x500,
++	 .irq = MXC_INT_GPIO,
++	 .virtual_irq_start = MXC_GPIO_INT_BASE + GPIO_NUM_PIN * 5,
++	 },
++};
++
++static int __init mxc_init_devices(void)
++{
++	return 0;
++}
++
++arch_initcall(mxc_init_devices);
+Index: linux-2.6.18/arch/arm/mach-mx2/gpio_mux.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/mach-mx2/gpio_mux.c
+@@ -0,0 +1,308 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++
++/*!
++ * @defgroup GPIO_MX27 Board GPIO and Muxing Setup
++ * @ingroup MSL_MX27
++ */
++/*!
++ * @file mach-mx27/gpio_mux.c
++ *
++ * @brief I/O Muxing control functions
++ *
++ * @ingroup GPIO_MX27
++ */
++
++#include <linux/kernel.h>
++#include <linux/cache.h>
++#include <linux/spinlock.h>
++
++#include <asm/io.h>
++#include <asm/hardware.h>
++#include <asm/arch/gpio.h>
++#include "gpio_mux.h"
++
++/*!
++ * This structure defines the offset of registers in gpio module.
++ */
++enum gpio_reg {
++	GPIO_GIUS = 0x20,
++	GPIO_GPR = 0x38,
++	GPIO_PUEN = 0x40,
++	GPIO_DDIR = 0x00,
++	GPIO_OCR1 = 0x04,
++	GPIO_OCR2 = 0x08,
++	GPIO_ICONFA1 = 0x0C,
++	GPIO_ICONFA2 = 0x10,
++	GPIO_ICONFB1 = 0x14,
++	GPIO_ICONFB2 = 0x18,
++};
++
++/*!
++ * This enumeration data type defines the configuration for input mode.
++ */
++typedef enum {
++	GPIO_INPUT_GPIO = 0x00,
++	GPIO_INPUT_INTR = 0x01,
++	GPIO_INPUT_LOW = 0x02,
++	GPIO_INPUT_HIGH = 0x03
++} gpio_input_cfg_t;
++
++/*!
++ * This enumeration data type defines the configuration for output mode.
++ */
++typedef enum {
++	GPIO_OUTPUT_A = 0x00,
++	GPIO_OUTPUT_B = 0x01,
++	GPIO_OUTPUT_C = 0x02,
++	GPIO_OUTPUT_DR = 0x03
++} gpio_output_cfg_t;
++
++extern struct mxc_gpio_port mxc_gpio_ports[];
++
++/*!
++ * defines a spinlock to protected the accessing to gpio pin.
++ */
++DEFINE_SPINLOCK(gpio_mux_lock);
++
++/*!
++ * This function enable or disable the pullup feature to the pin.
++ * @param port  	a pointer of gpio port
++ * @param index 	the index of the  pin in the port
++ * @param en		0 if disable pullup, otherwise enable it.
++ * @return		none
++ */
++static inline void _gpio_set_puen(struct mxc_gpio_port *port, u32 index,
++				  bool en)
++{
++	u32 reg;
++
++	reg = __raw_readl(port->base + GPIO_PUEN);
++	if (en) {
++		reg |= 1 << index;
++	} else {
++		reg &= ~(1 << index);
++	}
++	__raw_writel(reg, port->base + GPIO_PUEN);
++}
++
++/*!
++ * This function set the input configuration A.
++ * @param port  	a pointer of gpio port
++ * @param index 	the index of the  pin in the port
++ * @param config	a mode as define in \b #gpio_input_cfg_t
++ * @return		none
++ */
++static inline void _gpio_set_iconfa(struct mxc_gpio_port *port, u32 index,
++				    gpio_input_cfg_t config)
++{
++	u32 reg, val;
++	u32 mask;
++
++	mask = 0x3 << ((index % 16) << 1);
++
++	if (index >= 16) {
++		reg = port->base + GPIO_ICONFA2;
++		val = config << ((index - 16) * 2);
++	} else {
++		reg = port->base + GPIO_ICONFA1;
++		val = config << (index * 2);
++	}
++	val |= __raw_readl(reg) & ~(mask);
++	__raw_writel(val, reg);
++}
++
++/*!
++ * This function set the input configuration B.
++ * @param port  	a pointer of gpio port
++ * @param index 	the index of the  pin in the port
++ * @param config	a mode as define in \b #gpio_input_cfg_t
++ * @return		none
++ */
++static inline void _gpio_set_iconfb(struct mxc_gpio_port *port, u32 index,
++				    gpio_input_cfg_t config)
++{
++	u32 reg, val;
++	u32 mask;
++
++	mask = 0x3 << ((index % 16) << 1);
++
++	if (index >= 16) {
++		reg = port->base + GPIO_ICONFB2;
++		val = config << ((index - 16) * 2);
++	} else {
++		reg = port->base + GPIO_ICONFB1;
++		val = config << (index * 2);
++	}
++	val |= __raw_readl(reg) & (~mask);
++	__raw_writel(val, reg);
++}
++
++/*!
++ * This function set the output configuration.
++ * @param port  	a pointer of gpio port
++ * @param index 	the index of the  pin in the port
++ * @param config	a mode as define in \b #gpio_output_cfg_t
++ * @return		none
++ */
++static inline void _gpio_set_ocr(struct mxc_gpio_port *port, u32 index,
++				 gpio_output_cfg_t config)
++{
++	u32 reg, val;
++	u32 mask;
++
++	mask = 0x3 << ((index % 16) << 1);
++	if (index >= 16) {
++		reg = port->base + GPIO_OCR2;
++		val = config << ((index - 16) * 2);
++	} else {
++		reg = port->base + GPIO_OCR1;
++		val = config << (index * 2);
++	}
++	val |= __raw_readl(reg) & (~mask);
++	__raw_writel(val, reg);
++}
++
++/*!
++ *@brief gpio_config_mux - just configure the mode of the gpio pin.
++ *@param pin   a pin number as defined in \b #iomux_pin_name_t
++ *@param mode  a module as define in \b #gpio_mux_mode_t;
++ *	GPIO_MUX_PRIMARY set pin to work as primary function.
++ *	GPIO_MUX_ALT set pin to work as alternate function.
++ *	GPIO_MUX_GPIO set pin to work as output function based the data register
++ *	GPIO_MUX_INPUT1 set pin to work as input function connected with  A_OUT
++ *	GPIO_MUX_INPUT2 set pin to work as input function connected with B_OUT
++ *	GPIO_MUX_OUTPUT1 set pin to work as output function connected with A_IN
++ *	GPIO_MUX_OUTPUT2 set pin to work as output function connected with B_IN
++ *	GPIO_MUX_OUTPUT3 set pin to work as output function connected with C_IN
++ *@return      0 if successful, Non-zero otherwise
++ */
++
++int gpio_config_mux(iomux_pin_name_t pin, gpio_mux_mode_t mode)
++{
++	unsigned long lock_flags;
++	u32 gius_reg, gpr_reg;
++	struct mxc_gpio_port *port;
++	u32 index, gpio = IOMUX_TO_GPIO(pin);
++
++	port = &(mxc_gpio_ports[GPIO_TO_PORT(gpio)]);
++	index = GPIO_TO_INDEX(gpio);
++
++	pr_debug("%s: Configuring PORT %c, bit %d\n",
++		 __FUNCTION__, port->num + 'A', index);
++
++	spin_lock_irqsave(&gpio_mux_lock, lock_flags);
++
++	gius_reg = __raw_readl(port->base + GPIO_GIUS);
++	gpr_reg = __raw_readl(port->base + GPIO_GPR);
++
++	switch (mode) {
++	case GPIO_MUX_PRIMARY:
++		gius_reg &= ~(1L << index);
++		gpr_reg &= ~(1L << index);
++		break;
++	case GPIO_MUX_ALT:
++		gius_reg &= ~(1L << index);
++		gpr_reg |= (1L << index);
++		break;
++	case GPIO_MUX_GPIO:
++		gius_reg |= (1L << index);
++		_gpio_set_ocr(port, index, GPIO_OUTPUT_DR);
++		break;
++	case GPIO_MUX_INPUT1:
++		gius_reg |= (1L << index);
++		_gpio_set_iconfa(port, index, GPIO_INPUT_GPIO);
++		break;
++	case GPIO_MUX_INPUT2:
++		gius_reg |= (1L << index);
++		_gpio_set_iconfb(port, index, GPIO_INPUT_GPIO);
++		break;
++	case GPIO_MUX_OUTPUT1:
++		gius_reg |= (1L << index);
++		_gpio_set_ocr(port, index, GPIO_OUTPUT_A);
++		break;
++	case GPIO_MUX_OUTPUT2:
++		gius_reg |= (1L << index);
++		_gpio_set_ocr(port, index, GPIO_OUTPUT_B);
++		break;
++	case GPIO_MUX_OUTPUT3:
++		gius_reg |= (1L << index);
++		_gpio_set_ocr(port, index, GPIO_OUTPUT_C);
++		break;
++	default:
++		spin_unlock_irqrestore(&gpio_mux_lock, lock_flags);
++		return -1;
++	}
++
++	__raw_writel(gius_reg, port->base + GPIO_GIUS);
++	__raw_writel(gpr_reg, port->base + GPIO_GPR);
++
++	spin_unlock_irqrestore(&gpio_mux_lock, lock_flags);
++	return 0;
++}
++
++/*!
++ * This function is just used to enable or disable the pull up feature .
++ * @param pin   a pin number as defined in \b #iomux_pin_name_t
++ * @param en    0 if disable, Non-zero enable
++ * @return      0 if successful, Non-zero otherwise
++ */
++int gpio_set_puen(iomux_pin_name_t pin, bool en)
++{
++	unsigned long lock_flags;
++
++	struct mxc_gpio_port *port;
++	u32 index, gpio = IOMUX_TO_GPIO(pin);
++
++	port = &(mxc_gpio_ports[GPIO_TO_PORT(gpio)]);
++	index = GPIO_TO_INDEX(gpio);
++
++	pr_debug("%s: Configuring output mode of PORT %c, bit %d\n",
++		 __FUNCTION__, port->num + 'A', index);
++
++	spin_lock_irqsave(&gpio_mux_lock, lock_flags);
++
++	_gpio_set_puen(port, index, en);
++	spin_unlock_irqrestore(&gpio_mux_lock, lock_flags);
++	return 0;
++
++}
++
++/*!
++ * This function is just used to request a pin and configure it.
++ * @param pin	a pin number as defined in \b #iomux_pin_name_t
++ * @param mode	a module as define in \b #gpio_mux_mode_t;
++ * @return	0 if successful, Non-zero otherwise
++ */
++int gpio_request_mux(iomux_pin_name_t pin, gpio_mux_mode_t mode)
++{
++	int ret;
++	ret = mxc_request_gpio(pin);
++	if (ret == 0) {
++		ret = gpio_config_mux(pin, mode);
++		if (ret) {
++			mxc_free_gpio(pin);
++		}
++	}
++	return ret;
++}
++
++/*!
++ * This function is just used to release a pin.
++ * @param pin	a pin number as defined in \b #iomux_pin_name_t
++ * @return	none
++ */
++void gpio_free_mux(iomux_pin_name_t pin)
++{
++	mxc_free_gpio(pin);
++}
+Index: linux-2.6.18/arch/arm/mach-mx2/gpio_mux.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/mach-mx2/gpio_mux.h
+@@ -0,0 +1,76 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++
++/*!
++ * @file mach-mx27/gpio_mux.h
++ * @brief This file contains the private definition  .
++ * @ingroup System
++ */
++
++#ifndef __ARCH_ARM_MACH_MX2_GPIO_MUX_H__
++#define __ARCH_ARM_MACH_MX2_GPIO_MUX_H__
++
++/*!
++ * This enumeration data type defines the modes of the pin .
++ *	GPIO_MUX_PRIMARY is the primary mode.
++ *	GPIO_MUX_ALT is the alternate mode.
++ *	GPIO_MUX_GPIO is the output mode and the signal source is data register.
++ *	GPIO_MUX_INPUT1 is the input mode and the signal destination is A_OUT.
++ *	GPIO_MUX_INPUT2 is the input mode and the signal destination is B_OUT.
++ *	GPIO_MUX_OUTPUT1 is the output mode and the signal destination is A_IN.
++ *	GPIO_MUX_OUTPUT2 is the output mode and the signal destination is B_IN.
++ *	GPIO_MUX_OUTPUT3 is the output mode and the signal destination is C_IN.
++ */
++typedef enum {
++	GPIO_MUX_PRIMARY,
++	GPIO_MUX_ALT,
++	GPIO_MUX_GPIO,
++	GPIO_MUX_INPUT1,
++	GPIO_MUX_INPUT2,
++	GPIO_MUX_OUTPUT1,
++	GPIO_MUX_OUTPUT2,
++	GPIO_MUX_OUTPUT3,
++} gpio_mux_mode_t;
++
++/*!
++ * This function is just used to request a pin and configure it.
++ * @param pin	a pin number as defined in \b #iomux_pin_name_t
++ * @param mode	a module as define in \b #gpio_mux_mode_t;
++ * @return	0 if successful, Non-zero otherwise
++ */
++extern int gpio_request_mux(iomux_pin_name_t pin, gpio_mux_mode_t mode);
++
++/*!
++ * This function is just used to configure a pin .
++ * @param pin	a pin number as defined in \b #iomux_pin_name_t
++ * @param mode	a module as define in \b #gpio_mux_mode_t;
++ * @return	0 if successful, Non-zero otherwise
++ */
++extern int gpio_config_mux(iomux_pin_name_t pin, gpio_mux_mode_t mode);
++
++/*!
++ * This function is just used to enable or disable the pull up feature .
++ * @param pin   a pin number as defined in \b #iomux_pin_name_t
++ * @param en    0 if disable, Non-zero enable
++ * @return      0 if successful, Non-zero otherwise
++ */
++extern int gpio_set_puen(iomux_pin_name_t pin, bool en);
++
++/*!
++ * This function is just used to release a pin.
++ * @param pin	a pin number as defined in \b #iomux_pin_name_t
++ * @return	none
++ */
++extern void gpio_free_mux(iomux_pin_name_t pin);
++
++#endif				/* __ARCH_ARM_MACH_MX2_GPIO_MUX_H__ */
+Index: linux-2.6.18/arch/arm/mach-mx2/mx27ads.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-mx2/mx27ads.c
++++ linux-2.6.18/arch/arm/mach-mx2/mx27ads.c
+@@ -99,6 +99,7 @@ static void __init mx27ads_board_init(vo
+ 	pr_info("AIPI VA base: 0x%x\n", IO_ADDRESS(AIPI_BASE_ADDR));
+ 
+ 	mxc_clocks_init();
++	mxc_gpio_init();
+ 	mxc_init_extuart();
+ }
+ 
+Index: linux-2.6.18/arch/arm/mach-mx2/mx27ads_gpio.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/mach-mx2/mx27ads_gpio.c
+@@ -0,0 +1,1182 @@
++/*
++ *  Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++
++#include <linux/errno.h>
++#include <linux/module.h>
++#include <linux/device.h>
++#include <asm/io.h>
++#include <asm/hardware.h>
++#include <asm/arch/gpio.h>
++
++#include "gpio_mux.h"
++
++#define SYS_FMCR	(IO_ADDRESS(SYSCTRL_BASE_ADDR) + 0x14)
++#define SYS_FMCR_NF_16BIT_SEL_OFFSET	4
++#define SYS_FMCR_NF_16BIT_SEL_MASK	(1 << 4)
++
++static int g_uart_activated[MXC_UART_NR] = { 0, 0, 0, 0, 0, 0 };
++
++/*!
++ * @file mach-mx27/mx27ads_gpio.c
++ *
++ * @brief This file contains all the GPIO setup functions for the board.
++ *
++ * @ingroup GPIO_MX27
++ */
++
++/*!
++ * Setup GPIO for a UART port to be active
++ *
++ * @param  port         a UART port
++ * @param  ir_mode      indicates if the port is used for SIR
++ */
++void gpio_uart_active(int port, int ir_mode)
++{
++	if (port < 0 || port >= MXC_UART_NR) {
++		pr_info("Wrong port number: %d\n", port);
++		BUG();
++	}
++
++	if (g_uart_activated[port]) {
++		pr_info("UART %d has been activated multiple times\n", port + 1);
++		return;
++	}
++	g_uart_activated[port] = 1;
++
++	switch (port) {
++	case 0:
++		gpio_request_mux(MX27_PIN_UART1_TXD, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_UART1_RXD, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_UART1_CTS, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_UART1_RTS, GPIO_MUX_PRIMARY);
++		break;
++	case 1:
++		gpio_request_mux(MX27_PIN_UART2_TXD, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_UART2_RXD, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_UART2_CTS, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_UART2_RTS, GPIO_MUX_PRIMARY);
++		break;
++	case 2:
++		gpio_request_mux(MX27_PIN_UART3_TXD, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_UART3_RXD, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_UART3_CTS, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_UART3_RTS, GPIO_MUX_PRIMARY);
++
++		/* enable or disable the IrDA transceiver based on ir_mode */
++		if (ir_mode == IRDA)
++			__raw_writew(PBC_BCTRL2_IRDA_EN, PBC_BCTRL2_CLEAR_REG);
++		else
++			__raw_writew(PBC_BCTRL2_IRDA_EN, PBC_BCTRL2_SET_REG);
++		break;
++	case 3:
++		gpio_request_mux(MX27_PIN_USBH1_TXDM, GPIO_MUX_ALT);
++		gpio_request_mux(MX27_PIN_USBH1_RXDP, GPIO_MUX_ALT);
++		gpio_request_mux(MX27_PIN_USBH1_TXDP, GPIO_MUX_ALT);
++		gpio_request_mux(MX27_PIN_USBH1_FS, GPIO_MUX_ALT);
++		break;
++	case 4:
++		gpio_request_mux(MX27_PIN_CSI_D6, GPIO_MUX_ALT);
++		gpio_request_mux(MX27_PIN_CSI_D7, GPIO_MUX_ALT);
++		gpio_request_mux(MX27_PIN_CSI_VSYNC, GPIO_MUX_ALT);
++		gpio_request_mux(MX27_PIN_CSI_HSYNC, GPIO_MUX_ALT);
++		break;
++	case 5:
++		gpio_request_mux(MX27_PIN_CSI_D0, GPIO_MUX_ALT);
++		gpio_request_mux(MX27_PIN_CSI_D1, GPIO_MUX_ALT);
++		gpio_request_mux(MX27_PIN_CSI_D2, GPIO_MUX_ALT);
++		gpio_request_mux(MX27_PIN_CSI_D3, GPIO_MUX_ALT);
++		break;
++	default:
++		break;
++	}
++}
++EXPORT_SYMBOL(gpio_uart_active);
++
++/*!
++ * Setup GPIO for a UART port to be inactive
++ *
++ * @param  port         a UART port
++ * @param  ir_mode      indicates if the port is used for SIR
++ */
++void gpio_uart_inactive(int port, int ir_mode)
++{
++	if (port < 0 || port >= MXC_UART_NR) {
++		pr_info("Wrong port number: %d\n", port);
++		BUG();
++	}
++
++	if (g_uart_activated[port] == 0) {
++		pr_info("UART %d has not been activated \n", port + 1);
++		return;
++	}
++	g_uart_activated[port] = 0;
++
++	switch (port) {
++	case 0:
++		gpio_free_mux(MX27_PIN_UART1_TXD);
++		gpio_free_mux(MX27_PIN_UART1_RXD);
++		gpio_free_mux(MX27_PIN_UART1_CTS);
++		gpio_free_mux(MX27_PIN_UART1_RTS);
++		break;
++	case 1:
++		gpio_free_mux(MX27_PIN_UART2_TXD);
++		gpio_free_mux(MX27_PIN_UART2_RXD);
++		gpio_free_mux(MX27_PIN_UART2_CTS);
++		gpio_free_mux(MX27_PIN_UART2_RTS);
++		break;
++	case 2:
++		gpio_free_mux(MX27_PIN_UART3_TXD);
++		gpio_free_mux(MX27_PIN_UART3_RXD);
++		gpio_free_mux(MX27_PIN_UART3_CTS);
++		gpio_free_mux(MX27_PIN_UART3_RTS);
++		break;
++	case 3:
++		gpio_free_mux(MX27_PIN_USBH1_TXDM);
++		gpio_free_mux(MX27_PIN_USBH1_RXDP);
++		gpio_free_mux(MX27_PIN_USBH1_TXDP);
++		gpio_free_mux(MX27_PIN_USBH1_FS);
++		break;
++	case 4:
++		gpio_free_mux(MX27_PIN_CSI_D6);
++		gpio_free_mux(MX27_PIN_CSI_D7);
++		gpio_free_mux(MX27_PIN_CSI_VSYNC);
++		gpio_free_mux(MX27_PIN_CSI_HSYNC);
++		break;
++	case 5:
++		gpio_free_mux(MX27_PIN_CSI_D0);
++		gpio_free_mux(MX27_PIN_CSI_D1);
++		gpio_free_mux(MX27_PIN_CSI_D2);
++		gpio_free_mux(MX27_PIN_CSI_D3);
++		break;
++	default:
++		break;
++	}
++}
++EXPORT_SYMBOL(gpio_uart_inactive);
++
++/*!
++ * Configure the IOMUX GPR register to receive shared SDMA UART events
++ *
++ * @param  port         a UART port
++ */
++void config_uartdma_event(int port)
++{
++	return;
++}
++EXPORT_SYMBOL(config_uartdma_event);
++
++/*!
++ * Setup GPIO for USB, Total 34 signals
++ * PIN Configuration for USBOTG:   High/Full speed OTG
++ *	PE2,PE1,PE0,PE24,PE25 -- PRIMARY
++ *	PC7 - PC13  -- PRIMARY
++ *	PB23,PB24 -- PRIMARY
++ *
++ * PIN Configuration for USBH2:    : High/Full/Low speed host
++ *	PA0 - PA4 -- PRIMARY
++ *	PD19, PD20,PD21,PD22,PD23,PD24,PD26 --Alternate (SECONDARY)
++ *
++ * PIN Configuration for USBH1:  Full/low speed host
++ *	PB25 - PB31  -- PRIMARY
++ *	PB22  -- PRIMARY
++ */
++void gpio_usbh1_active(void)
++{
++	gpio_request_mux(MX27_PIN_USBH1_SUSP, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBH1_RCV, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBH1_FS, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBH1_OE_B, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBH1_TXDM, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBH1_TXDP, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBH1_RXDM, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBH1_RXDP, GPIO_MUX_PRIMARY);
++}
++EXPORT_SYMBOL(gpio_usbh1_active);
++void gpio_usbh1_inactive(void)
++{
++	gpio_free_mux(MX27_PIN_USBH1_SUSP);
++	gpio_free_mux(MX27_PIN_USBH1_RCV);
++	gpio_free_mux(MX27_PIN_USBH1_FS);
++	gpio_free_mux(MX27_PIN_USBH1_OE_B);
++	gpio_free_mux(MX27_PIN_USBH1_TXDM);
++	gpio_free_mux(MX27_PIN_USBH1_TXDP);
++	gpio_free_mux(MX27_PIN_USBH1_RXDM);
++	gpio_free_mux(MX27_PIN_USBH1_RXDP);
++}
++EXPORT_SYMBOL(gpio_usbh1_inactive);
++
++/*
++ * conflicts with CSPI1 (MC13783) and CSPI2 (Connector)
++ */
++void gpio_usbh2_active(void)
++{
++	gpio_set_puen(MX27_PIN_USBH2_CLK, 0);
++	gpio_set_puen(MX27_PIN_USBH2_DIR, 0);
++	gpio_set_puen(MX27_PIN_USBH2_DATA7, 0);
++	gpio_set_puen(MX27_PIN_USBH2_NXT, 0);
++	gpio_set_puen(MX27_PIN_USBH2_STP, 0);
++	gpio_set_puen(MX27_PIN_CSPI2_SS2, 0);
++	gpio_set_puen(MX27_PIN_CSPI2_SS1, 0);
++	gpio_set_puen(MX27_PIN_CSPI2_SS0, 0);
++	gpio_set_puen(MX27_PIN_CSPI2_SCLK, 0);
++	gpio_set_puen(MX27_PIN_CSPI2_MISO, 0);
++	gpio_set_puen(MX27_PIN_CSPI2_MOSI, 0);
++	gpio_set_puen(MX27_PIN_CSPI1_SS2, 0);
++
++	gpio_request_mux(MX27_PIN_USBH2_CLK, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBH2_DIR, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBH2_DATA7, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBH2_NXT, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBH2_STP, GPIO_MUX_PRIMARY);
++
++	gpio_request_mux(MX27_PIN_CSPI2_SS2, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_CSPI2_SS1, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_CSPI2_SS0, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_CSPI2_SCLK, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_CSPI2_MISO, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_CSPI2_MOSI, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_CSPI1_SS2, GPIO_MUX_ALT);
++}
++EXPORT_SYMBOL(gpio_usbh2_active);
++void gpio_usbh2_inactive(void)
++{
++	gpio_free_mux(MX27_PIN_USBH2_CLK);
++	gpio_free_mux(MX27_PIN_USBH2_DIR);
++	gpio_free_mux(MX27_PIN_USBH2_DATA7);
++	gpio_free_mux(MX27_PIN_USBH2_NXT);
++	gpio_free_mux(MX27_PIN_USBH2_STP);
++
++	gpio_free_mux(MX27_PIN_CSPI2_SS2);
++	gpio_free_mux(MX27_PIN_CSPI2_SS1);
++	gpio_free_mux(MX27_PIN_CSPI2_SS0);
++	gpio_free_mux(MX27_PIN_CSPI2_SCLK);
++	gpio_free_mux(MX27_PIN_CSPI2_MISO);
++	gpio_free_mux(MX27_PIN_CSPI2_MOSI);
++	gpio_free_mux(MX27_PIN_CSPI1_SS2);
++
++	gpio_set_puen(MX27_PIN_USBH2_CLK, 1);
++	gpio_set_puen(MX27_PIN_USBH2_DIR, 1);
++	gpio_set_puen(MX27_PIN_USBH2_DATA7, 1);
++	gpio_set_puen(MX27_PIN_USBH2_NXT, 1);
++	gpio_set_puen(MX27_PIN_USBH2_STP, 1);
++	gpio_set_puen(MX27_PIN_CSPI2_SS2, 1);
++	gpio_set_puen(MX27_PIN_CSPI2_SS1, 1);
++	gpio_set_puen(MX27_PIN_CSPI2_SS0, 1);
++	gpio_set_puen(MX27_PIN_CSPI2_SCLK, 1);
++	gpio_set_puen(MX27_PIN_CSPI2_MISO, 1);
++	gpio_set_puen(MX27_PIN_CSPI2_MOSI, 1);
++	gpio_set_puen(MX27_PIN_CSPI1_SS2, 1);
++}
++EXPORT_SYMBOL(gpio_usbh2_inactive);
++
++void gpio_usbotg_hs_active(void)
++{
++	gpio_request_mux(MX27_PIN_USBOTG_DATA5, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBOTG_DATA6, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBOTG_DATA0, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBOTG_DATA2, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBOTG_DATA1, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBOTG_DATA3, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBOTG_DATA4, GPIO_MUX_PRIMARY);
++
++	gpio_request_mux(MX27_PIN_USBOTG_DIR, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBOTG_STP, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBOTG_NXT, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBOTG_CLK, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USBOTG_DATA7, GPIO_MUX_PRIMARY);
++
++	gpio_request_mux(MX27_PIN_USB_OC_B, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_USB_PWR, GPIO_MUX_PRIMARY);
++}
++EXPORT_SYMBOL(gpio_usbotg_hs_active);
++
++void gpio_usbotg_hs_inactive(void)
++{
++	gpio_free_mux(MX27_PIN_USBOTG_DATA5);
++	gpio_free_mux(MX27_PIN_USBOTG_DATA6);
++	gpio_free_mux(MX27_PIN_USBOTG_DATA0);
++	gpio_free_mux(MX27_PIN_USBOTG_DATA2);
++	gpio_free_mux(MX27_PIN_USBOTG_DATA1);
++	gpio_free_mux(MX27_PIN_USBOTG_DATA3);
++	gpio_free_mux(MX27_PIN_USBOTG_DATA4);
++
++	gpio_free_mux(MX27_PIN_USBOTG_DIR);
++	gpio_free_mux(MX27_PIN_USBOTG_STP);
++	gpio_free_mux(MX27_PIN_USBOTG_NXT);
++	gpio_free_mux(MX27_PIN_USBOTG_CLK);
++	gpio_free_mux(MX27_PIN_USBOTG_DATA7);
++
++	gpio_free_mux(MX27_PIN_USB_OC_B);
++	gpio_free_mux(MX27_PIN_USB_PWR);
++}
++EXPORT_SYMBOL(gpio_usbotg_hs_inactive);
++
++void gpio_usbotg_fs_active(void)
++{
++	return gpio_usbotg_hs_active();
++}
++EXPORT_SYMBOL(gpio_usbotg_fs_active);
++
++void gpio_usbotg_fs_inactive(void)
++{
++	return gpio_usbotg_hs_inactive();
++}
++EXPORT_SYMBOL(gpio_usbotg_fs_inactive);
++
++/*!
++ * end Setup GPIO for USB
++ *
++ */
++
++/************************************************************************/
++/* for i2c gpio                                                         */
++/* I2C1:  PD17,PD18 -- Primary 					*/
++/* I2C2:  PC5,PC6    -- Primary					*/
++/************************************************************************/
++/*!
++* Setup GPIO for an I2C device to be active
++*
++* @param  i2c_num         an I2C device
++*/
++void gpio_i2c_active(int i2c_num)
++{
++	switch (i2c_num) {
++	case 0:
++		gpio_request_mux(MX27_PIN_I2C_CLK, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_I2C_DATA, GPIO_MUX_PRIMARY);
++		break;
++	case 1:
++		gpio_request_mux(MX27_PIN_I2C2_SCL, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_I2C2_SDA, GPIO_MUX_PRIMARY);
++		break;
++	default:
++		printk(KERN_ERR "gpio_i2c_active no compatible I2C adapter\n");
++		break;
++	}
++}
++EXPORT_SYMBOL(gpio_i2c_active);
++
++/*!
++ *  * Setup GPIO for an I2C device to be inactive
++ *   *
++ *    * @param  i2c_num         an I2C device
++ */
++void gpio_i2c_inactive(int i2c_num)
++{
++	switch (i2c_num) {
++	case 0:
++		gpio_free_mux(MX27_PIN_I2C_CLK);
++		gpio_free_mux(MX27_PIN_I2C_DATA);
++		break;
++	case 1:
++		gpio_free_mux(MX27_PIN_I2C2_SCL);
++		gpio_free_mux(MX27_PIN_I2C2_SDA);
++		break;
++	default:
++		break;
++	}
++}
++EXPORT_SYMBOL(gpio_i2c_inactive);
++
++/*!
++ * Setup GPIO for a CSPI device to be active
++ *
++ * @param  cspi_mod         an CSPI device
++ */
++void gpio_spi_active(int cspi_mod)
++{
++	switch (cspi_mod) {
++	case 0:
++		/* SPI1 */
++		gpio_request_mux(MX27_PIN_CSPI1_MOSI, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_CSPI1_MISO, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_CSPI1_SCLK, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_CSPI1_RDY, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_CSPI1_SS0, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_CSPI1_SS1, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_CSPI1_SS2, GPIO_MUX_PRIMARY);
++		break;
++	case 1:
++		/*SPI2  */
++		gpio_request_mux(MX27_PIN_CSPI2_MOSI, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_CSPI2_MISO, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_CSPI2_SCLK, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_CSPI2_SS0, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_CSPI2_SS1, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_CSPI2_SS2, GPIO_MUX_PRIMARY);
++		break;
++	case 2:
++		/*SPI3  */
++		gpio_request_mux(MX27_PIN_SD1_D0, GPIO_MUX_ALT);
++		gpio_request_mux(MX27_PIN_SD1_CMD, GPIO_MUX_ALT);
++		gpio_request_mux(MX27_PIN_SD1_CLK, GPIO_MUX_ALT);
++		gpio_request_mux(MX27_PIN_SD1_D3, GPIO_MUX_ALT);
++		break;
++
++	default:
++		break;
++	}
++}
++EXPORT_SYMBOL(gpio_spi_active);
++
++/*!
++ * Setup GPIO for a CSPI device to be inactive
++ *
++ * @param  cspi_mod         a CSPI device
++ */
++void gpio_spi_inactive(int cspi_mod)
++{
++	switch (cspi_mod) {
++	case 0:
++		/* SPI1 */
++		gpio_free_mux(MX27_PIN_CSPI1_MOSI);
++		gpio_free_mux(MX27_PIN_CSPI1_MISO);
++		gpio_free_mux(MX27_PIN_CSPI1_SCLK);
++		gpio_free_mux(MX27_PIN_CSPI1_RDY);
++		gpio_free_mux(MX27_PIN_CSPI1_SS0);
++		gpio_free_mux(MX27_PIN_CSPI1_SS1);
++		gpio_free_mux(MX27_PIN_CSPI1_SS2);
++		break;
++	case 1:
++		/*SPI2  */
++		gpio_free_mux(MX27_PIN_CSPI2_MOSI);
++		gpio_free_mux(MX27_PIN_CSPI2_MISO);
++		gpio_free_mux(MX27_PIN_CSPI2_SCLK);
++		gpio_free_mux(MX27_PIN_CSPI2_SS0);
++		gpio_free_mux(MX27_PIN_CSPI2_SS1);
++		gpio_free_mux(MX27_PIN_CSPI2_SS2);
++		break;
++	case 2:
++		/*SPI3  */
++		gpio_free_mux(MX27_PIN_SD1_D0);
++		gpio_free_mux(MX27_PIN_SD1_CMD);
++		gpio_free_mux(MX27_PIN_SD1_CLK);
++		gpio_free_mux(MX27_PIN_SD1_D3);
++		break;
++
++	default:
++		break;
++	}
++}
++EXPORT_SYMBOL(gpio_spi_inactive);
++
++/*!
++ * Setup GPIO for a nand flash device to be active
++ *
++ */
++void gpio_nand_active(void)
++{
++	unsigned long reg;
++	reg = __raw_readl(SYS_FMCR);
++	reg &= ~SYS_FMCR_NF_16BIT_SEL_MASK;
++	__raw_writel(reg, SYS_FMCR);
++
++	gpio_request_mux(MX27_PIN_NFRB, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_NFCE_B, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_NFWP_B, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_NFCLE, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_NFALE, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_NFRE_B, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_NFWE_B, GPIO_MUX_PRIMARY);
++}
++EXPORT_SYMBOL(gpio_nand_active);
++
++/*!
++ * Setup GPIO for a nand flash device to be inactive
++ *
++ */
++void gpio_nand_inactive(void)
++{
++	gpio_free_mux(MX27_PIN_NFRB);
++	gpio_free_mux(MX27_PIN_NFCE_B);
++	gpio_free_mux(MX27_PIN_NFWP_B);
++	gpio_free_mux(MX27_PIN_NFCLE);
++	gpio_free_mux(MX27_PIN_NFALE);
++	gpio_free_mux(MX27_PIN_NFRE_B);
++	gpio_free_mux(MX27_PIN_NFWE_B);
++}
++EXPORT_SYMBOL(gpio_nand_inactive);
++
++/*!
++ * Setup GPIO for CSI device to be active
++ *
++ */
++void gpio_sensor_active(void)
++{
++	gpio_request_mux(MX27_PIN_CSI_D0, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_CSI_D1, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_CSI_D2, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_CSI_D3, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_CSI_D4, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_CSI_MCLK, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_CSI_PIXCLK, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_CSI_D5, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_CSI_D6, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_CSI_D7, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_CSI_VSYNC, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_CSI_HSYNC, GPIO_MUX_PRIMARY);
++
++#ifdef CONFIG_MXC_CAMERA_MC521DA
++	__raw_writew(0x100, PBC_BCTRL2_SET_REG);
++#else
++	__raw_writew(0x400, PBC_BCTRL2_SET_REG);
++#endif
++}
++EXPORT_SYMBOL(gpio_sensor_active);
++
++void gpio_sensor_inactive(void)
++{
++	gpio_free_mux(MX27_PIN_CSI_D0);
++	gpio_free_mux(MX27_PIN_CSI_D1);
++	gpio_free_mux(MX27_PIN_CSI_D2);
++	gpio_free_mux(MX27_PIN_CSI_D3);
++	gpio_free_mux(MX27_PIN_CSI_D4);
++	gpio_free_mux(MX27_PIN_CSI_MCLK);
++	gpio_free_mux(MX27_PIN_CSI_PIXCLK);
++	gpio_free_mux(MX27_PIN_CSI_D5);
++	gpio_free_mux(MX27_PIN_CSI_D6);
++	gpio_free_mux(MX27_PIN_CSI_D7);
++	gpio_free_mux(MX27_PIN_CSI_VSYNC);
++	gpio_free_mux(MX27_PIN_CSI_HSYNC);
++
++#ifdef CONFIG_MXC_CAMERA_MC521DA
++	__raw_writew(0x100, PBC_BCTRL2_CLEAR_REG);
++#else
++	__raw_writew(0x400, PBC_BCTRL2_CLEAR_REG);
++#endif
++}
++EXPORT_SYMBOL(gpio_sensor_inactive);
++
++void gpio_sensor_reset(bool flag)
++{
++	u16 temp;
++
++	if (flag) {
++		temp = 0x200;
++		__raw_writew(temp, PBC_BCTRL2_CLEAR_REG);
++	} else {
++		temp = 0x200;
++		__raw_writew(temp, PBC_BCTRL2_SET_REG);
++	}
++}
++EXPORT_SYMBOL(gpio_sensor_reset);
++
++/*!
++ * Setup GPIO for LCDC device to be active
++ *
++ */
++void gpio_lcdc_active(void)
++{
++	gpio_request_mux(MX27_PIN_LSCLK, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD0, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD1, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD2, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD3, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD4, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD5, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD6, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD7, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD8, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD9, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD10, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD11, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD12, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD13, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD14, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD15, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD16, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_LD17, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_REV, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_CLS, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_PS, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_SPL_SPR, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_HSYNC, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_VSYNC, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_CONTRAST, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_OE_ACD, GPIO_MUX_PRIMARY);
++}
++EXPORT_SYMBOL(gpio_lcdc_active);
++
++/*!
++ * Setup GPIO for LCDC device to be inactive
++ *
++ */
++void gpio_lcdc_inactive(void)
++{
++	gpio_free_mux(MX27_PIN_LSCLK);
++	gpio_free_mux(MX27_PIN_LD0);
++	gpio_free_mux(MX27_PIN_LD1);
++	gpio_free_mux(MX27_PIN_LD2);
++	gpio_free_mux(MX27_PIN_LD3);
++	gpio_free_mux(MX27_PIN_LD4);
++	gpio_free_mux(MX27_PIN_LD5);
++	gpio_free_mux(MX27_PIN_LD6);
++	gpio_free_mux(MX27_PIN_LD7);
++	gpio_free_mux(MX27_PIN_LD8);
++	gpio_free_mux(MX27_PIN_LD9);
++	gpio_free_mux(MX27_PIN_LD10);
++	gpio_free_mux(MX27_PIN_LD11);
++	gpio_free_mux(MX27_PIN_LD12);
++	gpio_free_mux(MX27_PIN_LD13);
++	gpio_free_mux(MX27_PIN_LD14);
++	gpio_free_mux(MX27_PIN_LD15);
++	gpio_free_mux(MX27_PIN_LD16);
++	gpio_free_mux(MX27_PIN_LD17);
++	gpio_free_mux(MX27_PIN_REV);
++	gpio_free_mux(MX27_PIN_CLS);
++	gpio_free_mux(MX27_PIN_PS);
++	gpio_free_mux(MX27_PIN_SPL_SPR);
++	gpio_free_mux(MX27_PIN_HSYNC);
++	gpio_free_mux(MX27_PIN_VSYNC);
++	gpio_free_mux(MX27_PIN_CONTRAST);
++	gpio_free_mux(MX27_PIN_OE_ACD);
++}
++EXPORT_SYMBOL(gpio_lcdc_inactive);
++
++/*!
++ * Setup GPIO PA25 low to start hard reset FS453 TV encoder
++ *
++ */
++void gpio_fs453_reset_low(void)
++{
++	gpio_free_mux(MX27_PIN_CLS);
++	if (gpio_request_mux(MX27_PIN_CLS, GPIO_MUX_GPIO)) {
++		printk(KERN_ERR "bug: request GPIO PA25 failed.\n");
++		return;
++	}
++
++	/* PA25 (CLS) as output */
++	mxc_set_gpio_direction(MX27_PIN_CLS, 0);
++	gpio_config_mux(MX27_PIN_CLS, GPIO_MUX_GPIO);
++	mxc_set_gpio_dataout(MX27_PIN_CLS, 0);
++}
++EXPORT_SYMBOL(gpio_fs453_reset_low);
++
++/*!
++ * Setup GPIO PA25 high to end hard reset FS453 TV encoder
++ *
++ */
++void gpio_fs453_reset_high(void)
++{
++	gpio_free_mux(MX27_PIN_CLS);
++	if (gpio_request_mux(MX27_PIN_CLS, GPIO_MUX_GPIO)) {
++		printk(KERN_ERR "bug: request GPIO PA25 failed.\n");
++		return;
++	}
++
++	/* PA25 (CLS) as output */
++	mxc_set_gpio_direction(MX27_PIN_CLS, 0);
++	gpio_config_mux(MX27_PIN_CLS, GPIO_MUX_GPIO);
++	mxc_set_gpio_dataout(MX27_PIN_CLS, 1);
++}
++EXPORT_SYMBOL(gpio_fs453_reset_high);
++
++/*!
++ * This function configures the IOMux block for PMIC standard operations.
++ *
++ */
++void gpio_pmic_active(void)
++{
++	gpio_config_mux(MX27_PIN_TOUT, GPIO_MUX_GPIO);
++	mxc_set_gpio_direction(MX27_PIN_TOUT, 1);
++}
++EXPORT_SYMBOL(gpio_pmic_active);
++
++/*!
++ * GPIO settings not required for keypad
++ *
++ */
++void gpio_keypad_active(void)
++{
++}
++EXPORT_SYMBOL(gpio_keypad_active);
++
++/*!
++ * GPIO settings not required for keypad
++ *
++ */
++void gpio_keypad_inactive(void)
++{
++}
++EXPORT_SYMBOL(gpio_keypad_inactive);
++
++/*!
++ * Setup GPIO for ATA device to be active
++ *
++ */
++void gpio_ata_active(void)
++{
++	gpio_request_mux(MX27_PIN_ATA_DATA0, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_ATA_DATA1, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_ATA_DATA2, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_ATA_DATA3, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_ATA_DATA4, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_ATA_DATA5, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_ATA_DATA6, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_ATA_DATA7, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_ATA_DATA8, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_ATA_DATA9, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_ATA_DATA10, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_ATA_DATA11, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_ATA_DATA12, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_ATA_DATA13, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_ATA_DATA14, GPIO_MUX_PRIMARY);
++	gpio_request_mux(MX27_PIN_ATA_DATA15, GPIO_MUX_PRIMARY);
++
++	gpio_request_mux(MX27_PIN_PC_CD1_B, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_PC_CD2_B, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_PC_WAIT_B, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_PC_READY, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_PC_PWRON, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_PC_VS1, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_PC_VS2, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_PC_BVD1, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_PC_BVD2, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_PC_RST, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_IOIS16, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_PC_RW_B, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_PC_POE, GPIO_MUX_ALT);
++}
++EXPORT_SYMBOL(gpio_ata_active);
++
++/*!
++ * Setup GPIO for ATA device to be inactive
++ *
++ */
++void gpio_ata_inactive(void)
++{
++	gpio_free_mux(MX27_PIN_ATA_DATA0);
++	gpio_free_mux(MX27_PIN_ATA_DATA1);
++	gpio_free_mux(MX27_PIN_ATA_DATA2);
++	gpio_free_mux(MX27_PIN_ATA_DATA3);
++	gpio_free_mux(MX27_PIN_ATA_DATA4);
++	gpio_free_mux(MX27_PIN_ATA_DATA5);
++	gpio_free_mux(MX27_PIN_ATA_DATA6);
++	gpio_free_mux(MX27_PIN_ATA_DATA7);
++	gpio_free_mux(MX27_PIN_ATA_DATA8);
++	gpio_free_mux(MX27_PIN_ATA_DATA9);
++	gpio_free_mux(MX27_PIN_ATA_DATA10);
++	gpio_free_mux(MX27_PIN_ATA_DATA11);
++	gpio_free_mux(MX27_PIN_ATA_DATA12);
++	gpio_free_mux(MX27_PIN_ATA_DATA13);
++	gpio_free_mux(MX27_PIN_ATA_DATA14);
++	gpio_free_mux(MX27_PIN_ATA_DATA15);
++
++	gpio_free_mux(MX27_PIN_PC_CD1_B);
++	gpio_free_mux(MX27_PIN_PC_CD2_B);
++	gpio_free_mux(MX27_PIN_PC_WAIT_B);
++	gpio_free_mux(MX27_PIN_PC_READY);
++	gpio_free_mux(MX27_PIN_PC_PWRON);
++	gpio_free_mux(MX27_PIN_PC_VS1);
++	gpio_free_mux(MX27_PIN_PC_VS2);
++	gpio_free_mux(MX27_PIN_PC_BVD1);
++	gpio_free_mux(MX27_PIN_PC_BVD2);
++	gpio_free_mux(MX27_PIN_PC_RST);
++	gpio_free_mux(MX27_PIN_IOIS16);
++	gpio_free_mux(MX27_PIN_PC_RW_B);
++	gpio_free_mux(MX27_PIN_PC_POE);
++}
++EXPORT_SYMBOL(gpio_ata_inactive);
++
++/*!
++ * Setup GPIO for FEC device to be active
++ *
++ */
++void gpio_fec_active(void)
++{
++	gpio_request_mux(MX27_PIN_ATA_DATA15, GPIO_MUX_OUTPUT1);
++	mxc_set_gpio_direction(MX27_PIN_ATA_DATA15, 0);
++	gpio_request_mux(MX27_PIN_ATA_DATA14, GPIO_MUX_OUTPUT1);
++	mxc_set_gpio_direction(MX27_PIN_ATA_DATA14, 0);
++	gpio_request_mux(MX27_PIN_ATA_DATA13, GPIO_MUX_INPUT1);
++	mxc_set_gpio_direction(MX27_PIN_ATA_DATA13, 1);
++	gpio_request_mux(MX27_PIN_ATA_DATA12, GPIO_MUX_INPUT1);
++	mxc_set_gpio_direction(MX27_PIN_ATA_DATA12, 1);
++	gpio_request_mux(MX27_PIN_ATA_DATA11, GPIO_MUX_INPUT1);
++	mxc_set_gpio_direction(MX27_PIN_ATA_DATA11, 1);
++	gpio_request_mux(MX27_PIN_ATA_DATA10, GPIO_MUX_INPUT1);
++	mxc_set_gpio_direction(MX27_PIN_ATA_DATA10, 1);
++	gpio_request_mux(MX27_PIN_ATA_DATA9, GPIO_MUX_INPUT1);
++	mxc_set_gpio_direction(MX27_PIN_ATA_DATA9, 1);
++	gpio_request_mux(MX27_PIN_ATA_DATA8, GPIO_MUX_INPUT1);
++	mxc_set_gpio_direction(MX27_PIN_ATA_DATA8, 1);
++	gpio_request_mux(MX27_PIN_ATA_DATA7, GPIO_MUX_OUTPUT1);
++	mxc_set_gpio_direction(MX27_PIN_ATA_DATA7, 0);
++
++	gpio_request_mux(MX27_PIN_ATA_DATA6, GPIO_MUX_ALT);
++	gpio_request_mux(MX27_PIN_ATA_DATA5, GPIO_MUX_INPUT1);
++	mxc_set_gpio_direction(MX27_PIN_ATA_DATA5, 1);
++	gpio_request_mux(MX27_PIN_ATA_DATA4, GPIO_MUX_INPUT1);
++	mxc_set_gpio_direction(MX27_PIN_ATA_DATA4, 1);
++	gpio_request_mux(MX27_PIN_ATA_DATA3, GPIO_MUX_INPUT1);
++	mxc_set_gpio_direction(MX27_PIN_ATA_DATA3, 1);
++	gpio_request_mux(MX27_PIN_ATA_DATA2, GPIO_MUX_INPUT1);
++	mxc_set_gpio_direction(MX27_PIN_ATA_DATA2, 1);
++	gpio_request_mux(MX27_PIN_ATA_DATA1, GPIO_MUX_OUTPUT1);
++	mxc_set_gpio_direction(MX27_PIN_ATA_DATA1, 0);
++	gpio_request_mux(MX27_PIN_ATA_DATA0, GPIO_MUX_OUTPUT1);
++	mxc_set_gpio_direction(MX27_PIN_ATA_DATA0, 0);
++	gpio_request_mux(MX27_PIN_SD3_CLK, GPIO_MUX_OUTPUT1);
++	mxc_set_gpio_direction(MX27_PIN_SD3_CLK, 0);
++	gpio_request_mux(MX27_PIN_SD3_CMD, GPIO_MUX_OUTPUT1);
++	mxc_set_gpio_direction(MX27_PIN_SD3_CMD, 0);
++
++	__raw_writew(PBC_BCTRL2_ATAFEC_EN, PBC_BCTRL2_CLEAR_REG);
++	__raw_writew(PBC_BCTRL2_ATAFEC_SEL, PBC_BCTRL2_SET_REG);
++}
++EXPORT_SYMBOL(gpio_fec_active);
++
++/*!
++ * Setup GPIO for FEC device to be inactive
++ *
++ */
++void gpio_fec_inactive(void)
++{
++	gpio_free_mux(MX27_PIN_ATA_DATA0);
++	gpio_free_mux(MX27_PIN_ATA_DATA1);
++	gpio_free_mux(MX27_PIN_ATA_DATA2);
++	gpio_free_mux(MX27_PIN_ATA_DATA3);
++	gpio_free_mux(MX27_PIN_ATA_DATA4);
++	gpio_free_mux(MX27_PIN_ATA_DATA5);
++	gpio_free_mux(MX27_PIN_ATA_DATA6);
++	gpio_free_mux(MX27_PIN_ATA_DATA7);
++	gpio_free_mux(MX27_PIN_ATA_DATA8);
++	gpio_free_mux(MX27_PIN_ATA_DATA9);
++	gpio_free_mux(MX27_PIN_ATA_DATA10);
++	gpio_free_mux(MX27_PIN_ATA_DATA11);
++	gpio_free_mux(MX27_PIN_ATA_DATA12);
++	gpio_free_mux(MX27_PIN_ATA_DATA13);
++	gpio_free_mux(MX27_PIN_ATA_DATA14);
++	gpio_free_mux(MX27_PIN_ATA_DATA15);
++
++	gpio_free_mux(MX27_PIN_SD3_CMD);
++	gpio_free_mux(MX27_PIN_SD3_CLK);
++}
++EXPORT_SYMBOL(gpio_fec_inactive);
++
++/*!
++ * Setup GPIO for SLCDC device to be active
++ *
++ */
++void gpio_slcdc_active(int type)
++{
++	switch (type) {
++	case 0:
++		gpio_request_mux(MX27_PIN_SSI3_CLK, GPIO_MUX_ALT);	/* CLK */
++		gpio_request_mux(MX27_PIN_SSI3_TXDAT, GPIO_MUX_ALT);	/* CS  */
++		gpio_request_mux(MX27_PIN_SSI3_RXDAT, GPIO_MUX_ALT);	/* RS  */
++		gpio_request_mux(MX27_PIN_SSI3_FS, GPIO_MUX_ALT);	/* D0  */
++		break;
++
++	case 1:
++		gpio_request_mux(MX27_PIN_SD2_D1, GPIO_MUX_GPIO);	/* CLK */
++		gpio_request_mux(MX27_PIN_SD2_D2, GPIO_MUX_GPIO);	/* D0  */
++		gpio_request_mux(MX27_PIN_SD2_D3, GPIO_MUX_GPIO);	/* RS  */
++		gpio_request_mux(MX27_PIN_SD2_CMD, GPIO_MUX_GPIO);	/* CS  */
++		break;
++
++	case 2:
++		gpio_request_mux(MX27_PIN_LD0, GPIO_MUX_GPIO);
++		gpio_request_mux(MX27_PIN_LD1, GPIO_MUX_GPIO);
++		gpio_request_mux(MX27_PIN_LD2, GPIO_MUX_GPIO);
++		gpio_request_mux(MX27_PIN_LD3, GPIO_MUX_GPIO);
++		gpio_request_mux(MX27_PIN_LD4, GPIO_MUX_GPIO);
++		gpio_request_mux(MX27_PIN_LD5, GPIO_MUX_GPIO);
++		gpio_request_mux(MX27_PIN_LD6, GPIO_MUX_GPIO);
++		gpio_request_mux(MX27_PIN_LD7, GPIO_MUX_GPIO);
++		gpio_request_mux(MX27_PIN_LD8, GPIO_MUX_GPIO);
++		gpio_request_mux(MX27_PIN_LD9, GPIO_MUX_GPIO);
++		gpio_request_mux(MX27_PIN_LD10, GPIO_MUX_GPIO);
++		gpio_request_mux(MX27_PIN_LD11, GPIO_MUX_GPIO);
++		gpio_request_mux(MX27_PIN_LD12, GPIO_MUX_GPIO);
++		gpio_request_mux(MX27_PIN_LD13, GPIO_MUX_GPIO);
++		gpio_request_mux(MX27_PIN_LD14, GPIO_MUX_GPIO);
++		gpio_request_mux(MX27_PIN_LD15, GPIO_MUX_GPIO);
++		break;
++
++	default:
++		break;
++	}
++
++	return;
++}
++EXPORT_SYMBOL(gpio_slcdc_active);
++
++/*!
++ * Setup GPIO for SLCDC device to be inactive
++ *
++ */
++void gpio_slcdc_inactive(int type)
++{
++	switch (type) {
++	case 0:
++		gpio_free_mux(MX27_PIN_SSI3_CLK);	/* CLK */
++		gpio_free_mux(MX27_PIN_SSI3_TXDAT);	/* CS  */
++		gpio_free_mux(MX27_PIN_SSI3_RXDAT);	/* RS  */
++		gpio_free_mux(MX27_PIN_SSI3_FS);	/* D0  */
++		break;
++
++	case 1:
++		gpio_free_mux(MX27_PIN_SD2_D1);	/* CLK */
++		gpio_free_mux(MX27_PIN_SD2_D2);	/* D0  */
++		gpio_free_mux(MX27_PIN_SD2_D3);	/* RS  */
++		gpio_free_mux(MX27_PIN_SD2_CMD);	/* CS  */
++		break;
++
++	case 2:
++		gpio_free_mux(MX27_PIN_LD0);
++		gpio_free_mux(MX27_PIN_LD1);
++		gpio_free_mux(MX27_PIN_LD2);
++		gpio_free_mux(MX27_PIN_LD3);
++		gpio_free_mux(MX27_PIN_LD4);
++		gpio_free_mux(MX27_PIN_LD5);
++		gpio_free_mux(MX27_PIN_LD6);
++		gpio_free_mux(MX27_PIN_LD7);
++		gpio_free_mux(MX27_PIN_LD8);
++		gpio_free_mux(MX27_PIN_LD9);
++		gpio_free_mux(MX27_PIN_LD10);
++		gpio_free_mux(MX27_PIN_LD11);
++		gpio_free_mux(MX27_PIN_LD12);
++		gpio_free_mux(MX27_PIN_LD13);
++		gpio_free_mux(MX27_PIN_LD14);
++		gpio_free_mux(MX27_PIN_LD15);
++		break;
++
++	default:
++		break;
++	}
++
++	return;
++}
++EXPORT_SYMBOL(gpio_slcdc_inactive);
++
++void gpio_ssi_active(int ssi_num)
++{
++	switch (ssi_num) {
++	case 0:
++		gpio_request_mux(MX27_PIN_SSI1_FS, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SSI1_RXDAT, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SSI1_TXDAT, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SSI1_CLK, GPIO_MUX_PRIMARY);
++		gpio_set_puen(MX27_PIN_SSI1_FS, 0);
++		gpio_set_puen(MX27_PIN_SSI1_RXDAT, 0);
++		gpio_set_puen(MX27_PIN_SSI1_TXDAT, 0);
++		gpio_set_puen(MX27_PIN_SSI1_CLK, 0);
++		break;
++	case 1:
++		gpio_request_mux(MX27_PIN_SSI2_FS, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SSI2_RXDAT, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SSI2_TXDAT, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SSI2_CLK, GPIO_MUX_PRIMARY);
++		gpio_set_puen(MX27_PIN_SSI2_FS, 0);
++		gpio_set_puen(MX27_PIN_SSI2_RXDAT, 0);
++		gpio_set_puen(MX27_PIN_SSI2_TXDAT, 0);
++		gpio_set_puen(MX27_PIN_SSI2_CLK, 0);
++		break;
++	default:
++		break;
++	}
++	return;
++}
++EXPORT_SYMBOL(gpio_ssi_active);
++
++/*!
++ *  * Setup GPIO for a SSI port to be inactive
++ *   *
++ *    * @param  ssi_num         an SSI port num
++ */
++
++void gpio_ssi_inactive(int ssi_num)
++{
++	switch (ssi_num) {
++	case 0:
++		gpio_free_mux(MX27_PIN_SSI1_FS);
++		gpio_free_mux(MX27_PIN_SSI1_RXDAT);
++		gpio_free_mux(MX27_PIN_SSI1_TXDAT);
++		gpio_free_mux(MX27_PIN_SSI1_CLK);
++		break;
++	case 1:
++		gpio_free_mux(MX27_PIN_SSI2_FS);
++		gpio_free_mux(MX27_PIN_SSI2_RXDAT);
++		gpio_free_mux(MX27_PIN_SSI2_TXDAT);
++		gpio_free_mux(MX27_PIN_SSI2_CLK);
++		break;
++	default:
++		break;
++	}
++	return;
++}
++EXPORT_SYMBOL(gpio_ssi_inactive);
++
++/*!
++ * Setup GPIO for SDHC to be active
++ *
++ * @param module SDHC module number
++ */
++void gpio_sdhc_active(int module)
++{
++	u16 data;
++	switch (module) {
++	case 0:
++		gpio_request_mux(MX27_PIN_SD1_CLK, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SD1_CMD, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SD1_D0, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SD1_D1, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SD1_D2, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SD1_D3, GPIO_MUX_PRIMARY);
++		/* 22k pull up for sd1 dat3 pins */
++		data = __raw_readw(IO_ADDRESS(SYSCTRL_BASE_ADDR + 0x54));
++		data |= 0x0c;
++		__raw_writew(data, IO_ADDRESS(SYSCTRL_BASE_ADDR + 0x54));
++		/*mxc_clks_enable(SDHC1_CLK);
++		   mxc_clks_enable(PERCLK2); */
++		break;
++	case 1:
++		gpio_request_mux(MX27_PIN_SD2_CLK, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SD2_CMD, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SD2_D0, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SD2_D1, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SD2_D2, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SD2_D3, GPIO_MUX_PRIMARY);
++		/* 22k pull up for sd2 pins */
++		data = __raw_readw(IO_ADDRESS(SYSCTRL_BASE_ADDR + 0x54));
++		data &= ~0xfff0;
++		data |= 0xfff0;
++		__raw_writew(data, IO_ADDRESS(SYSCTRL_BASE_ADDR + 0x54));
++		/*mxc_clks_enable(SDHC2_CLK);
++		   mxc_clks_enable(PERCLK2); */
++		break;
++	case 2:
++		gpio_request_mux(MX27_PIN_SD3_CLK, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_SD3_CMD, GPIO_MUX_PRIMARY);
++		gpio_request_mux(MX27_PIN_ATA_DATA0, GPIO_MUX_ALT);
++		gpio_request_mux(MX27_PIN_ATA_DATA1, GPIO_MUX_ALT);
++		gpio_request_mux(MX27_PIN_ATA_DATA2, GPIO_MUX_ALT);
++		gpio_request_mux(MX27_PIN_ATA_DATA3, GPIO_MUX_ALT);
++		/*mxc_clks_enable(SDHC3_CLK);
++		   mxc_clks_enable(PERCLK2); */
++		break;
++	default:
++		break;
++	}
++}
++EXPORT_SYMBOL(gpio_sdhc_active);
++
++/*!
++ * Setup GPIO for SDHC1 to be inactive
++ *
++ * @param module SDHC module number
++ */
++void gpio_sdhc_inactive(int module)
++{
++	switch (module) {
++	case 0:
++		gpio_free_mux(MX27_PIN_SD1_CLK);
++		gpio_free_mux(MX27_PIN_SD1_CMD);
++		gpio_free_mux(MX27_PIN_SD1_D0);
++		gpio_free_mux(MX27_PIN_SD1_D1);
++		gpio_free_mux(MX27_PIN_SD1_D2);
++		gpio_free_mux(MX27_PIN_SD1_D3);
++		/*mxc_clks_disable(SDHC1_CLK); */
++		break;
++	case 1:
++		gpio_free_mux(MX27_PIN_SD2_CLK);
++		gpio_free_mux(MX27_PIN_SD2_CMD);
++		gpio_free_mux(MX27_PIN_SD2_D0);
++		gpio_free_mux(MX27_PIN_SD2_D1);
++		gpio_free_mux(MX27_PIN_SD2_D2);
++		gpio_free_mux(MX27_PIN_SD2_D3);
++		/*mxc_clks_disable(SDHC2_CLK); */
++		break;
++	case 2:
++		gpio_free_mux(MX27_PIN_SD3_CLK);
++		gpio_free_mux(MX27_PIN_SD3_CMD);
++		gpio_free_mux(MX27_PIN_ATA_DATA0);
++		gpio_free_mux(MX27_PIN_ATA_DATA1);
++		gpio_free_mux(MX27_PIN_ATA_DATA2);
++		gpio_free_mux(MX27_PIN_ATA_DATA3);
++		/*mxc_clks_disable(SDHC3_CLK); */
++		break;
++	default:
++		break;
++	}
++}
++EXPORT_SYMBOL(gpio_sdhc_inactive);
++
++/*
++ * Probe for the card. If present the GPIO data would be set.
++ */
++int sdhc_get_card_det_status(struct device *dev)
++{
++	return 0;
++}
++EXPORT_SYMBOL(sdhc_get_card_det_status);
++
++/*
++ * Return the card detect pin.
++ */
++int sdhc_init_card_det(int id)
++{
++	int ret = 0;
++	switch (id) {
++	case 0:
++		ret = EXPIO_INT_SD1_EN;
++		break;
++	case 1:
++		ret = EXPIO_INT_SD2_EN;
++		break;
++	default:
++		ret = 0;
++		break;
++	}
++	return ret;
++}
++EXPORT_SYMBOL(sdhc_init_card_det);
++
++/*
++ * Power on/off Sharp QVGA panel.
++ */
++void board_power_lcd(int on)
++{
++	if (on)
++		__raw_writew(PBC_BCTRL1_LCDON, PBC_BCTRL1_SET_REG);
++	else
++		__raw_writew(PBC_BCTRL1_LCDON, PBC_BCTRL1_CLEAR_REG);
++}
++EXPORT_SYMBOL(board_power_lcd);
++
++void gpio_owire_active(void)
++{
++	gpio_request_mux(MX27_PIN_RTCK, GPIO_MUX_ALT);
++}
++EXPORT_SYMBOL(gpio_owire_active);
++
++void gpio_owire_inactive(void)
++{
++	gpio_request_mux(MX27_PIN_RTCK, GPIO_MUX_PRIMARY);
++}
++EXPORT_SYMBOL(gpio_owire_inactive);
++
++void gpio_irda_active(void)
++{
++	gpio_uart_active(2, 0);
++	/* Band width select */
++	/*__raw_writew(PBC_BCTRL2_IRDA_SD, PBC_BCTRL2_SET_REG);*/
++}
++EXPORT_SYMBOL(gpio_irda_active);
++
++void gpio_irda_inactive(void)
++{
++	gpio_uart_inactive(2, 0);
++}
++EXPORT_SYMBOL(gpio_irda_inactive);
+Index: linux-2.6.18/arch/arm/plat-mxc/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/arm/plat-mxc/Makefile
++++ linux-2.6.18/arch/arm/plat-mxc/Makefile
+@@ -3,5 +3,5 @@
+ #
+ 
+ # Common support
+-obj-y := irq.o clock.o
++obj-y := irq.o clock.o gpio.o
+ obj-$(CONFIG_ARCH_MX2) += dma_mx2.o
+Index: linux-2.6.18/arch/arm/plat-mxc/gpio.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/plat-mxc/gpio.c
+@@ -0,0 +1,530 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++
++/*
++ * Implementation based on omap gpio.c
++ */
++
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/sched.h>
++#include <linux/interrupt.h>
++#include <linux/ptrace.h>
++#include <asm/hardware.h>
++#include <asm/irq.h>
++#include <asm/arch/irqs.h>
++#include <asm/mach/irq.h>
++#include <asm/io.h>
++#include <asm/arch/gpio.h>
++
++/*!
++ * @file plat-mxc/gpio.c
++ *
++ * @brief This file contains the GPIO implementation details.
++ *
++ * @ingroup GPIO
++ */
++
++/* GPIO related defines */
++#if defined(CONFIG_ARCH_MX2)
++enum gpio_reg {
++	GPIO_DR = 0x1C,
++	GPIO_GDIR = 0x00,
++	GPIO_PSR = 0x24,
++	GPIO_ICR1 = 0x028,
++	GPIO_ICR2 = 0x2C,
++	GPIO_IMR = 0x30,
++	GPIO_ISR = 0x34,
++};
++#else
++enum gpio_reg {
++	GPIO_DR = 0x00,
++	GPIO_GDIR = 0x04,
++	GPIO_PSR = 0x08,
++	GPIO_ICR1 = 0x0C,
++	GPIO_ICR2 = 0x10,
++	GPIO_IMR = 0x14,
++	GPIO_ISR = 0x18,
++};
++#endif
++
++extern struct mxc_gpio_port mxc_gpio_ports[];
++
++struct gpio_port {
++	u32 num;		/*!< gpio port number */
++	u32 base;		/*!< gpio port base VA */
++	u16 irq;		/*!< irq number to the core */
++	u16 virtual_irq_start;	/*!< virtual irq start number */
++	u32 reserved_map;	/*!< keep track of which pins are in use */
++	u32 irq_is_level_map;	/*!< if a pin's irq is level sensitive. default is edge */
++	spinlock_t lock;	/*!< lock when operating on the port */
++};
++static struct gpio_port gpio_port[GPIO_PORT_NUM];
++
++/*
++ * Find the pointer to the gpio_port for a given pin.
++ * @param gpio		a gpio pin number
++ * @return		pointer to \b struc \b gpio_port
++ */
++static inline struct gpio_port *get_gpio_port(u32 gpio)
++{
++	return &gpio_port[GPIO_TO_PORT(gpio)];
++}
++
++/*
++ * Check if a gpio pin is within [0, MXC_MAX_GPIO_LINES -1].
++ * @param gpio		a gpio pin number
++ * @return		0 if the pin number is valid; -1 otherwise
++ */
++static int check_gpio(u32 gpio)
++{
++	if (gpio >= MXC_MAX_GPIO_LINES) {
++		printk(KERN_ERR "mxc-gpio: invalid GPIO %d\n", gpio);
++		dump_stack();
++		return -1;
++	}
++	return 0;
++}
++
++/*
++ * Set a GPIO pin's direction
++ * @param port		pointer to a gpio_port
++ * @param index		gpio pin index value (0~31)
++ * @param is_input	0 for output; non-zero for input
++ */
++static void _set_gpio_direction(struct gpio_port *port, u32 index, int is_input)
++{
++	u32 reg = port->base + GPIO_GDIR;
++	u32 l;
++
++	l = __raw_readl(reg);
++	if (is_input)
++		l &= ~(1 << index);
++	else
++		l |= 1 << index;
++	__raw_writel(l, reg);
++}
++
++/*!
++ * Exported function to set a GPIO pin's direction
++ * @param pin		a name defined by \b iomux_pin_name_t
++ * @param is_input	1 (or non-zero) for input; 0 for output
++ */
++void mxc_set_gpio_direction(iomux_pin_name_t pin, int is_input)
++{
++	struct gpio_port *port;
++	u32 gpio = IOMUX_TO_GPIO(pin);
++
++	if (check_gpio(gpio) < 0)
++		return;
++	port = get_gpio_port(gpio);
++	spin_lock(&port->lock);
++	_set_gpio_direction(port, GPIO_TO_INDEX(gpio), is_input);
++	spin_unlock(&port->lock);
++}
++EXPORT_SYMBOL(mxc_set_gpio_direction);
++
++/*
++ * Set a GPIO pin's data output
++ * @param port		pointer to a gpio_port
++ * @param index		gpio pin index value (0~31)
++ * @param data		value to be set (only 0 or 1 is valid)
++ */
++static void _set_gpio_dataout(struct gpio_port *port, u32 index, u32 data)
++{
++	u32 reg = port->base + GPIO_DR;
++	u32 l = 0;
++
++	l = (__raw_readl(reg) & (~(1 << index))) | (data << index);
++	__raw_writel(l, reg);
++}
++
++/*!
++ * Exported function to set a GPIO pin's data output
++ * @param pin		a name defined by \b iomux_pin_name_t
++ * @param data		value to be set (only 0 or 1 is valid)
++ */
++void mxc_set_gpio_dataout(iomux_pin_name_t pin, u32 data)
++{
++	struct gpio_port *port;
++	u32 gpio = IOMUX_TO_GPIO(pin);
++
++	if (check_gpio(gpio) < 0)
++		return;
++
++	port = get_gpio_port(gpio);
++	spin_lock(&port->lock);
++	_set_gpio_dataout(port, GPIO_TO_INDEX(gpio), (data == 0) ? 0 : 1);
++	spin_unlock(&port->lock);
++}
++EXPORT_SYMBOL(mxc_set_gpio_dataout);
++
++/*!
++ * Return the data value of a GPIO signal.
++ * @param pin	a name defined by \b iomux_pin_name_t
++ *
++ * @return 	value (0 or 1) of the GPIO signal; -1 if pass in invalid pin
++ */
++int mxc_get_gpio_datain(iomux_pin_name_t pin)
++{
++	struct gpio_port *port;
++	u32 gpio = IOMUX_TO_GPIO(pin);
++
++	if (check_gpio(gpio) < 0)
++		return -1;
++
++	port = get_gpio_port(gpio);
++
++	return (__raw_readl(port->base + GPIO_DR) >> GPIO_TO_INDEX(gpio)) & 1;
++}
++EXPORT_SYMBOL(mxc_get_gpio_datain);
++
++/*
++ * Clear a GPIO signal's interrupt status
++ *
++ * @param port		pointer to a gpio_port
++ * @param index		gpio pin index value (0~31)
++ */
++static inline void _clear_gpio_irqstatus(struct gpio_port *port, u32 index)
++{
++	__raw_writel(1 << index, port->base + GPIO_ISR);
++}
++
++/*
++ * Set a GPIO pin's interrupt edge
++ * @param port		pointer to a gpio_port
++ * @param index		gpio pin index value (0~31)
++ * @param icr		one of the values defined in \b gpio_int_cfg
++ *                      to indicate how to generate an interrupt
++ */
++static void _set_gpio_edge_ctrl(struct gpio_port *port, u32 index,
++				enum gpio_int_cfg edge)
++{
++	u32 reg = port->base;
++	u32 l, sig;
++
++	reg += (index <= 15) ? GPIO_ICR1 : GPIO_ICR2;
++	sig = (index <= 15) ? index : (index - 16);
++	l = __raw_readl(reg);
++	l = (l & (~(0x3 << (sig * 2)))) | (edge << (sig * 2));
++	__raw_writel(l, reg);
++	_clear_gpio_irqstatus(port, index);
++}
++
++/*
++ * Enable/disable a GPIO signal's interrupt.
++ *
++ * @param port		pointer to a gpio_port
++ * @param index		gpio pin index value (0~31)
++ * @param enable	\b #true for enabling the interrupt; \b #false otherwise
++ */
++static inline void _set_gpio_irqenable(struct gpio_port *port, u32 index,
++				       bool enable)
++{
++	u32 reg = port->base + GPIO_IMR;
++	u32 mask = (!enable) ? 0 : 1;
++	u32 l;
++
++	l = __raw_readl(reg);
++	l = (l & (~(1 << index))) | (mask << index);
++	__raw_writel(l, reg);
++}
++
++static inline int _request_gpio(struct gpio_port *port, u32 index)
++{
++	spin_lock(&port->lock);
++	if (port->reserved_map & (1 << index)) {
++		printk(KERN_ERR
++		       "GPIO port %d (0-based), pin %d is already reserved!\n",
++		       port->num, index);
++		dump_stack();
++		spin_unlock(&port->lock);
++		return -1;
++	}
++	port->reserved_map |= (1 << index);
++	spin_unlock(&port->lock);
++	return 0;
++}
++
++/*!
++ * Request ownership for a GPIO pin. The caller has to check the return value
++ * of this function to make sure it returns 0 before make use of that pin.
++ * @param pin		a name defined by \b iomux_pin_name_t
++ * @return		0 if successful; Non-zero otherwise
++ */
++int mxc_request_gpio(iomux_pin_name_t pin)
++{
++	struct gpio_port *port;
++	u32 index, gpio = IOMUX_TO_GPIO(pin);
++
++	if (check_gpio(gpio) < 0)
++		return -EINVAL;
++
++	port = get_gpio_port(gpio);
++	index = GPIO_TO_INDEX(gpio);
++
++	return _request_gpio(port, index);
++}
++EXPORT_SYMBOL(mxc_request_gpio);
++
++/*!
++ * Release ownership for a GPIO pin
++ * @param pin		a name defined by \b iomux_pin_name_t
++ */
++void mxc_free_gpio(iomux_pin_name_t pin)
++{
++	struct gpio_port *port;
++	u32 index, gpio = IOMUX_TO_GPIO(pin);
++
++	if (check_gpio(gpio) < 0)
++		return;
++
++	port = get_gpio_port(gpio);
++	index = GPIO_TO_INDEX(gpio);
++
++	spin_lock(&port->lock);
++	if ((!(port->reserved_map & (1 << index)))) {
++		printk(KERN_ERR "GPIO port %d, pin %d wasn't reserved!\n",
++		       port->num, index);
++		dump_stack();
++		spin_unlock(&port->lock);
++		return;
++	}
++	port->reserved_map &= ~(1 << index);
++	port->irq_is_level_map &= ~(1 << index);
++	_set_gpio_direction(port, index, 1);
++	_set_gpio_irqenable(port, index, 0);
++	_clear_gpio_irqstatus(port, index);
++	spin_unlock(&port->lock);
++}
++EXPORT_SYMBOL(mxc_free_gpio);
++
++/*
++ * We need to unmask the GPIO port interrupt as soon as possible to
++ * avoid missing GPIO interrupts for other lines in the port.
++ * Then we need to mask-read-clear-unmask the triggered GPIO lines
++ * in the port to avoid missing nested interrupts for a GPIO line.
++ * If we wait to unmask individual GPIO lines in the port after the
++ * line's interrupt handler has been run, we may miss some nested
++ * interrupts.
++ */
++static void mxc_gpio_irq_handler(u32 irq, struct irq_desc *desc,
++		struct pt_regs *regs)
++{
++	u32 isr_reg = 0, imr_reg = 0, imr_val;
++	u32 int_valid;
++	u32 gpio_irq;
++	struct gpio_port *port;
++
++	port = (struct gpio_port *)get_irq_data(irq);
++	isr_reg = port->base + GPIO_ISR;
++	imr_reg = port->base + GPIO_IMR;
++
++	imr_val = __raw_readl(imr_reg);
++	int_valid = __raw_readl(isr_reg) & imr_val;
++
++	if (unlikely(!int_valid)) {
++		printk(KERN_ERR "\nGPIO port: %d Spurious interrupt:0x%0x\n\n",
++		       port->num, int_valid);
++		BUG();		/* oops */
++	}
++
++	gpio_irq = port->virtual_irq_start;
++	for (; int_valid != 0; int_valid >>= 1, gpio_irq++) {
++		struct irq_desc *d;
++
++		if ((int_valid & 1) == 0)
++			continue;
++		d = irq_desc + gpio_irq;
++		if (unlikely(!(d->handle_irq))) {
++			printk(KERN_ERR "\nGPIO port: %d irq: %d unhandeled\n",
++			       port->num, gpio_irq);
++			BUG();	/* oops */
++		}
++		d->handle_irq(gpio_irq, d, regs);
++	}
++}
++
++#ifdef MXC_MUX_GPIO_INTERRUPTS
++static void mxc_gpio_mux_irq_handler(u32 irq, struct irq_desc *desc,
++		struct pt_regs *regs)
++{
++	int i;
++	u32 isr_reg = 0, imr_reg = 0, imr_val;
++	u32 int_valid;
++	struct gpio_port *port;
++
++	for (i = 0; i < GPIO_PORT_NUM; i++) {
++		port = &gpio_port[i];
++		isr_reg = port->base + GPIO_ISR;
++		imr_reg = port->base + GPIO_IMR;
++
++		imr_val = __raw_readl(imr_reg);
++		int_valid = __raw_readl(isr_reg) & imr_val;
++
++		if (int_valid) {
++			set_irq_data(irq, (void *)port);
++			mxc_gpio_irq_handler(irq, desc, regs);
++		}
++	}
++}
++#endif
++
++/*
++ * Disable a gpio pin's interrupt by setting the bit in the imr.
++ * @param irq		a gpio virtual irq number
++ */
++static void gpio_mask_irq(u32 irq)
++{
++	u32 gpio = MXC_IRQ_TO_GPIO(irq);
++	struct gpio_port *port = get_gpio_port(gpio);
++
++	_set_gpio_irqenable(port, GPIO_TO_INDEX(gpio), 0);
++}
++
++/*
++ * Acknowledge a gpio pin's interrupt by clearing the bit in the isr.
++ * If the GPIO interrupt is level triggered, it also disables the interrupt.
++ * @param irq		a gpio virtual irq number
++ */
++static void gpio_ack_irq(u32 irq)
++{
++	u32 gpio = MXC_IRQ_TO_GPIO(irq);
++	u32 index = GPIO_TO_INDEX(gpio);
++	struct gpio_port *port = get_gpio_port(gpio);
++
++	_clear_gpio_irqstatus(port, GPIO_TO_INDEX(gpio));
++	if (port->irq_is_level_map & (1 << index)) {
++		gpio_mask_irq(irq);
++	}
++}
++
++/*
++ * Enable a gpio pin's interrupt by clearing the bit in the imr.
++ * @param irq		a gpio virtual irq number
++ */
++static void gpio_unmask_irq(u32 irq)
++{
++	u32 gpio = MXC_IRQ_TO_GPIO(irq);
++	struct gpio_port *port = get_gpio_port(gpio);
++
++	_set_gpio_irqenable(port, GPIO_TO_INDEX(gpio), 1);
++}
++
++/*
++ * Enable a gpio pin's interrupt by clearing the bit in the imr.
++ * @param irq		a gpio virtual irq number
++ */
++static int gpio_set_irq_type(u32 irq, u32 type)
++{
++	u32 gpio = MXC_IRQ_TO_GPIO(irq);
++	struct gpio_port *port = get_gpio_port(gpio);
++
++	switch (type) {
++	case IRQT_RISING:
++		_set_gpio_edge_ctrl(port, GPIO_TO_INDEX(gpio),
++				    GPIO_INT_RISE_EDGE);
++		set_irq_handler(irq, do_edge_IRQ);
++		port->irq_is_level_map &= ~(1 << GPIO_TO_INDEX(gpio));
++		break;
++	case IRQT_FALLING:
++		_set_gpio_edge_ctrl(port, GPIO_TO_INDEX(gpio),
++				    GPIO_INT_FALL_EDGE);
++		set_irq_handler(irq, do_edge_IRQ);
++		port->irq_is_level_map &= ~(1 << GPIO_TO_INDEX(gpio));
++		break;
++	case IRQT_LOW:
++		_set_gpio_edge_ctrl(port, GPIO_TO_INDEX(gpio),
++				    GPIO_INT_LOW_LEV);
++		set_irq_handler(irq, do_level_IRQ);
++		port->irq_is_level_map |= 1 << GPIO_TO_INDEX(gpio);
++		break;
++	case IRQT_HIGH:
++		_set_gpio_edge_ctrl(port, GPIO_TO_INDEX(gpio),
++				    GPIO_INT_HIGH_LEV);
++		set_irq_handler(irq, do_level_IRQ);
++		port->irq_is_level_map |= 1 << GPIO_TO_INDEX(gpio);
++		break;
++	case IRQT_BOTHEDGE:
++	default:
++		return -EINVAL;
++		break;
++	}
++	return 0;
++}
++
++static struct irq_chip gpio_irq_chip = {
++	.ack = gpio_ack_irq,
++	.mask = gpio_mask_irq,
++	.unmask = gpio_unmask_irq,
++	.set_type = gpio_set_irq_type,
++};
++
++static int initialized /*= 0*/;
++
++static int __init _mxc_gpio_init(void)
++{
++	int i;
++	struct gpio_port *port;
++
++	initialized = 1;
++
++	printk(KERN_INFO "MXC GPIO hardware\n");
++
++	for (i = 0; i < GPIO_PORT_NUM; i++) {
++		int j, gpio_count = GPIO_NUM_PIN;
++
++		port = &gpio_port[i];
++		port->base = mxc_gpio_ports[i].base;
++		port->num = mxc_gpio_ports[i].num;
++		port->irq = mxc_gpio_ports[i].irq;
++		port->virtual_irq_start = mxc_gpio_ports[i].virtual_irq_start;
++
++		port->reserved_map = 0;
++		spin_lock_init(&port->lock);
++
++		/* disable the interrupt and clear the status */
++		__raw_writel(0, port->base + GPIO_IMR);
++		__raw_writel(0xFFFFFFFF, port->base + GPIO_ISR);
++		for (j = port->virtual_irq_start;
++		     j < port->virtual_irq_start + gpio_count; j++) {
++			set_irq_chip(j, &gpio_irq_chip);
++			set_irq_handler(j, do_edge_IRQ);
++			set_irq_flags(j, IRQF_VALID);
++		}
++#ifndef MXC_MUX_GPIO_INTERRUPTS
++		set_irq_chained_handler(port->irq, mxc_gpio_irq_handler);
++		set_irq_data(port->irq, port);
++#endif
++	}
++
++#ifdef MXC_MUX_GPIO_INTERRUPTS
++	set_irq_chained_handler(port->irq, mxc_gpio_mux_irq_handler);
++	set_irq_data(mxc_gpio_ports[0].irq, gpio_port);
++#endif
++
++	return 0;
++}
++
++/*
++ * This may get called early from board specific init
++ */
++int mxc_gpio_init(void)
++{
++	if (!initialized)
++		return _mxc_gpio_init();
++	else
++		return 0;
++}
++
++postcore_initcall(mxc_gpio_init);
+Index: linux-2.6.18/include/asm-arm/arch-mxc/gpio.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/gpio.h
+@@ -0,0 +1,102 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++#ifndef __ASM_ARCH_MXC_GPIO_H__
++#define __ASM_ARCH_MXC_GPIO_H__
++
++/*!
++ * @defgroup GPIO General Purpose Input Output (GPIO)
++ */
++
++/*!
++ * @file arch-mxc/gpio.h
++ * @brief This file contains the GPIO API functions.
++ *
++ * @ingroup GPIO
++ */
++
++#include <asm/sizes.h>
++#include <linux/interrupt.h>
++#include <asm/hardware.h>
++
++/* gpio related defines */
++
++/*!
++ * gpio port structure
++ */
++struct mxc_gpio_port {
++	u32 num;		/*!< gpio port number */
++	u32 base;		/*!< gpio port base VA */
++	u16 irq;		/*!< irq number to the core */
++	u16 virtual_irq_start;	/*!< virtual irq start number */
++};
++
++/*!
++ * This enumeration data type defines various different ways for interrupting
++ * the ARM core from GPIO signals. The way to interrupt the core is dictated
++ * by the external hardware.
++ */
++enum gpio_int_cfg {
++#if defined(CONFIG_ARCH_MX2)
++	GPIO_INT_LOW_LEV = 0x3,	/*!< low level sensitive */
++	GPIO_INT_HIGH_LEV = 0x2,	/*!< high level sensitive */
++	GPIO_INT_RISE_EDGE = 0x0,	/*!< rising edge sensitive */
++	GPIO_INT_FALL_EDGE = 0x1,	/*!< falling edge sensitive */
++	GPIO_INT_NONE = 0x4	/*!< No interrupt */
++#else
++#error gpio_int_cfg values are not defined for this config
++#endif
++};
++
++/*!
++ * Request ownership for a GPIO pin. The caller has to check the return value
++ * of this function to make sure it returns 0 before make use of that pin.
++ * @param pin		a name defined by \b iomux_pin_name_t
++ * @return		0 if successful; Non-zero otherwise
++ */
++extern int mxc_request_gpio(iomux_pin_name_t pin);
++
++/*!
++ * Release ownership for a GPIO pin
++ * @param pin		a name defined by \b iomux_pin_name_t
++ */
++extern void mxc_free_gpio(iomux_pin_name_t pin);
++
++/*!
++ * Exported function to set a GPIO pin's direction
++ * @param pin		a name defined by \b iomux_pin_name_t
++ * @param is_input	1 (or non-zero) for input; 0 for output
++ */
++extern void mxc_set_gpio_direction(iomux_pin_name_t pin, int is_input);
++
++/*!
++ * Exported function to set a GPIO pin's data output
++ * @param pin		a name defined by \b iomux_pin_name_t
++ * @param data		value to be set (only 0 or 1 is valid)
++ */
++extern void mxc_set_gpio_dataout(iomux_pin_name_t pin, u32 data);
++
++/*!
++ * Return the data value of a GPIO signal.
++ * @param pin	a name defined by \b iomux_pin_name_t
++ *
++ * @return 	value (0 or 1) of the GPIO signal; -1 if pass in invalid pin
++ */
++extern int mxc_get_gpio_datain(iomux_pin_name_t pin);
++
++/*!
++ * GPIO driver initialization
++ * @return    always 0
++ */
++extern int mxc_gpio_init(void);
++
++#endif				/* __ASM_ARCH_MXC_GPIO_H__ */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/mx27.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-mxc/mx27.h
++++ linux-2.6.18/include/asm-arm/arch-mxc/mx27.h
+@@ -20,6 +20,13 @@
+  */
+ #define CLOCK_TICK_RATE         13300000
+ 
++/*!
++ * UART Chip level Configuration that a user may not have to edit. These
++ * configuration vary depending on how the UART module is integrated with
++ * the ARM core
++ */
++#define MXC_UART_NR 6
++
+ /*
+  * MX27 memory map:
+  *
+@@ -273,6 +280,8 @@
+  */
+ #define GPIO_NUM_PIN            32
+ 
++#include <asm/arch/mx27_pins.h>
++
+ #define DMA_REQ_NFC             37
+ #define DMA_REQ_SDHC3           36
+ #define DMA_REQ_UART6_RX        35
+Index: linux-2.6.18/include/asm-arm/arch-mxc/mx27_pins.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/mx27_pins.h
+@@ -0,0 +1,222 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++
++#ifndef __ASM_ARCH_MXC_MX27_PINS_H__
++#define __ASM_ARCH_MXC_MX27_PINS_H__
++
++/*!
++ * @file arch-mxc/mx27_pins.h
++ *
++ * @brief MX27 I/O Pin List
++ *
++ * @ingroup GPIO_MX27
++ */
++
++#ifndef __ASSEMBLY__
++
++/*!
++ * Starting bit position within each entry of \b iomux_pins to represent the
++ * gpio port number (0-based) for that pin. For non-gpio pins, the bits will
++ * be all 1's for error checking in the functions. (gpio port 7 is invalid)
++ */
++#define MUX_IO_P	29
++
++/*!
++ * Starting bit position within each entry of \b iomux_pins to represent the
++ * gpio offset bit (0-based) for that pin. For non-gpio pins, the bits will
++ * be all 0's since they are don't cares. So for port 2 pin 21, bit 31-24
++ * will be (1 << MUX_IO_P) | (21 << MUX_IO_I).
++ */
++#define MUX_IO_I	24
++
++#define _MX27_BUILD_PIN(gp, gi) (((gp) << MUX_IO_P) | ((gi) << MUX_IO_I))
++
++typedef enum iomux_pins {
++	MX27_PIN_USBH2_CLK = _MX27_BUILD_PIN(0, 0),
++	MX27_PIN_USBH2_DIR = _MX27_BUILD_PIN(0, 1),
++	MX27_PIN_USBH2_DATA7 = _MX27_BUILD_PIN(0, 2),
++	MX27_PIN_USBH2_NXT = _MX27_BUILD_PIN(0, 3),
++	MX27_PIN_USBH2_STP = _MX27_BUILD_PIN(0, 4),
++	MX27_PIN_LSCLK = _MX27_BUILD_PIN(0, 5),
++	MX27_PIN_LD0 = _MX27_BUILD_PIN(0, 6),
++	MX27_PIN_LD1 = _MX27_BUILD_PIN(0, 7),
++	MX27_PIN_LD2 = _MX27_BUILD_PIN(0, 8),
++	MX27_PIN_LD3 = _MX27_BUILD_PIN(0, 9),
++	MX27_PIN_LD4 = _MX27_BUILD_PIN(0, 10),
++	MX27_PIN_LD5 = _MX27_BUILD_PIN(0, 11),
++	MX27_PIN_LD6 = _MX27_BUILD_PIN(0, 12),
++	MX27_PIN_LD7 = _MX27_BUILD_PIN(0, 13),
++	MX27_PIN_LD8 = _MX27_BUILD_PIN(0, 14),
++	MX27_PIN_LD9 = _MX27_BUILD_PIN(0, 15),
++	MX27_PIN_LD10 = _MX27_BUILD_PIN(0, 16),
++	MX27_PIN_LD11 = _MX27_BUILD_PIN(0, 17),
++	MX27_PIN_LD12 = _MX27_BUILD_PIN(0, 18),
++	MX27_PIN_LD13 = _MX27_BUILD_PIN(0, 19),
++	MX27_PIN_LD14 = _MX27_BUILD_PIN(0, 20),
++	MX27_PIN_LD15 = _MX27_BUILD_PIN(0, 21),
++	MX27_PIN_LD16 = _MX27_BUILD_PIN(0, 22),
++	MX27_PIN_LD17 = _MX27_BUILD_PIN(0, 23),
++	MX27_PIN_REV = _MX27_BUILD_PIN(0, 24),
++	MX27_PIN_CLS = _MX27_BUILD_PIN(0, 25),
++	MX27_PIN_PS = _MX27_BUILD_PIN(0, 26),
++	MX27_PIN_SPL_SPR = _MX27_BUILD_PIN(0, 27),
++	MX27_PIN_HSYNC = _MX27_BUILD_PIN(0, 28),
++	MX27_PIN_VSYNC = _MX27_BUILD_PIN(0, 29),
++	MX27_PIN_CONTRAST = _MX27_BUILD_PIN(0, 30),
++	MX27_PIN_OE_ACD = _MX27_BUILD_PIN(0, 31),
++
++	MX27_PIN_SD2_D0 = _MX27_BUILD_PIN(1, 4),
++	MX27_PIN_SD2_D1 = _MX27_BUILD_PIN(1, 5),
++	MX27_PIN_SD2_D2 = _MX27_BUILD_PIN(1, 6),
++	MX27_PIN_SD2_D3 = _MX27_BUILD_PIN(1, 7),
++	MX27_PIN_SD2_CMD = _MX27_BUILD_PIN(1, 8),
++	MX27_PIN_SD2_CLK = _MX27_BUILD_PIN(1, 9),
++	MX27_PIN_CSI_D0 = _MX27_BUILD_PIN(1, 10),
++	MX27_PIN_CSI_D1 = _MX27_BUILD_PIN(1, 11),
++	MX27_PIN_CSI_D2 = _MX27_BUILD_PIN(1, 12),
++	MX27_PIN_CSI_D3 = _MX27_BUILD_PIN(1, 13),
++	MX27_PIN_CSI_D4 = _MX27_BUILD_PIN(1, 14),
++	MX27_PIN_CSI_MCLK = _MX27_BUILD_PIN(1, 15),
++	MX27_PIN_CSI_PIXCLK = _MX27_BUILD_PIN(1, 16),
++	MX27_PIN_CSI_D5 = _MX27_BUILD_PIN(1, 17),
++	MX27_PIN_CSI_D6 = _MX27_BUILD_PIN(1, 18),
++	MX27_PIN_CSI_D7 = _MX27_BUILD_PIN(1, 19),
++	MX27_PIN_CSI_VSYNC = _MX27_BUILD_PIN(1, 20),
++	MX27_PIN_CSI_HSYNC = _MX27_BUILD_PIN(1, 21),
++	MX27_PIN_USBH1_SUSP = _MX27_BUILD_PIN(1, 22),
++	MX27_PIN_USB_PWR = _MX27_BUILD_PIN(1, 23),
++	MX27_PIN_USB_OC_B = _MX27_BUILD_PIN(1, 24),
++	MX27_PIN_USBH1_RCV = _MX27_BUILD_PIN(1, 25),
++	MX27_PIN_USBH1_FS = _MX27_BUILD_PIN(1, 26),
++	MX27_PIN_USBH1_OE_B = _MX27_BUILD_PIN(1, 27),
++	MX27_PIN_USBH1_TXDM = _MX27_BUILD_PIN(1, 28),
++	MX27_PIN_USBH1_TXDP = _MX27_BUILD_PIN(1, 29),
++	MX27_PIN_USBH1_RXDM = _MX27_BUILD_PIN(1, 30),
++	MX27_PIN_USBH1_RXDP = _MX27_BUILD_PIN(1, 31),
++
++	MX27_PIN_I2C2_SDA = _MX27_BUILD_PIN(2, 5),
++	MX27_PIN_I2C2_SCL = _MX27_BUILD_PIN(2, 6),
++	MX27_PIN_USBOTG_DATA5 = _MX27_BUILD_PIN(2, 7),
++	MX27_PIN_USBOTG_DATA6 = _MX27_BUILD_PIN(2, 8),
++	MX27_PIN_USBOTG_DATA0 = _MX27_BUILD_PIN(2, 9),
++	MX27_PIN_USBOTG_DATA2 = _MX27_BUILD_PIN(2, 10),
++	MX27_PIN_USBOTG_DATA1 = _MX27_BUILD_PIN(2, 11),
++	MX27_PIN_USBOTG_DATA4 = _MX27_BUILD_PIN(2, 12),
++	MX27_PIN_USBOTG_DATA3 = _MX27_BUILD_PIN(2, 13),
++	MX27_PIN_TOUT = _MX27_BUILD_PIN(2, 14),
++	MX27_PIN_TIN = _MX27_BUILD_PIN(2, 15),
++	MX27_PIN_SSI4_FS = _MX27_BUILD_PIN(2, 16),
++	MX27_PIN_SSI4_RXDAT = _MX27_BUILD_PIN(2, 17),
++	MX27_PIN_SSI4_TXDAT = _MX27_BUILD_PIN(2, 18),
++	MX27_PIN_SSI4_CLK = _MX27_BUILD_PIN(2, 19),
++	MX27_PIN_SSI1_FS = _MX27_BUILD_PIN(2, 20),
++	MX27_PIN_SSI1_RXDAT = _MX27_BUILD_PIN(2, 21),
++	MX27_PIN_SSI1_TXDAT = _MX27_BUILD_PIN(2, 22),
++	MX27_PIN_SSI1_CLK = _MX27_BUILD_PIN(2, 23),
++	MX27_PIN_SSI2_FS = _MX27_BUILD_PIN(2, 24),
++	MX27_PIN_SSI2_RXDAT = _MX27_BUILD_PIN(2, 25),
++	MX27_PIN_SSI2_TXDAT = _MX27_BUILD_PIN(2, 26),
++	MX27_PIN_SSI2_CLK = _MX27_BUILD_PIN(2, 27),
++	MX27_PIN_SSI3_FS = _MX27_BUILD_PIN(2, 28),
++	MX27_PIN_SSI3_RXDAT = _MX27_BUILD_PIN(2, 29),
++	MX27_PIN_SSI3_TXDAT = _MX27_BUILD_PIN(2, 30),
++	MX27_PIN_SSI3_CLK = _MX27_BUILD_PIN(2, 31),
++
++	MX27_PIN_SD3_CMD = _MX27_BUILD_PIN(3, 0),
++	MX27_PIN_SD3_CLK = _MX27_BUILD_PIN(3, 1),
++	MX27_PIN_ATA_DATA0 = _MX27_BUILD_PIN(3, 2),
++	MX27_PIN_ATA_DATA1 = _MX27_BUILD_PIN(3, 3),
++	MX27_PIN_ATA_DATA2 = _MX27_BUILD_PIN(3, 4),
++	MX27_PIN_ATA_DATA3 = _MX27_BUILD_PIN(3, 5),
++	MX27_PIN_ATA_DATA4 = _MX27_BUILD_PIN(3, 6),
++	MX27_PIN_ATA_DATA5 = _MX27_BUILD_PIN(3, 7),
++	MX27_PIN_ATA_DATA6 = _MX27_BUILD_PIN(3, 8),
++	MX27_PIN_ATA_DATA7 = _MX27_BUILD_PIN(3, 9),
++	MX27_PIN_ATA_DATA8 = _MX27_BUILD_PIN(3, 10),
++	MX27_PIN_ATA_DATA9 = _MX27_BUILD_PIN(3, 11),
++	MX27_PIN_ATA_DATA10 = _MX27_BUILD_PIN(3, 12),
++	MX27_PIN_ATA_DATA11 = _MX27_BUILD_PIN(3, 13),
++	MX27_PIN_ATA_DATA12 = _MX27_BUILD_PIN(3, 14),
++	MX27_PIN_ATA_DATA13 = _MX27_BUILD_PIN(3, 15),
++	MX27_PIN_ATA_DATA14 = _MX27_BUILD_PIN(3, 16),
++	MX27_PIN_I2C_DATA = _MX27_BUILD_PIN(3, 17),
++	MX27_PIN_I2C_CLK = _MX27_BUILD_PIN(3, 18),
++	MX27_PIN_CSPI2_SS2 = _MX27_BUILD_PIN(3, 19),
++	MX27_PIN_CSPI2_SS1 = _MX27_BUILD_PIN(3, 20),
++	MX27_PIN_CSPI2_SS0 = _MX27_BUILD_PIN(3, 21),
++	MX27_PIN_CSPI2_SCLK = _MX27_BUILD_PIN(3, 22),
++	MX27_PIN_CSPI2_MISO = _MX27_BUILD_PIN(3, 23),
++	MX27_PIN_CSPI2_MOSI = _MX27_BUILD_PIN(3, 24),
++	MX27_PIN_CSPI1_RDY = _MX27_BUILD_PIN(3, 25),
++	MX27_PIN_CSPI1_SS2 = _MX27_BUILD_PIN(3, 26),
++	MX27_PIN_CSPI1_SS1 = _MX27_BUILD_PIN(3, 27),
++	MX27_PIN_CSPI1_SS0 = _MX27_BUILD_PIN(3, 28),
++	MX27_PIN_CSPI1_SCLK = _MX27_BUILD_PIN(3, 29),
++	MX27_PIN_CSPI1_MISO = _MX27_BUILD_PIN(3, 30),
++	MX27_PIN_CSPI1_MOSI = _MX27_BUILD_PIN(3, 31),
++
++	MX27_PIN_USBOTG_NXT = _MX27_BUILD_PIN(4, 0),
++	MX27_PIN_USBOTG_STP = _MX27_BUILD_PIN(4, 1),
++	MX27_PIN_USBOTG_DIR = _MX27_BUILD_PIN(4, 2),
++	MX27_PIN_UART2_CTS = _MX27_BUILD_PIN(4, 3),
++	MX27_PIN_UART2_RTS = _MX27_BUILD_PIN(4, 4),
++	MX27_PIN_PWMO = _MX27_BUILD_PIN(4, 5),
++	MX27_PIN_UART2_TXD = _MX27_BUILD_PIN(4, 6),
++	MX27_PIN_UART2_RXD = _MX27_BUILD_PIN(4, 7),
++	MX27_PIN_UART3_TXD = _MX27_BUILD_PIN(4, 8),
++	MX27_PIN_UART3_RXD = _MX27_BUILD_PIN(4, 9),
++	MX27_PIN_UART3_CTS = _MX27_BUILD_PIN(4, 10),
++	MX27_PIN_UART3_RTS = _MX27_BUILD_PIN(4, 11),
++	MX27_PIN_UART1_TXD = _MX27_BUILD_PIN(4, 12),
++	MX27_PIN_UART1_RXD = _MX27_BUILD_PIN(4, 13),
++	MX27_PIN_UART1_CTS = _MX27_BUILD_PIN(4, 14),
++	MX27_PIN_UART1_RTS = _MX27_BUILD_PIN(4, 15),
++	MX27_PIN_RTCK = _MX27_BUILD_PIN(4, 16),
++	MX27_PIN_RESET_OUT_B = _MX27_BUILD_PIN(4, 17),
++	MX27_PIN_SD1_D0 = _MX27_BUILD_PIN(4, 18),
++	MX27_PIN_SD1_D1 = _MX27_BUILD_PIN(4, 19),
++	MX27_PIN_SD1_D2 = _MX27_BUILD_PIN(4, 20),
++	MX27_PIN_SD1_D3 = _MX27_BUILD_PIN(4, 21),
++	MX27_PIN_SD1_CMD = _MX27_BUILD_PIN(4, 22),
++	MX27_PIN_SD1_CLK = _MX27_BUILD_PIN(4, 23),
++	MX27_PIN_USBOTG_CLK = _MX27_BUILD_PIN(4, 24),
++	MX27_PIN_USBOTG_DATA7 = _MX27_BUILD_PIN(4, 25),
++
++	MX27_PIN_NFRB = _MX27_BUILD_PIN(5, 0),
++	MX27_PIN_NFCLE = _MX27_BUILD_PIN(5, 1),
++	MX27_PIN_NFWP_B = _MX27_BUILD_PIN(5, 2),
++	MX27_PIN_NFCE_B = _MX27_BUILD_PIN(5, 3),
++	MX27_PIN_NFALE = _MX27_BUILD_PIN(5, 4),
++	MX27_PIN_NFRE_B = _MX27_BUILD_PIN(5, 5),
++	MX27_PIN_NFWE_B = _MX27_BUILD_PIN(5, 6),
++	MX27_PIN_PC_POE = _MX27_BUILD_PIN(5, 7),
++	MX27_PIN_PC_RW_B = _MX27_BUILD_PIN(5, 8),
++	MX27_PIN_IOIS16 = _MX27_BUILD_PIN(5, 9),
++	MX27_PIN_PC_RST = _MX27_BUILD_PIN(5, 10),
++	MX27_PIN_PC_BVD2 = _MX27_BUILD_PIN(5, 11),
++	MX27_PIN_PC_BVD1 = _MX27_BUILD_PIN(5, 12),
++	MX27_PIN_PC_VS2 = _MX27_BUILD_PIN(5, 13),
++	MX27_PIN_PC_VS1 = _MX27_BUILD_PIN(5, 14),
++	MX27_PIN_CLKO = _MX27_BUILD_PIN(5, 15),
++	MX27_PIN_PC_PWRON = _MX27_BUILD_PIN(5, 16),
++	MX27_PIN_PC_READY = _MX27_BUILD_PIN(5, 17),
++	MX27_PIN_PC_WAIT_B = _MX27_BUILD_PIN(5, 18),
++	MX27_PIN_PC_CD2_B = _MX27_BUILD_PIN(5, 19),
++	MX27_PIN_PC_CD1_B = _MX27_BUILD_PIN(5, 20),
++	MX27_PIN_CS4_B = _MX27_BUILD_PIN(5, 21),
++	MX27_PIN_CS5_B = _MX27_BUILD_PIN(5, 22),
++	MX27_PIN_ATA_DATA15 = _MX27_BUILD_PIN(5, 23),
++} iomux_pin_name_t;
++
++#endif				/* __ASSEMBLY__ */
++#endif				/* __ASM_ARCH_MXC_MX27_PINS_H__ */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/mxc.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-mxc/mxc.h
++++ linux-2.6.18/include/asm-arm/arch-mxc/mxc.h
+@@ -15,6 +15,19 @@
+ #error "Do not include directly."
+ #endif
+ 
++#ifndef __ASSEMBLY__
++#include <linux/types.h>
++
++#define IOMUX_TO_GPIO(pin) \
++	((((unsigned int)pin >> MUX_IO_P) * GPIO_NUM_PIN) + \
++	 ((pin >> MUX_IO_I) & ((1 << (MUX_IO_P - MUX_IO_I)) -1)))
++
++#define IOMUX_TO_IRQ(pin)       (MXC_GPIO_INT_BASE + IOMUX_TO_GPIO(pin))
++#define GPIO_TO_PORT(n)         (n / GPIO_NUM_PIN)
++#define GPIO_TO_INDEX(n)        (n % GPIO_NUM_PIN)
++
++#endif
++
+ /*
+  *****************************************
+  * AVIC Registers                        *
+Index: linux-2.6.18/mvl_patches/pro50-0108.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0108.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(108);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

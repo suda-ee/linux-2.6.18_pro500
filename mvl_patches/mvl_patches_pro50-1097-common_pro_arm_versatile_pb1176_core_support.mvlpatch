@@ -1,0 +1,1542 @@
+#! /usr/bin/env bash
+# Patch: -common_pro_arm_versatile_pb1176_core_support
+# Date: Wed Apr 30 11:10:11 2008
+# Source: ARM Ltd.
+# MR: 26915
+# Type: Enhancement 
+# Disposition: backport from ARM Ltd, RealView Platform Baseboard for ARM1176JZF-S CD Ver 3.4 
+# Signed-off-by: Somshekar Kadam schandra@in.mvista.com
+# Description:
+# Add ARM arch core support for the ARM Ltd, RealView Platform Baseboard for ARM1176JZF-S target
+# 
+
+PATCHNUM=1097
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: ARM Ltd.
+MR: 26915
+Type: Enhancement 
+Disposition: backport from ARM Ltd, RealView Platform Baseboard for ARM1176JZF-S CD Ver 3.4 
+Signed-off-by: Somshekar Kadam schandra@in.mvista.com
+Description:
+Add ARM arch core support for the ARM Ltd, RealView Platform Baseboard for ARM1176JZF-S target
+
+Index: linux-2.6.18/include/asm-arm/arch-realview/debug-macro.S
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-realview/debug-macro.S
++++ linux-2.6.18/include/asm-arm/arch-realview/debug-macro.S
+@@ -16,7 +16,11 @@
+ 		tst	\rx, #1			@ MMU enabled?
+ 		moveq	\rx,      #0x10000000
+ 		movne	\rx,      #0xf1000000	@ virtual base
++#if !defined(CONFIG_MACH_REALVIEW_PB1176)
+ 		orr	\rx, \rx, #0x00009000
++#else
++		orr	\rx, \rx, #0x0010C000
++#endif
+ 		.endm
+ 
+ #include <asm/hardware/debug-pl01x.S>
+Index: linux-2.6.18/include/asm-arm/arch-realview/hardware.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-realview/hardware.h
++++ linux-2.6.18/include/asm-arm/arch-realview/hardware.h
+@@ -25,8 +25,19 @@
+ #include <asm/sizes.h>
+ #include <asm/arch/platform.h>
+ 
++#define REALVIEW_GIC1_CPU_VBASE		0xE9000000
++#define REALVIEW_GIC1_DIST_VBASE	0xE9001000
++
++#define PCIX_UNIT_BASE			0xE8000000
++#define REALVIEW_PB11MPC_PCI_IO_VBASE	0xEA000000
++
++#if defined(CONFIG_MACH_REALVIEW_PB1176)
++#define PCIBIOS_MIN_IO			0x43000000
++#define PCIBIOS_MIN_MEM			0x44000000
++#endif
++#define pcibios_assign_all_busses()     1
+ /* macro to get at IO space when running virtually */
+-#define IO_ADDRESS(x)		(((x) & 0x0fffffff) + (((x) >> 4) & 0x0f000000) + 0xf0000000)
+-#define __io_address(n)		__io(IO_ADDRESS(n))
++#define IO_ADDRESS(x)          ((((x) & 0x0effffff) | (((x) >> 4) & 0x0f000000)) + 0xf0000000)
++#define __io_address(n)		(void __iomem *)IO_ADDRESS(n)
+ 
+ #endif
+Index: linux-2.6.18/include/asm-arm/arch-realview/io.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-realview/io.h
++++ linux-2.6.18/include/asm-arm/arch-realview/io.h
+@@ -20,11 +20,23 @@
+ #ifndef __ASM_ARM_ARCH_IO_H
+ #define __ASM_ARM_ARCH_IO_H
+ 
++#include <asm/arch/hardware.h>
++#include <asm/arch/platform.h>
+ #define IO_SPACE_LIMIT 0xffffffff
+ 
++#define REALVIEW_PCI_VIRT_BASE		0xe8000000
++#define REALVIEW_PCI_CFG_VIRT_BASE	0xeb000000
++#define REALVIEW_PCI_IO_VIRT_BASE	0xea000000
++
++#ifdef CONFIG_MACH_REALVIEW_PB1176
++#define __pci_io	(REALVIEW_PCI_IO_VIRT_BASE - REALVIEW_PCI_IO_BASE0)
++#else
++#define __pci_io	0
++#endif
++
+ static inline void __iomem *__io(unsigned long addr)
+ {
+-	return (void __iomem *)addr;
++	return (void __iomem *)(addr + __pci_io);
+ }
+ 
+ #define __io(a)			__io(a)
+Index: linux-2.6.18/include/asm-arm/arch-realview/irqs.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-realview/irqs.h
++++ linux-2.6.18/include/asm-arm/arch-realview/irqs.h
+@@ -65,6 +65,26 @@
+ #define IRQ_AACI		(IRQ_GIC_START + INT_AACI)
+ #define IRQ_ETH			(IRQ_GIC_START + INT_ETH)
+ #define IRQ_USB			(IRQ_GIC_START + INT_USB)
++#define IRQ_PCI0              (IRQ_GIC_START + INT_PCI0)
++#define IRQ_PCI1              (IRQ_GIC_START + INT_PCI1)
++#define IRQ_PCI2              (IRQ_GIC_START + INT_PCI2)
++#define IRQ_PCI3              (IRQ_GIC_START + INT_PCI3)
++#define IRQ_PMU_CPU0		(IRQ_GIC_START + INT_PMU_CPU0)
++#define IRQ_PMU_CPU1		(IRQ_GIC_START + INT_PMU_CPU1)
++#define IRQ_PMU_CPU2		(IRQ_GIC_START + INT_PMU_CPU2)
++#define IRQ_PMU_CPU3		(IRQ_GIC_START + INT_PMU_CPU3)
++#define IRQ_PMU_SCU0		(IRQ_GIC_START + INT_PMU_SCU0)
++#define IRQ_PMU_SCU1		(IRQ_GIC_START + INT_PMU_SCU1)
++#define IRQ_PMU_SCU2		(IRQ_GIC_START + INT_PMU_SCU2)
++#define IRQ_PMU_SCU3		(IRQ_GIC_START + INT_PMU_SCU3)
++#define IRQ_PMU_SCU4		(IRQ_GIC_START + INT_PMU_SCU4)
++#define IRQ_PMU_SCU5		(IRQ_GIC_START + INT_PMU_SCU5)
++#define IRQ_PMU_SCU6		(IRQ_GIC_START + INT_PMU_SCU6)
++#define IRQ_PMU_SCU7		(IRQ_GIC_START + INT_PMU_SCU7)
++
++
++#define IRQ_EB_IRQ1             (IRQ_GIC_START + INT_EB_IRQ1)
++#define IRQ_EB_IRQ2             (IRQ_GIC_START + INT_EB_IRQ2)
+ 
+ #define IRQMASK_WDOGINT		INTMASK_WDOGINT
+ #define IRQMASK_SOFTINT		INTMASK_SOFTINT
+@@ -103,4 +123,4 @@
+ #define IRQMASK_ETH		INTMASK_ETH
+ #define IRQMASK_USB		INTMASK_USB
+ 
+-#define NR_IRQS			(IRQ_GIC_START + 64)
++#define NR_IRQS                        (IRQ_GIC_START + 96)
+Index: linux-2.6.18/include/asm-arm/arch-realview/platform.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-realview/platform.h
++++ linux-2.6.18/include/asm-arm/arch-realview/platform.h
+@@ -24,16 +24,16 @@
+ /*
+  * Memory definitions
+  */
++#ifdef MACH_REALVIEW_EB
+ #define REALVIEW_BOOT_ROM_LO          0x30000000		/* DoC Base (64Mb)...*/
+ #define REALVIEW_BOOT_ROM_HI          0x30000000
+ #define REALVIEW_BOOT_ROM_BASE        REALVIEW_BOOT_ROM_HI	 /*  Normal position */
+ #define REALVIEW_BOOT_ROM_SIZE        SZ_64M
++#endif
+ 
+-#define REALVIEW_SSRAM_BASE           /* REALVIEW_SSMC_BASE ? */
++#define REALVIEW_SSRAM_BASE           0x48000000		/* REALVIEW_SSMC_BASE ? */
+ #define REALVIEW_SSRAM_SIZE           SZ_2M
+ 
+-#define REALVIEW_FLASH_BASE           0x40000000
+-#define REALVIEW_FLASH_SIZE           SZ_64M
+ 
+ /* 
+  *  SDRAM
+@@ -172,10 +172,35 @@
+ #define REALVIEW_INTREG_RI1          0x02    /* Ring indicator UART1 is asserted,              */
+ #define REALVIEW_INTREG_CARDINSERT   0x03    /* Signal insertion of MMC card                   */
+ 
++#if defined(CONFIG_MACH_REALVIEW_PB1176)	/* Not common in all 3, some common with EB */
++/* PCI regions */
++#define REALVIEW_PCI_BASE			0x60000000	/* PCI self config */
++#define REALVIEW_PCI_CFG_BASE			0x61000000	/* PCI config */
++#define REALVIEW_PCI_IO_BASE0			0x62000000	/* PCI IO region */
++#define REALVIEW_PCI_MEM_BASE0			0x63000000	/* Memory region 1 */
++#define REALVIEW_PCI_MEM_BASE1			0x64000000	/* Memory region 2 */
++#define REALVIEW_PCI_MEM_BASE2			0x68000000	/* Memory region 3 */
++
++/* PCI region sizes */
++#define REALVIEW_PCI_BASE_SIZE			0x01000000	/* 16MB */
++#define REALVIEW_PCI_CFG_BASE_SIZE		0x01000000	/* 16MB */
++#define REALVIEW_PCI_IO_BASE0_SIZE		0x01000000	/* 16MB */
++#define REALVIEW_PCI_MEM_BASE0_SIZE		0x01000000	/* 16MB */
++#define REALVIEW_PCI_MEM_BASE1_SIZE		0x04000000	/* 64MB */
++#define REALVIEW_PCI_MEM_BASE2_SIZE		0x08000000	/* 128MB */
++
++
++#define REALVIEW_SCTL_BASE			0x10100000	/* System controller */
++#define REALVIEW_SMC_BASE			0x10111000	/* SMC */
++#define REALVIEW_DMC_BASE			0x10109000	/* DMC configuration */
++#define REALVIEW_SDRAM67_BASE			0x70000000	/* SDRAM banks 6 and 7 */
++#define REALVIEW_FLASH_BASE           		0x3C000000
++#define REALVIEW_FLASH_SIZE           		SZ_64M
++#endif /* !MACH_REALVIEW_PB11MPC */
++
+ /*
+  * REALVIEW peripheral addresses
+  */
+-#define REALVIEW_SCTL_BASE            0x10001000	/* System controller */
+ #define REALVIEW_I2C_BASE             0x10002000	/* I2C control */
+ 	/* Reserved 0x10003000 */
+ #define REALVIEW_AACI_BASE            0x10004000	/* Audio */
+@@ -183,56 +208,44 @@
+ #define REALVIEW_KMI0_BASE            0x10006000	/* KMI interface */
+ #define REALVIEW_KMI1_BASE            0x10007000	/* KMI 2nd interface */
+ #define REALVIEW_CHAR_LCD_BASE        0x10008000	/* Character LCD */
+-#define REALVIEW_UART0_BASE           0x10009000	/* UART 0 */
+-#define REALVIEW_UART1_BASE           0x1000A000	/* UART 1 */
+-#define REALVIEW_UART2_BASE           0x1000B000	/* UART 2 */
+-#define REALVIEW_UART3_BASE           0x1000C000	/* UART 3 */
+-#define REALVIEW_SSP_BASE             0x1000D000	/* Synchronous Serial Port */
+ #define REALVIEW_SCI_BASE             0x1000E000	/* Smart card controller */
+ 	/* Reserved 0x1000F000 */
+-#define REALVIEW_WATCHDOG_BASE        0x10010000	/* watchdog interface */
+-#define REALVIEW_TIMER0_1_BASE        0x10011000	/* Timer 0 and 1 */
+-#define REALVIEW_TIMER2_3_BASE        0x10012000	/* Timer 2 and 3 */
+-#define REALVIEW_GPIO0_BASE           0x10013000	/* GPIO port 0 */
++
+ #define REALVIEW_GPIO1_BASE           0x10014000	/* GPIO port 1 */
+ #define REALVIEW_GPIO2_BASE           0x10015000	/* GPIO port 2 */
+ 	/* Reserved 0x10016000 */
+-#define REALVIEW_RTC_BASE             0x10017000	/* Real Time Clock */
+-#define REALVIEW_DMC_BASE             0x10018000	/* DMC configuration */
++
++
+ #define REALVIEW_PCI_CORE_BASE        0x10019000	/* PCI configuration */
+ 	/* Reserved 0x1001A000 - 0x1001FFFF */
+-#define REALVIEW_CLCD_BASE            0x10020000	/* CLCD */
++//#define REALVIEW_CLCD_BASE            0x10020000	/* CLCD */
+ #define REALVIEW_DMAC_BASE            0x10030000	/* DMA controller */
+-#ifndef CONFIG_REALVIEW_MPCORE
+-#define REALVIEW_GIC_CPU_BASE         0x10040000	/* Generic interrupt controller CPU interface */
+-#define REALVIEW_GIC_DIST_BASE        0x10041000	/* Generic interrupt controller distributor */
+-#else
+-#define REALVIEW_MPCORE_SCU_BASE	0x10100000	/*  SCU registers */
+-#define REALVIEW_GIC_CPU_BASE		0x10100100	/* Generic interrupt controller CPU interface */
+-#define REALVIEW_TWD_BASE		0x10100700
+-#define REALVIEW_TWD_SIZE		0x00000100
+-#define REALVIEW_GIC_DIST_BASE		0x10101000	/* Generic interrupt controller distributor */
+-#endif
+-#define REALVIEW_SMC_BASE             0x10080000	/* SMC */
+-	/* Reserved 0x10090000 - 0x100EFFFF */
+-
+-#define REALVIEW_ETH_BASE             0x4E000000	/* Ethernet */
+ 
+-/* PCI space */
+-#define REALVIEW_PCI_BASE             0x41000000	/* PCI Interface */
+-#define REALVIEW_PCI_CFG_BASE	      0x42000000
+-#define REALVIEW_PCI_MEM_BASE0        0x44000000
+-#define REALVIEW_PCI_MEM_BASE1        0x50000000
+-#define REALVIEW_PCI_MEM_BASE2        0x60000000
+-/* Sizes of above maps */
+-#define REALVIEW_PCI_BASE_SIZE	       0x01000000
+-#define REALVIEW_PCI_CFG_BASE_SIZE    0x02000000
+-#define REALVIEW_PCI_MEM_BASE0_SIZE   0x0c000000	/* 32Mb */
+-#define REALVIEW_PCI_MEM_BASE1_SIZE   0x10000000	/* 256Mb */
+-#define REALVIEW_PCI_MEM_BASE2_SIZE   0x10000000	/* 256Mb */
++#if defined(CONFIG_MACH_REALVIEW_PB1176) /* Only different for PB1176 */
++#define REALVIEW_TIMER0_1_BASE        0x10104000	/* Timer 0 and 1 */
++#define REALVIEW_TIMER2_3_BASE        0x10105000	/* Timer 2 and 3 */
++#define REALVIEW_TIMER4_5_BASE        0x10106000	/* Timer 4 and 5 */
++#define REALVIEW_WATCHDOG_BASE        0x10107000	/* watchdog interface */
++#define REALVIEW_RTC_BASE             0x10108000	/* Real Time Clock */
++#define REALVIEW_GPIO0_BASE           0x1010A000	/* GPIO port 0 */
++#define REALVIEW_SSP_BASE             0x1010B000	/* Synchronous Serial Port */
++#define REALVIEW_UART0_BASE           0x1010C000	/* UART 0 */
++#define REALVIEW_UART1_BASE           0x1010D000	/* UART 1 */
++#define REALVIEW_UART2_BASE           0x1010E000	/* UART 2 */
++#define REALVIEW_UART3_BASE           0x1010F000	/* UART 3 */
++#define REALVIEW_CLCD_BASE            0x10112000	/* CLCD */
++#define REALVIEW_ETH_BASE             0x3A000000	/* Ethernet */
++#define REALVIEW_USB_BASE	      0x3B000000	/* USB */
++#endif
+ 
+-#define REALVIEW_SDRAM67_BASE         0x70000000	/* SDRAM banks 6 and 7 */
+-#define REALVIEW_LT_BASE              0x80000000	/* Logic Tile expansion */
++#if defined(CONFIG_MACH_REALVIEW_PB1176)
++	#define REALVIEW_GIC_CPU_BASE		0x10120000	/* GIC CPU interface, on devchip */
++	#define REALVIEW_GIC_DIST_BASE		0x10121000	/* GIC distributor, on devchip */
++	#define REALVIEW_GIC1_CPU_BASE		0x10040000	/* GIC CPU interface, on FPGA */
++	#define REALVIEW_GIC1_DIST_BASE		0x10041000	/* GIC distributor, on FPGA */
++	#define REALVIEW_MPCORE_L220_BASE	0x10110000	/* L220 registers */
++#endif
++	/* Reserved 0x10090000 - 0x100EFFFF */
+ 
+ /*
+  * Disk on Chip
+@@ -273,6 +286,7 @@
+  *  Interrupts - bit assignment (primary)
+  * ------------------------------------------------------------------------
+  */
++#if !defined(CONFIG_MACH_REALVIEW_PB1176)
+ #ifndef CONFIG_REALVIEW_MPCORE
+ #define INT_WDOGINT			0	/* Watchdog timer */
+ #define INT_SOFTINT			1	/* Software interrupt */
+@@ -307,6 +321,9 @@
+ #define INT_TSPENINT			30	/* Touchscreen pen */
+ #define INT_TSKPADINT			31	/* Touchscreen keypad */
+ #else
++
++#define MAX_GIC_NR			2
++
+ #define INT_AACI			0
+ #define INT_TIMERINT0_1			1
+ #define INT_TIMERINT2_3			2
+@@ -341,6 +358,7 @@
+ #define INT_L220_SLAVE			30
+ #define INT_L220_DECODE			31
+ 
++
+ #define INT_UARTINT2			-1
+ #define INT_UARTINT3			-1
+ #define INT_CLCDINT			-1
+@@ -353,6 +371,48 @@
+ #define INT_SSPINT			-1
+ #endif
+ 
++#endif /* !defined(CONFIG_MACH_REALVIEW_PB1176) */
++
++#if defined(CONFIG_MACH_REALVIEW_PB1176)
++#define MAX_GIC_NR			2
++
++#define INT_WDOGINT			0	/* Watchdog timer */
++#define INT_SOFTINT			1	/* Software interrupt */
++#define INT_COMMRx			2	/* Debug Comm Rx interrupt */
++#define INT_COMMTx			3	/* Debug Comm Tx interrupt */
++#define INT_TIMERINT0_1			8	/* Timer 0 and 1 */
++#define INT_TIMERINT2_3			9	/* Timer 2 and 3 */
++/* 9 reserved */
++#define INT_CLCDINT			15	/* CLCD controller */
++#define INT_UARTINT0			18	/* UART 0 on development chip */
++#define INT_UARTINT1			19	/* UART 1 on development chip */
++#define INT_UARTINT2			20	/* UART 2 on development chip */
++#define INT_UARTINT3			21	/* UART 3 on development chip */
++
++#define INT_EB_IRQ2			30	/* tile GIC */
++#define INT_EB_IRQ1			31	/* main GIC */
++
++/* NOT YET ASSIGNED */
++#define INT_AACI			(32 + 19)	/* Audio Codec */
++#define INT_KMI0			(32 + 3)	/* Keyboard/Mouse port 0 */
++#define INT_KMI1			(32 + 4)	/* Keyboard/Mouse port 1 */
++#define INT_DMAINT			(32 + 24)	/* DMA controller */
++#define INT_PISMO			(32 + 16)
++#define INT_ETH				(32 + 10)	/* Ethernet controller */
++#define INT_USB				(32 + 11)	/* USB controller */
++
++#define INT_RTCINT			(32 + 25)	/* Real Time Clock */
++#define INT_MMCI0A			(32 + 1)	/* Multimedia Card 0A */
++#define INT_MMCI0B			(32 + 2)	/* Multimedia Card 0A */
++#define INT_GPIOINT0			-1
++#define INT_GPIOINT1			(32 + 8)
++#define INT_GPIOINT2			(32 + 9)
++#define INT_SCIINT			(32 + 5)
++#define INT_SSPINT			-1
++
++
++#endif
++
+ /* 
+  *  Interrupt bit positions
+  * 
+Index: linux-2.6.18/arch/arm/mach-realview/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-realview/Kconfig
++++ linux-2.6.18/arch/arm/mach-realview/Kconfig
+@@ -7,13 +7,39 @@ config MACH_REALVIEW_EB
+ 	help
+ 	  Include support for the ARM(R) RealView Emulation Baseboard platform.
+ 
++config MACH_REALVIEW_PB1176
++ 	bool "Support RealView/PB1176 platform"
++ 	select ARM_GIC
++	select CACHE_L2X0
++ 	help
++ 	  Include support for the ARM(R) RealView ARM1176 Platform Baseboard.
++
++config REALVIEW_PISMO_ETHERNET
++	bool "Enable PISMO SMSC9118 Ethernet"
++	depends on MACH_REALVIEW_PB1176
++	help
++	 Select support for SMSC9118 Ethernet PISMO card. Note that enabling
++	 this option replaces support for the on-board ethernet controller.
++
+ config REALVIEW_MPCORE
+ 	bool "Support MPcore tile"
+ 	depends on MACH_REALVIEW_EB
++	select CACHE_L2X0
+ 	help
+ 	  Enable support for the MPCore tile on the Realview platform.
+ 	  Since there are device address and interrupt differences, a
+ 	  kernel built with this option enabled is not compatible with
+ 	  other tiles.
+ 
++config REALVIEW_MPCORE_REVB
++	bool "Support MPcore RevB tile"
++	depends on REALVIEW_MPCORE
++	depends on MACH_REALVIEW_EB
++	default n
++	help
++	  Enable support for the MPCore RevB tile on the Realview platform.
++	  Since there are device address differences, a
++	  kernel built with this option enabled is not compatible with
++	  other tiles.
++
+ endmenu
+Index: linux-2.6.18/arch/arm/mach-realview/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-realview/Makefile
++++ linux-2.6.18/arch/arm/mach-realview/Makefile
+@@ -4,6 +4,11 @@
+ 
+ obj-y					:= core.o clock.o
+ obj-$(CONFIG_MACH_REALVIEW_EB)		+= realview_eb.o
++obj-$(CONFIG_MACH_REALVIEW_PB1176)	+= realview_pb1176.o
+ obj-$(CONFIG_SMP)			+= platsmp.o headsmp.o
+ obj-$(CONFIG_HOTPLUG_CPU)		+= hotplug.o
+ obj-$(CONFIG_LOCAL_TIMERS)		+= localtimer.o
++ifeq ($(CONFIG_PCI),y)
++obj-$(CONFIG_MACH_REALVIEW_EB)		+= pci.o
++obj-$(CONFIG_MACH_REALVIEW_PB1176)	+= pci.o
++endif
+Index: linux-2.6.18/arch/arm/mach-realview/core.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-realview/core.c
++++ linux-2.6.18/arch/arm/mach-realview/core.c
+@@ -141,6 +141,146 @@ struct platform_device realview_smc91x_d
+ 	.resource	= realview_smc91x_resources,
+ };
+ 
++
++static struct resource realview_smsc911x_resources[] = {
++
++#if defined(CONFIG_REALVIEW_PISMO_ETHERNET)
++#define REALVIEW_PISMO_BASE	0x20000000
++	[0] = {
++		.start		= REALVIEW_PISMO_BASE,
++		.end		= REALVIEW_PISMO_BASE + SZ_64K - 1,
++		.flags		= IORESOURCE_MEM,
++	},
++	[1] = {
++		.start		= 64 + 16,
++		.end		= 64 + 16,
++		.flags		= IORESOURCE_IRQ,
++	},
++#else
++	[0] = {
++		.start		= REALVIEW_ETH_BASE,
++		.end		= REALVIEW_ETH_BASE + SZ_64K - 1,
++		.flags		= IORESOURCE_MEM,
++	},
++	[1] = {
++		.start		= IRQ_ETH,
++		.end		= IRQ_ETH,
++		.flags		= IORESOURCE_IRQ,
++	},
++#endif
++
++};
++
++struct smsc911x_platform_config {
++	unsigned int irq_polarity;
++	unsigned int irq_type;
++};
++
++static struct smsc911x_platform_config smsc911x_config_data = {
++	.irq_polarity = 1,
++	.irq_type = 1,
++};
++
++struct platform_device realview_smsc911x_device = {
++	.name		= "smsc911x",
++	.id		= 0,
++	.num_resources	= ARRAY_SIZE(realview_smsc911x_resources),
++	.resource	= realview_smsc911x_resources,
++	.dev = {
++		.platform_data = &smsc911x_config_data,
++	},
++};
++
++#if defined(CONFIG_REALVIEW_PISMO_ETHERNET)
++/* Sets up pismo interface settings for high performance on smsc911x
++ * e.g. 32-bit width, less wait states etc. and this is done differently
++ * for each arm platform. So far it only works for pb926 chipselect 3.
++ * (7 on pb) and eb chipselect 3 on pismo board. This is another hard-coded
++ * hack for chipselect 0 on pb1176.
++ */
++static int __init pb1176_pismo_setup_cs0(void)
++{
++	/* We're setting up PISMO chipselect (cs switches: 11 on pismo board)
++	 * on smc to run at 32-bit mode with good timings.
++	 */
++	void __iomem *smc_base;
++	int ret = 0;
++
++	/* Mapping SMC memory to modify */
++	if (!request_mem_region(REALVIEW_SMC_BASE, SZ_4K, "RealView SMC")) {
++		printk(KERN_ERR "%s: Unable to claim SMC memory\n", __FUNCTION__);
++		ret = -ENOMEM;
++		goto out;
++	}
++
++	smc_base = ioremap_nocache(REALVIEW_SMC_BASE, SZ_4K);
++	if (!smc_base) {
++		printk(KERN_ERR "%s: Cannot remap the SMC memory\n", __FUNCTION__);
++		ret = -ENOMEM;
++		goto release;
++	}
++
++	/* Modify timing and width settings */
++	writel(0, smc_base + 0x00);
++	writel(4, smc_base + 0x04);
++	writel(3, smc_base + 0x08);
++	writel(0, smc_base + 0x0C);
++	writel(1, smc_base + 0x10);
++	writel(0x00303021, smc_base + 0x14);
++	writel(0, smc_base + 0x18);
++	writel(0, smc_base + 0x1C);
++
++	iounmap(smc_base);
++release:
++	release_mem_region(REALVIEW_SMC_BASE, SZ_4K);
++out:
++	return ret;
++}
++arch_initcall(pb1176_pismo_setup_cs0);
++#endif
++
++
++static struct resource realview_i2c_resource = {
++	.start		= REALVIEW_I2C_BASE,
++	.end		= REALVIEW_I2C_BASE + SZ_4K - 1,
++	.flags		= IORESOURCE_MEM,
++};
++
++struct platform_device realview_i2c_device = {
++	.name		= "versatile-i2c",
++	.id		= -1,
++	.num_resources	= 1,
++	.resource	= &realview_i2c_resource,
++};
++
++#if defined (CONFIG_MACH_REALVIEW_PB11MPC)
++#define IRQ_DUMMY		-1
++struct resource realview_cf_resources[] = {
++	[0] = {
++		.start		= REALVIEW_CF_BASE,
++		.end		= REALVIEW_CF_BASE + SZ_4K - 1,
++		.flags		= IORESOURCE_MEM,
++	},
++	[1] = {
++		.start		= REALVIEW_CF_MEM_BASE,
++		.end		= REALVIEW_CF_MEM_BASE + SZ_4K - 1,
++		.flags		= IORESOURCE_MEM,
++	},
++	[2] = {
++		.start		= IRQ_DUMMY,	/* FIXME: Find correct irq */
++		.end		= IRQ_DUMMY,
++		.flags		= IORESOURCE_IRQ,
++	},
++};
++
++struct platform_device realview_cf_device = {
++	.name		= "realview_cf",
++	.id		= 0,
++	.num_resources	= ARRAY_SIZE(realview_cf_resources),
++	.resource	= realview_cf_resources,
++};
++#endif
++
+ #define REALVIEW_SYSMCI	(__io_address(REALVIEW_SYS_BASE) + REALVIEW_SYS_MCI_OFFSET)
+ 
+ static unsigned int realview_mmc_status(struct device *dev)
+@@ -181,7 +321,11 @@ static const struct icst307_params realv
+ static void realview_oscvco_set(struct clk *clk, struct icst307_vco vco)
+ {
+ 	void __iomem *sys_lock = __io_address(REALVIEW_SYS_BASE) + REALVIEW_SYS_LOCK_OFFSET;
++#if defined(CONFIG_MACH_REALVIEW_PB1176)
++	void __iomem *sys_osc = __io_address(REALVIEW_SYS_BASE) + REALVIEW_SYS_OSC0_OFFSET;
++#else
+ 	void __iomem *sys_osc = __io_address(REALVIEW_SYS_BASE) + REALVIEW_SYS_OSC4_OFFSET;
++#endif
+ 	u32 val;
+ 
+ 	val = readl(sys_osc) & ~0x7ffff;
+@@ -215,6 +359,27 @@ static struct clcd_panel vga = {
+ 	.mode		= {
+ 		.name		= "VGA",
+ 		.refresh	= 60,
++#if defined(CONFIG_MACH_REALVIEW_PB11MPC)
++		.xres		= 1024,   /* Pixels per line */
++		.yres		= 768,    /* Lines per panel */
++		.pixclock	= 15748,  /* picoseconds per pixel */
++		.left_margin	= 152, /* Horizontal Back Porch */
++		.right_margin	= 48, /* Horizontal Front Porch */
++		.upper_margin	= 23, /* Vertical Back Porch */
++		.lower_margin	= 3, /* Vertical Front Porch */
++		.hsync_len	= 104,     /* Horizontal Sync Width */
++		.vsync_len	= 4,      /* Vertical Sync Width */
++#elif defined(CONFIG_MACH_REALVIEW_PB1176)
++		.xres		= 1024,   /* Pixels per line */
++		.yres		= 768,    /* Lines per panel */
++		.pixclock	= 15748,  /* picoseconds per pixel */
++		.left_margin	= 152, /* Horizontal Back Porch */
++		.right_margin	= 48, /* Horizontal Front Porch */
++		.upper_margin	= 23, /* Vertical Back Porch */
++		.lower_margin	= 3, /* Vertical Front Porch */
++		.hsync_len	= 104,     /* Horizontal Sync Width */
++		.vsync_len	= 4,      /* Vertical Sync Width */
++#else
+ 		.xres		= 640,
+ 		.yres		= 480,
+ 		.pixclock	= 39721,
+@@ -224,13 +389,18 @@ static struct clcd_panel vga = {
+ 		.lower_margin	= 11,
+ 		.hsync_len	= 96,
+ 		.vsync_len	= 2,
++#endif
+ 		.sync		= 0,
+ 		.vmode		= FB_VMODE_NONINTERLACED,
+ 	},
+ 	.width		= -1,
+ 	.height		= -1,
+ 	.tim2		= TIM2_BCD | TIM2_IPC,
++#if defined(CONFIG_MACH_REALVIEW_PB11MPC) || defined(CONFIG_MACH_REALVIEW_PB1176)
++	.cntl		= CNTL_LCDTFT | CNTL_LCDVCOMP(1) | CNTL_BGR,
++#else
+ 	.cntl		= CNTL_LCDTFT | CNTL_LCDVCOMP(1),
++#endif
+ 	.bpp		= 16,
+ };
+ 
+@@ -362,7 +532,11 @@ static void realview_clcd_enable(struct 
+ 	writel(val, sys_clcd);
+ }
+ 
++#if defined(CONFIG_MACH_REALVIEW_PB11MPC) ||  defined(CONFIG_MACH_REALVIEW_PB1176)
++static unsigned long framesize = SZ_1M*3/2;
++#else
+ static unsigned long framesize = SZ_1M;
++#endif
+ 
+ static int realview_clcd_setup(struct clcd_fb *fb)
+ {
+@@ -528,6 +702,8 @@ static irqreturn_t realview_timer_interr
+ 	smp_send_timer();
+ 	update_process_times(user_mode(regs));
+ #endif
++	do_timer(1);
++	update_process_times(user_mode(regs));
+ 
+ 	write_sequnlock(&xtime_lock);
+ 
+Index: linux-2.6.18/arch/arm/mach-realview/core.h
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-realview/core.h
++++ linux-2.6.18/arch/arm/mach-realview/core.h
+@@ -108,6 +108,9 @@ static struct amba_device name##_device 
+ 
+ extern struct platform_device realview_flash_device;
+ extern struct platform_device realview_smc91x_device;
++extern struct platform_device realview_smsc911x_device;
++extern struct platform_device realview_cf_device;
++extern struct platform_device realview_i2c_device;
+ extern struct mmc_platform_data realview_mmc0_plat_data;
+ extern struct mmc_platform_data realview_mmc1_plat_data;
+ extern struct clk realview_clcd_clk;
+Index: linux-2.6.18/arch/arm/mach-realview/pci.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/mach-realview/pci.c
+@@ -0,0 +1,399 @@
++/*
++ *  linux/arch/arm/mach-realview/pci.c
++ *
++ * (C) Copyright Koninklijke Philips Electronics NV 2004. All rights reserved.
++ * You can redistribute and/or modify this software under the terms of version 2
++ * of the GNU General Public License as published by the Free Software Foundation.
++ * THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT ANY WARRANTY; WITHOUT EVEN THE IMPLIED
++ * WARRANTY OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * General Public License for more details.
++ * Koninklijke Philips Electronics nor its subsidiaries is obligated to provide any support for this software.
++ *
++ * ARM Versatile PCI driver.
++ *
++ * 14/04/2005 Initial version, colin.king@philips.com
++ *
++ */
++#include <linux/kernel.h>
++#include <linux/pci.h>
++#include <linux/ptrace.h>
++#include <linux/slab.h>
++#include <linux/ioport.h>
++#include <linux/interrupt.h>
++#include <linux/spinlock.h>
++#include <linux/init.h>
++
++#include <asm/hardware.h>
++#include <asm/io.h>
++#include <asm/irq.h>
++#include <asm/system.h>
++#include <asm/mach/pci.h>
++
++/*
++ * these spaces are mapped using the following base registers:
++ *
++ * Usage Local Bus Memory         Base/Map registers used
++ *
++ * Mem   50000000 - 5FFFFFFF      LB_BASE0/LB_MAP0,  non prefetch
++ * Mem   60000000 - 6FFFFFFF      LB_BASE1/LB_MAP1,  prefetch
++ * IO    44000000 - 4FFFFFFF      LB_BASE2/LB_MAP2,  IO
++ * Cfg   42000000 - 42FFFFFF	  PCI config
++ *
++ */
++#define SYS_PCICTL			IO_ADDRESS(REALVIEW_SYS_PCICTL)
++#define PCI_IMAP0			IO_ADDRESS(REALVIEW_PCI_CORE_BASE+0x0)
++#define PCI_IMAP1			IO_ADDRESS(REALVIEW_PCI_CORE_BASE+0x4)
++#define PCI_IMAP2			IO_ADDRESS(REALVIEW_PCI_CORE_BASE+0x8)
++#define PCI_SELFID			IO_ADDRESS(REALVIEW_PCI_CORE_BASE+0xc)
++#define PCI_FLAGS			IO_ADDRESS(REALVIEW_PCI_CORE_BASE+0x10)
++#define PCI_SMAP0			IO_ADDRESS(REALVIEW_PCI_CORE_BASE+0x14)
++#define PCI_SMAP1			IO_ADDRESS(REALVIEW_PCI_CORE_BASE+0x18)
++#define PCI_SMAP2			IO_ADDRESS(REALVIEW_PCI_CORE_BASE+0x1C)
++
++#define DEVICE_ID_OFFSET		0x00
++#define CSR_OFFSET			0x04
++#define CLASS_ID_OFFSET			0x08
++
++#define VP_PCI_DEVICE_ID		0x030010ee
++#define VP_PCI_CLASS_ID			0x0b400000
++
++static unsigned long pci_slot_ignore = 0;
++
++static int __init realview_pci_slot_ignore(char *str)
++{
++	int retval;
++	int slot;
++
++	while ((retval = get_option(&str, &slot))) {
++		if ((slot < 0) || (slot > 31)) {
++			printk("Illegal slot value: %d\n", slot);
++		} else {
++			pci_slot_ignore |= (1 << slot);
++		}
++	}
++	return 1;
++}
++
++__setup("pci_slot_ignore=", realview_pci_slot_ignore);
++
++
++static unsigned long __pci_addr(struct pci_bus *bus,
++				unsigned int devfn, int offset)
++{
++	unsigned int busnr = bus->number;
++
++	/*
++	 * Trap out illegal values
++	 */
++	if (offset > 255)
++		BUG();
++	if (busnr > 255)
++		BUG();
++	if (devfn > 255)
++		BUG();
++
++	return (REALVIEW_PCI_CFG_VIRT_BASE | (busnr << 16) |
++		(PCI_SLOT(devfn) << 11) | (PCI_FUNC(devfn) << 8) | offset);
++}
++
++static int realview_read_config(struct pci_bus *bus, unsigned int devfn, int where,
++				int size, u32 *val)
++{
++	unsigned long addr = __pci_addr(bus, devfn, where);
++	u32 v;
++	int slot = PCI_SLOT(devfn);
++
++	if (pci_slot_ignore & (1 << slot)) {
++		/* Ignore this slot */
++		switch (size) {
++		case 1:
++			v = 0xff;
++			break;
++		case 2:
++			v = 0xffff;
++			break;
++		default:
++			v = 0xffffffff;
++		}
++	} else {
++		switch (size) {
++		case 1:
++			addr &= ~3;
++			v = __raw_readb(addr);
++			break;
++
++		case 2:
++			v = __raw_readl(addr & ~3);
++			if (addr & 2) v >>= 16;
++			v &= 0xffff;
++			break;
++
++		default:
++			addr &= ~3;
++			v = __raw_readl(addr);
++			break;
++		}
++	}
++
++	*val = v;
++	return PCIBIOS_SUCCESSFUL;
++}
++
++static int realview_write_config(struct pci_bus *bus, unsigned int devfn, int where,
++				 int size, u32 val)
++{
++	unsigned long addr = __pci_addr(bus, devfn, where);
++	int slot = PCI_SLOT(devfn);
++
++	if (pci_slot_ignore & (1 << slot)) {
++		return PCIBIOS_SUCCESSFUL;
++	}
++
++	switch (size) {
++	case 1:
++		__raw_writeb((u8)val, addr);
++		break;
++
++	case 2:
++		__raw_writew((u16)val, addr);
++		break;
++
++	case 4:
++		__raw_writel(val, addr);
++		break;
++	}
++
++	return PCIBIOS_SUCCESSFUL;
++}
++
++static struct pci_ops pci_realview_ops = {
++	.read	= realview_read_config,
++	.write	= realview_write_config,
++};
++
++static struct resource io_mem = {
++	.name	= "PCI non-prefetchable I/O space",
++	.start	= REALVIEW_PCI_IO_BASE0,
++	.end	= REALVIEW_PCI_IO_BASE0+REALVIEW_PCI_IO_BASE0_SIZE-1,
++	.flags	= IORESOURCE_IO,
++};
++
++static struct resource nonpre_mem0 = {
++	.name	= "PCI memory region 0",
++	.start	= REALVIEW_PCI_MEM_BASE0,
++	.end	= REALVIEW_PCI_MEM_BASE0+REALVIEW_PCI_MEM_BASE0_SIZE-1,
++	.flags	= IORESOURCE_MEM,
++};
++
++static struct resource pre_mem1 = {
++	.name	= "PCI memory region 1",
++	.start	= REALVIEW_PCI_MEM_BASE1,
++	.end	= REALVIEW_PCI_MEM_BASE1+REALVIEW_PCI_MEM_BASE1_SIZE-1,
++	.flags	= IORESOURCE_MEM | IORESOURCE_PREFETCH,
++};
++
++/* Available but unused yet. To use, it must replace another region
++ * because only 3 available resource slots in pci_sys_data.
++static struct resource pre_mem2 = {
++	.name	= "PCI memory region 2",
++	.start	= REALVIEW_PCI_MEM_BASE2,
++	.end	= REALVIEW_PCI_MEM_BASE2+REALVIEW_PCI_MEM_BASE2_SIZE-1,
++	.flags	= IORESOURCE_MEM | IORESOURCE_PREFETCH,
++};
++*/
++
++static int __init pci_realview_setup_resources(struct resource **resource)
++{
++	int ret = 0;
++
++	ret = request_resource(&iomem_resource, &io_mem);
++	if (ret) {
++		printk(KERN_ERR "PCI: unable to allocate I/O "
++		       "region 0(%d)\n", ret);
++		goto out;
++	}
++	ret = request_resource(&iomem_resource, &nonpre_mem0);
++	if (ret) {
++		printk(KERN_ERR "PCI: unable to allocate non-prefetcheble "
++		       "memory region 0(%d)\n", ret);
++		goto release_io_mem;
++	}
++	ret = request_resource(&iomem_resource, &pre_mem1);
++	if (ret) {
++		printk(KERN_ERR "PCI: unable to allocate prefetchable "
++		       "memory region 1(%d)\n", ret);
++		goto release_nonpre_mem0;
++	}
++
++	/*
++	 * bus->resource[0] is the IO resource for this bus
++	 * bus->resource[1] is the non-prefetchable mem resource 0 for this bus
++	 * bus->resource[2] is the prefetchable mem resource 1 for this bus
++	 */
++	resource[0] = &io_mem;
++	resource[1] = &nonpre_mem0;
++	resource[2] = &pre_mem1;
++
++	/* NOTE: There are only 3 resource slots in struct pci_sys_data.
++	 * Assigning a 4th resource would overwrite swizzle field and
++	 * cause an oops. */
++	goto out;
++
++ release_nonpre_mem0:
++	release_resource(&nonpre_mem0);
++ release_io_mem:
++	release_resource(&io_mem);
++ out:
++	return ret;
++}
++
++int __init pci_realview_setup(int nr, struct pci_sys_data *sys)
++{
++	int ret = 0;
++	int i;
++	int myslot = -1;
++	unsigned long val;
++	void __iomem *local_pci_cfg_base;
++
++	val = __raw_readl(SYS_PCICTL);
++	if (!(val & 1)) {
++		printk("Not plugged into PCI backplane!\n");
++		ret = -EIO;
++		goto out;
++	}
++
++	if (nr == 0) {
++		sys->mem_offset = 0;
++		sys->io_offset = REALVIEW_PCI_IO_BASE0;
++		ret = pci_realview_setup_resources(sys->resource);
++		if (ret < 0) {
++			printk("pci_versatile_setup: resources... oops?\n");
++			goto out;
++		}
++	} else {
++		printk("pci_versatile_setup: resources... nr == 0??\n");
++		goto out;
++	}
++
++	/*
++	 *  We need to discover the PCI core first to configure itself
++	 *  before the main PCI probing is performed
++	 */
++	for (i = 0; i < 32; i++)
++		if ((__raw_readl(REALVIEW_PCI_VIRT_BASE+(i<<11)+DEVICE_ID_OFFSET) == VP_PCI_DEVICE_ID) &&
++		    (__raw_readl(REALVIEW_PCI_VIRT_BASE+(i<<11)+CLASS_ID_OFFSET) == VP_PCI_CLASS_ID)) {
++			myslot = i;
++			break;
++		}
++
++	if (myslot == -1) {
++		printk("Cannot find PCI core!\n");
++		ret = -EIO;
++		goto out;
++	}
++
++	printk("PCI core found (slot %d)\n", myslot);
++
++	__raw_writel(myslot, PCI_SELFID);
++	local_pci_cfg_base = (void *) REALVIEW_PCI_CFG_VIRT_BASE + (myslot << 11);
++
++	val = __raw_readl(local_pci_cfg_base + CSR_OFFSET);
++	val |= PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER | PCI_COMMAND_INVALIDATE;
++	__raw_writel(val, local_pci_cfg_base + CSR_OFFSET);
++
++	/*
++	 * Configure the PCI inbound memory windows to be 1:1 mapped to SDRAM
++	 */
++	__raw_writel(PHYS_OFFSET, local_pci_cfg_base + PCI_BASE_ADDRESS_0);
++	__raw_writel(PHYS_OFFSET, local_pci_cfg_base + PCI_BASE_ADDRESS_1);
++	__raw_writel(PHYS_OFFSET, local_pci_cfg_base + PCI_BASE_ADDRESS_2);
++
++	/*
++	 * Do not to map Versatile FPGA PCI device into memory space
++	 */
++	pci_slot_ignore |= (1 << myslot);
++	ret = 1;
++
++ out:
++	return ret;
++}
++
++
++struct pci_bus *pci_realview_scan_bus(int nr, struct pci_sys_data *sys)
++{
++	return pci_scan_bus(sys->busnr, &pci_realview_ops, sys);
++}
++
++void __init pci_realview_preinit(void)
++{
++	__raw_writel(REALVIEW_PCI_MEM_BASE0, PCI_IMAP0);
++	__raw_writel(REALVIEW_PCI_MEM_BASE1, PCI_IMAP1);
++	__raw_writel(REALVIEW_PCI_MEM_BASE2, PCI_IMAP2);
++
++	__raw_writel(PHYS_OFFSET, PCI_SMAP0);
++	__raw_writel(PHYS_OFFSET, PCI_SMAP1);
++	__raw_writel(PHYS_OFFSET, PCI_SMAP2);
++
++	__raw_writel(1, SYS_PCICTL);
++}
++
++#if defined (CONFIG_MACH_REALVIEW_EB)
++/*
++ * Map the specified device/slot/pin to an IRQ.
++ * Different backplanes may need to modify this.
++ */
++static int __init realview_map_irq(struct pci_dev *dev, u8 slot, u8 pin)
++{
++	int irq;
++	int devslot = PCI_SLOT(dev->devfn);
++
++	/* slot,  pin,	irq
++	 *  24     1     80
++	 *  25     1     81
++	 *  26     1     82
++	 *  27     1     83
++	 */
++	irq = (((devslot - 29) + pin - 1) & 3) + 80;
++
++	printk("PCI map irq: slot %d, pin %d, devslot %d, irq: %d\n",
++	       slot, pin, devslot, irq);
++
++	return irq;
++}
++#elif defined (CONFIG_MACH_REALVIEW_PB1176)
++static int __init realview_map_irq(struct pci_dev *dev, u8 slot, u8 pin)
++{
++	int irq;
++	int devslot = PCI_SLOT(dev->devfn);
++
++	/* slot,  pin,	irq
++	 *  24     1     44
++	 *  25     1     45
++	 *  26     1     46
++	 *  27     1     47
++	 */
++	irq = (((devslot - 29) + pin - 1) & 3) + (44+32);
++
++	printk("PCI map irq: slot %d, pin %d, devslot %d, irq: %d\n",
++	       slot, pin, devslot, irq);
++
++	return irq;
++}
++#endif
++
++static struct hw_pci realview_pci __initdata = {
++	.swizzle		= NULL,
++	.map_irq		= realview_map_irq,
++	.nr_controllers		= 1,
++	.setup			= pci_realview_setup,
++	.scan			= pci_realview_scan_bus,
++	.preinit		= pci_realview_preinit,
++};
++
++static int __init realview_pci_init(void)
++{
++	pci_common_init(&realview_pci);
++	return 0;
++}
++
++subsys_initcall(realview_pci_init);
+Index: linux-2.6.18/arch/arm/mach-realview/platsmp.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-realview/platsmp.c
++++ linux-2.6.18/arch/arm/mach-realview/platsmp.c
+@@ -102,6 +102,7 @@ int __cpuinit boot_secondary(unsigned in
+ 
+ 	timeout = jiffies + (1 * HZ);
+ 	while (time_before(jiffies, timeout)) {
++		smp_rmb();
+ 		if (pen_release == -1)
+ 			break;
+ 
+Index: linux-2.6.18/arch/arm/mach-realview/realview_pb1176.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/mach-realview/realview_pb1176.c
+@@ -0,0 +1,222 @@
++/*
++ *  linux/arch/arm/mach-realview/realview_pb1176.c
++ *
++ *  Copyright (C) 2007 ARM Limited
++ *  Copyright (C) 2000 Deep Blue Solutions Ltd
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++ */
++
++#include <linux/init.h>
++#include <linux/platform_device.h>
++#include <linux/sysdev.h>
++#include <linux/amba/bus.h>
++
++#include <asm/setup.h>
++#include <asm/hardware.h>
++#include <asm/io.h>
++#include <asm/irq.h>
++#include <asm/leds.h>
++#include <asm/mach-types.h>
++#include <asm/hardware/gic.h>
++#include <asm/hardware/icst307.h>
++#include <asm/hardware/cache-l2x0.h>
++
++#include <asm/mach/arch.h>
++#include <asm/mach/map.h>
++#include <asm/mach/mmc.h>
++
++#include <asm/arch/irqs.h>
++
++#include "core.h"
++#include "clock.h"
++
++static struct map_desc realview_pb1176_io_desc[] __initdata = {
++	{
++		.virtual	= IO_ADDRESS(REALVIEW_SYS_BASE),
++		.pfn		= __phys_to_pfn(REALVIEW_SYS_BASE),
++		.length		= SZ_4K,
++		.type		= MT_DEVICE,
++	}, {
++		.virtual	= IO_ADDRESS(REALVIEW_GIC_CPU_BASE),
++		.pfn		= __phys_to_pfn(REALVIEW_GIC_CPU_BASE),
++		.length		= SZ_4K,
++		.type		= MT_DEVICE,
++	}, {
++		.virtual	= IO_ADDRESS(REALVIEW_GIC_DIST_BASE),
++		.pfn		= __phys_to_pfn(REALVIEW_GIC_DIST_BASE),
++		.length		= SZ_4K,
++		.type		= MT_DEVICE,
++	},
++	{
++		.virtual	= REALVIEW_GIC1_CPU_VBASE,
++		.pfn		= __phys_to_pfn(REALVIEW_GIC1_CPU_BASE),
++		.length		= SZ_4K,
++		.type		= MT_DEVICE,
++	}, {
++		.virtual	= REALVIEW_GIC1_DIST_VBASE,
++		.pfn		= __phys_to_pfn(REALVIEW_GIC1_DIST_BASE),
++		.length		= SZ_4K,
++		.type		= MT_DEVICE,
++	},
++	{
++		.virtual	= IO_ADDRESS(REALVIEW_MPCORE_L220_BASE),
++		.pfn		= __phys_to_pfn(REALVIEW_MPCORE_L220_BASE),
++		.length		= SZ_8K,
++		.type		= MT_DEVICE,
++	},
++	{
++		.virtual	= IO_ADDRESS(REALVIEW_SCTL_BASE),
++		.pfn		= __phys_to_pfn(REALVIEW_SCTL_BASE),
++		.length		= SZ_4K,
++		.type		= MT_DEVICE,
++	}, {
++		.virtual	= IO_ADDRESS(REALVIEW_TIMER0_1_BASE),
++		.pfn		= __phys_to_pfn(REALVIEW_TIMER0_1_BASE),
++		.length		= SZ_4K,
++		.type		= MT_DEVICE,
++	}, {
++		.virtual	= IO_ADDRESS(REALVIEW_TIMER2_3_BASE),
++		.pfn		= __phys_to_pfn(REALVIEW_TIMER2_3_BASE),
++		.length		= SZ_4K,
++		.type		= MT_DEVICE,
++	},
++#ifdef CONFIG_DEBUG_LL
++	{
++		.virtual	= IO_ADDRESS(REALVIEW_UART0_BASE),
++		.pfn		= __phys_to_pfn(REALVIEW_UART0_BASE),
++		.length		= SZ_4K,
++		.type		= MT_DEVICE,
++	},
++#endif
++#ifdef CONFIG_PCI
++ 	{
++		.virtual	=  IO_ADDRESS(REALVIEW_PCI_CORE_BASE),
++		.pfn		= __phys_to_pfn(REALVIEW_PCI_CORE_BASE),
++		.length		= SZ_4K,
++		.type		= MT_DEVICE
++	}, {
++		.virtual	=  REALVIEW_PCI_VIRT_BASE,
++		.pfn		= __phys_to_pfn(REALVIEW_PCI_BASE),
++		.length		= REALVIEW_PCI_BASE_SIZE,
++		.type		= MT_DEVICE
++	}, {
++		.virtual	= REALVIEW_PCI_CFG_VIRT_BASE,
++		.pfn		= __phys_to_pfn(REALVIEW_PCI_CFG_BASE),
++		.length		= REALVIEW_PCI_CFG_BASE_SIZE,
++		.type		= MT_DEVICE
++	}, {
++		.virtual	= REALVIEW_PCI_IO_VIRT_BASE,
++		.pfn		= __phys_to_pfn(REALVIEW_PCI_IO_BASE0),
++		.length		= REALVIEW_PCI_IO_BASE0_SIZE,
++		.type		= MT_DEVICE
++	},
++#endif
++};
++
++static void __init realview_pb1176_map_io(void)
++{
++	iotable_init(realview_pb1176_io_desc, ARRAY_SIZE(realview_pb1176_io_desc));
++}
++
++/* FPGA Primecells */
++AMBA_DEVICE(aaci,  "fpga:04", AACI,     NULL);
++//AMBA_DEVICE(mmc0,  "fpga:05", MMCI0,    &realview_mmc0_plat_data);
++AMBA_DEVICE(kmi0,  "fpga:06", KMI0,     NULL);
++AMBA_DEVICE(kmi1,  "fpga:07", KMI1,     NULL);
++AMBA_DEVICE(uart3, "fpga:09", UART3,    NULL);
++
++/* DevChip Primecells */
++//AMBA_DEVICE(smc,   "dev:00",  SMC,      NULL);
++AMBA_DEVICE(sctl,  "dev:e0",  SCTL,     NULL);
++AMBA_DEVICE(wdog,  "dev:e1",  WATCHDOG, NULL);
++AMBA_DEVICE(gpio0, "dev:e4",  GPIO0,    NULL);
++AMBA_DEVICE(gpio1, "dev:e5",  GPIO1,    NULL);
++AMBA_DEVICE(gpio2, "dev:e6",  GPIO2,    NULL);
++AMBA_DEVICE(rtc,   "dev:e8",  RTC,      NULL);
++AMBA_DEVICE(sci0,  "dev:f0",  SCI,      NULL);
++AMBA_DEVICE(uart0, "dev:f1",  UART0,    NULL);
++AMBA_DEVICE(uart1, "dev:f2",  UART1,    NULL);
++AMBA_DEVICE(uart2, "dev:f3",  UART2,    NULL);
++AMBA_DEVICE(ssp0,  "dev:f4",  SSP,      NULL);
++AMBA_DEVICE(clcd,  "issp:20",  CLCD,     &clcd_plat_data);
++// AMBA_DEVICE(dmac,  "issp:30",  DMAC,     NULL);
++
++static struct amba_device *amba_devs[] __initdata = {
++//	&dmac_device,
++	&uart0_device,
++	&uart1_device,
++	&uart2_device,
++	&uart3_device,
++//	&smc_device,
++	&clcd_device,
++	&sctl_device,
++	&wdog_device,
++	&gpio0_device,
++	&gpio1_device,
++	&gpio2_device,
++	&rtc_device,
++	&sci0_device,
++	&ssp0_device,
++	&aaci_device,
++//	&mmc0_device,
++	&kmi0_device,
++	&kmi1_device,
++};
++
++static void __init gic_init_irq(void)
++{
++	gic_dist_init(0, __io_address(REALVIEW_GIC_DIST_BASE), 29);
++	gic_cpu_init(0, __io_address(REALVIEW_GIC_CPU_BASE));
++	gic_dist_init(1, (void __iomem *)REALVIEW_GIC1_DIST_VBASE, 64);
++	gic_cpu_init(1, (void __iomem *)REALVIEW_GIC1_CPU_VBASE);
++	gic_cascade_irq(1, IRQ_EB_IRQ1);
++}
++
++static void __init realview_pb1176_init(void)
++{
++	int i;
++
++	/* 1MB (128KB/way), 8-way associativity, evmon/parity/share enabled
++	 * Bits:  .... ...0 0111 1001 0000 .... .... ....
++	 *	l2x0_init(__io_address(REALVIEW_MPCORE_L220_BASE), 0x00790000, 0xfe000fff);
++	 */
++	/* 128Kb (16Kb/way) 8-way associativity. evmon/parity/share enabled. */
++	l2x0_init(__io_address(REALVIEW_MPCORE_L220_BASE), 0x00730000, 0xfe000fff);
++	clk_register(&realview_clcd_clk);
++
++	platform_device_register(&realview_flash_device);
++	platform_device_register(&realview_smsc911x_device);
++
++	for (i = 0; i < ARRAY_SIZE(amba_devs); i++) {
++		struct amba_device *d = amba_devs[i];
++		amba_device_register(d, &iomem_resource);
++	}
++
++#ifdef CONFIG_LEDS
++	leds_event = realview_leds_event;
++#endif
++}
++
++MACHINE_START(REALVIEW_PB1176, "ARM-RealView PB1176")
++	/* Maintainer: ARM Ltd/Deep Blue Solutions Ltd */
++	.phys_io	= REALVIEW_UART0_BASE,
++	.io_pg_offst	= (IO_ADDRESS(REALVIEW_UART0_BASE) >> 18) & 0xfffc,
++	.boot_params	= 0x00000100,
++	.map_io		= realview_pb1176_map_io,
++	.init_irq	= gic_init_irq,
++	.timer		= &realview_timer,
++	.init_machine	= realview_pb1176_init,
++MACHINE_END
+Index: linux-2.6.18/arch/arm/mm/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mm/Kconfig
++++ linux-2.6.18/arch/arm/mm/Kconfig
+@@ -345,7 +345,7 @@ config CPU_XSC3
+ # ARMv6
+ config CPU_V6
+ 	bool "Support ARM V6 processor"
+-	depends on ARCH_INTEGRATOR || MACH_REALVIEW_EB || ARCH_OMAP2
++	depends on ARCH_INTEGRATOR || MACH_REALVIEW_EB || ARCH_OMAP2 || MACH_REALVIEW_PB1176
+ 	select CPU_32v6
+ 	select CPU_ABRT_EV6
+ 	select CPU_CACHE_V6
+Index: linux-2.6.18/arch/arm/tools/mach-types
+===================================================================
+--- linux-2.6.18.orig/arch/arm/tools/mach-types
++++ linux-2.6.18/arch/arm/tools/mach-types
+@@ -1157,3 +1157,4 @@ adsturboxb		MACH_ADSTURBOXB		ADSTURBOXB	
+ oti4110			MACH_OTI4110		OTI4110			1144
+ hme_pxa			MACH_HME_PXA		HME_PXA			1145
+ deisterdca		MACH_DEISTERDCA		DEISTERDCA		1146
++realview_pb1176		MACH_REALVIEW_PB1176	REALVIEW_PB1176		1504
+Index: linux-2.6.18/arch/arm/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/arm/Kconfig
++++ linux-2.6.18/arch/arm/Kconfig
+@@ -433,7 +433,8 @@ config ISA_DMA_API
+ 	bool
+ 
+ config PCI
+-	bool "PCI support" if ARCH_INTEGRATOR_AP || ARCH_VERSATILE_PB || ARCH_IXP4XX
++	bool "PCI support" if ARCH_INTEGRATOR_AP || ARCH_VERSATILE_PB || ARCH_IXP4XX \
++	|| MACH_REALVIEW_PB1176
+ 	help
+ 	  Find out whether you have a PCI motherboard. PCI is the name of a
+ 	  bus system, i.e. the way the CPU talks to the other stuff inside
+Index: linux-2.6.18/mvl_patches/pro50-1097.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1097.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1097);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

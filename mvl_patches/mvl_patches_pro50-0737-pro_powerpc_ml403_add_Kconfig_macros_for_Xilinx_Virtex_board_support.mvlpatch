@@ -1,0 +1,314 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_ml403_add_Kconfig_macros_for_Xilinx_Virtex_board_support
+# Date: Wed Mar  5 11:37:26 2008
+# MR: 24630
+# Source: Grant Likely <grant.likely@secretlab.ca>
+# Type: Integration
+# Disposition: merged from git://git.kernel.org/pub/scm/linux/kernel/git/jwboyer/powerpc-4xx.git
+# Signed-off-by: Pavel Kiryukhin <pkiryukhin@ru.mvista.com>
+# Description:
+# [POWERPC] Virtex: Add Kconfig macros for Xilinx Virtex board support
+# Add the needed kconfig macros to enable Xilinx Virtex board support 
+# 
+# Tue, 2 Oct 2007 02:15:18 +0000 (12:15 +1000)
+# committer Josh Boyer <jwboyer@linux.vnet.ibm.com>
+# Wed, 3 Oct 2007 12:23:14 +0000 (07:23 -0500)
+# commit 36660cef734e3c80c4379443781ed0b2fe3e1ffe
+# 
+# Signed-off-by: Grant Likely <grant.likely@secretlab.ca>
+# Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+# 
+
+PATCHNUM=737
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24630
+Source: Grant Likely <grant.likely@secretlab.ca>
+Type: Integration
+Disposition: merged from git://git.kernel.org/pub/scm/linux/kernel/git/jwboyer/powerpc-4xx.git
+Signed-off-by: Pavel Kiryukhin <pkiryukhin@ru.mvista.com>
+Description:
+[POWERPC] Virtex: Add Kconfig macros for Xilinx Virtex board support
+Add the needed kconfig macros to enable Xilinx Virtex board support 
+
+Tue, 2 Oct 2007 02:15:18 +0000 (12:15 +1000)
+committer Josh Boyer <jwboyer@linux.vnet.ibm.com>
+Wed, 3 Oct 2007 12:23:14 +0000 (07:23 -0500)
+commit 36660cef734e3c80c4379443781ed0b2fe3e1ffe
+
+Signed-off-by: Grant Likely <grant.likely@secretlab.ca>
+Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+
+Index: linux-2.6.18/arch/powerpc/platforms/40x/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/40x/Kconfig
++++ linux-2.6.18/arch/powerpc/platforms/40x/Kconfig
+@@ -61,13 +61,22 @@
+ #	help
+ #	  This option enables support for the IBM PPC405GP evaluation board.
+ 
+-#config XILINX_ML300
+-#	bool "Xilinx-ML300"
+-#	depends on 40x
+-#	default y
+-#	select VIRTEX_II_PRO
+-#	help
+-#	  This option enables support for the Xilinx ML300 evaluation board.
++config XILINX_VIRTEX_GENERIC_BOARD
++	bool "Generic Xilinx Virtex board"
++	depends on 40x
++	default n
++	select XILINX_VIRTEX_II_PRO
++	select XILINX_VIRTEX_4_FX
++	help
++	  This option enables generic support for Xilinx Virtex based boards.
++
++	  The generic virtex board support matches any device tree which
++	  specifies 'xilinx,virtex' in its compatible field.  This includes
++	  the Xilinx ML3xx and ML4xx reference designs using the powerpc
++	  core.
++
++	  Most Virtex designs should use this unless it needs to do some
++	  special configuration at board probe time.
+ 
+ # 40x specific CPU modules, selected based on the board above.
+ config NP405H
+@@ -91,11 +100,19 @@ config 405EP
+ config 405GPR
+ 	bool
+ 
+-config VIRTEX_II_PRO
++config XILINX_VIRTEX
++	bool
++
++config XILINX_VIRTEX_II_PRO
+ 	bool
++	select XILINX_VIRTEX
+ 	select IBM405_ERR77
+ 	select IBM405_ERR51
+ 
++config XILINX_VIRTEX_4_FX
++	bool
++	select XILINX_VIRTEX
++
+ config STB03xxx
+ 	bool
+ 	select IBM405_ERR77
+@@ -111,11 +128,6 @@ config IBM405_ERR77
+ config IBM405_ERR51
+ 	bool
+ 
+-#config XILINX_OCP
+-#	bool
+-#	depends on XILINX_ML300
+-#	default y
+-
+ #config BIOS_FIXUP
+ #	bool
+ #	depends on BUBINGA || EP405 || SYCAMORE || WALNUT
+Index: linux-2.6.18/mvl_patches/pro50-0737.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0737.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(737);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

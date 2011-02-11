@@ -1,0 +1,482 @@
+#! /usr/bin/env bash
+# Patch: -pro_MVL_POWERPC_pci32_Remove_PowerMac_P2P_bridge_IO_hack
+# Date: Wed Mar  5 11:43:12 2008
+# MR: 26747
+# Disposition: backport from
+# git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# Adjustmnets:
+#     Not all changes needed since we already have them in pro5.0
+# 
+# From b9baa20b0a50947f2e86d7775c9dba87c0d946ef Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Thu, 20 Dec 2007 14:54:44 +1100
+# Subject: [PATCH] [POWERPC] pci32: Remove PowerMac P2P bridge IO hack
+# 
+# The 32 bits PowerPC PCI code has a hack for use by some PowerMacs
+# to try to re-open PCI<->PCI bridge IO resources that were closed
+# by the firmware.  This is no longer necessary as the generic code
+# will now do that for us.
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=850
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26747
+Disposition: backport from
+git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+Adjustmnets:
+    Not all changes needed since we already have them in pro5.0
+
+From b9baa20b0a50947f2e86d7775c9dba87c0d946ef Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Thu, 20 Dec 2007 14:54:44 +1100
+Subject: [PATCH] [POWERPC] pci32: Remove PowerMac P2P bridge IO hack
+
+The 32 bits PowerPC PCI code has a hack for use by some PowerMacs
+to try to re-open PCI<->PCI bridge IO resources that were closed
+by the firmware.  This is no longer necessary as the generic code
+will now do that for us.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/kernel/pci_32.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_32.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_32.c
+@@ -722,217 +722,6 @@ void pcibios_make_OF_bus_map(void)
+ }
+ #endif /* CONFIG_PPC_OF */
+ 
+-#ifdef CONFIG_PPC_PMAC
+-/*
+- * This set of routines checks for PCI<->PCI bridges that have closed
+- * IO resources and have child devices. It tries to re-open an IO
+- * window on them.
+- *
+- * This is a _temporary_ fix to workaround a problem with Apple's OF
+- * closing IO windows on P2P bridges when the OF drivers of cards
+- * below this bridge don't claim any IO range (typically ATI or
+- * Adaptec).
+- *
+- * A more complete fix would be to use drivers/pci/setup-bus.c, which
+- * involves a working pcibios_fixup_pbus_ranges(), some more care about
+- * ordering when creating the host bus resources, and maybe a few more
+- * minor tweaks
+- */
+-
+-/* Initialize bridges with base/limit values we have collected */
+-static void __init
+-do_update_p2p_io_resource(struct pci_bus *bus, int enable_vga)
+-{
+-	struct pci_dev *bridge = bus->self;
+-	struct pci_controller* hose = (struct pci_controller *)bridge->sysdata;
+-	u32 l;
+-	u16 w;
+-	struct resource res;
+-
+-	if (bus->resource[0] == NULL)
+-		return;
+- 	res = *(bus->resource[0]);
+-
+-	DBG("Remapping Bus %d, bridge: %s\n", bus->number, pci_name(bridge));
+-	res.start -= ((unsigned long) hose->io_base_virt - isa_io_base);
+-	res.end -= ((unsigned long) hose->io_base_virt - isa_io_base);
+-	DBG("  IO window: %016llx-%016llx\n", res.start, res.end);
+-
+-	/* Set up the top and bottom of the PCI I/O segment for this bus. */
+-	pci_read_config_dword(bridge, PCI_IO_BASE, &l);
+-	l &= 0xffff000f;
+-	l |= (res.start >> 8) & 0x00f0;
+-	l |= res.end & 0xf000;
+-	pci_write_config_dword(bridge, PCI_IO_BASE, l);
+-
+-	if ((l & PCI_IO_RANGE_TYPE_MASK) == PCI_IO_RANGE_TYPE_32) {
+-		l = (res.start >> 16) | (res.end & 0xffff0000);
+-		pci_write_config_dword(bridge, PCI_IO_BASE_UPPER16, l);
+-	}
+-
+-	pci_read_config_word(bridge, PCI_COMMAND, &w);
+-	w |= PCI_COMMAND_IO;
+-	pci_write_config_word(bridge, PCI_COMMAND, w);
+-
+-#if 0 /* Enabling this causes XFree 4.2.0 to hang during PCI probe */
+-	if (enable_vga) {
+-		pci_read_config_word(bridge, PCI_BRIDGE_CONTROL, &w);
+-		w |= PCI_BRIDGE_CTL_VGA;
+-		pci_write_config_word(bridge, PCI_BRIDGE_CONTROL, w);
+-	}
+-#endif
+-}
+-
+-/* This function is pretty basic and actually quite broken for the
+- * general case, it's enough for us right now though. It's supposed
+- * to tell us if we need to open an IO range at all or not and what
+- * size.
+- */
+-static int __init
+-check_for_io_childs(struct pci_bus *bus, struct resource* res, int *found_vga)
+-{
+-	struct pci_dev *dev;
+-	int	i;
+-	int	rc = 0;
+-
+-#define push_end(res, mask) do {		\
+-	BUG_ON((mask+1) & mask);		\
+-	res->end = (res->end + mask) | mask;	\
+-} while (0)
+-
+-	list_for_each_entry(dev, &bus->devices, bus_list) {
+-		u16 class = dev->class >> 8;
+-
+-		if (class == PCI_CLASS_DISPLAY_VGA ||
+-		    class == PCI_CLASS_NOT_DEFINED_VGA)
+-			*found_vga = 1;
+-		if (class >> 8 == PCI_BASE_CLASS_BRIDGE && dev->subordinate)
+-			rc |= check_for_io_childs(dev->subordinate, res, found_vga);
+-		if (class == PCI_CLASS_BRIDGE_CARDBUS)
+-			push_end(res, 0xfff);
+-
+-		for (i=0; i<PCI_NUM_RESOURCES; i++) {
+-			struct resource *r;
+-			resource_size_t r_size;
+-
+-			if (dev->class >> 8 == PCI_CLASS_BRIDGE_PCI
+-			    && i >= PCI_BRIDGE_RESOURCES)
+-				continue;
+-			r = &dev->resource[i];
+-			r_size = r->end - r->start;
+-			if (r_size < 0xfff)
+-				r_size = 0xfff;
+-			if (r->flags & IORESOURCE_IO && (r_size) != 0) {
+-				rc = 1;
+-				push_end(res, r_size);
+-			}
+-		}
+-	}
+-
+-	return rc;
+-}
+-
+-/* Here we scan all P2P bridges of a given level that have a closed
+- * IO window. Note that the test for the presence of a VGA card should
+- * be improved to take into account already configured P2P bridges,
+- * currently, we don't see them and might end up configuring 2 bridges
+- * with VGA pass through enabled
+- */
+-static void __init
+-do_fixup_p2p_level(struct pci_bus *bus)
+-{
+-	struct pci_bus *b;
+-	int i, parent_io;
+-	int has_vga = 0;
+-
+-	for (parent_io=0; parent_io<4; parent_io++)
+-		if (bus->resource[parent_io]
+-		    && bus->resource[parent_io]->flags & IORESOURCE_IO)
+-			break;
+-	if (parent_io >= 4)
+-		return;
+-
+-	list_for_each_entry(b, &bus->children, node) {
+-		struct pci_dev *d = b->self;
+-		struct pci_controller* hose = (struct pci_controller *)d->sysdata;
+-		struct resource *res = b->resource[0];
+-		struct resource tmp_res;
+-		unsigned long max;
+-		int found_vga = 0;
+-
+-		memset(&tmp_res, 0, sizeof(tmp_res));
+-		tmp_res.start = bus->resource[parent_io]->start;
+-
+-		/* We don't let low addresses go through that closed P2P bridge, well,
+-		 * that may not be necessary but I feel safer that way
+-		 */
+-		if (tmp_res.start == 0)
+-			tmp_res.start = 0x1000;
+-	
+-		if (!list_empty(&b->devices) && res && res->flags == 0 &&
+-		    res != bus->resource[parent_io] &&
+-		    (d->class >> 8) == PCI_CLASS_BRIDGE_PCI &&
+-		    check_for_io_childs(b, &tmp_res, &found_vga)) {
+-			u8 io_base_lo;
+-
+-			printk(KERN_INFO "Fixing up IO bus %s\n", b->name);
+-
+-			if (found_vga) {
+-				if (has_vga) {
+-					printk(KERN_WARNING "Skipping VGA, already active"
+-					    " on bus segment\n");
+-					found_vga = 0;
+-				} else
+-					has_vga = 1;
+-			}
+-			pci_read_config_byte(d, PCI_IO_BASE, &io_base_lo);
+-
+-			if ((io_base_lo & PCI_IO_RANGE_TYPE_MASK) == PCI_IO_RANGE_TYPE_32)
+-				max = ((unsigned long) hose->io_base_virt
+-					- isa_io_base) + 0xffffffff;
+-			else
+-				max = ((unsigned long) hose->io_base_virt
+-					- isa_io_base) + 0xffff;
+-
+-			*res = tmp_res;
+-			res->flags = IORESOURCE_IO;
+-			res->name = b->name;
+-		
+-			/* Find a resource in the parent where we can allocate */
+-			for (i = 0 ; i < 4; i++) {
+-				struct resource *r = bus->resource[i];
+-				if (!r)
+-					continue;
+-				if ((r->flags & IORESOURCE_IO) == 0)
+-					continue;
+-				DBG("Trying to allocate from %016llx, size %016llx from parent"
+-				    " res %d: %016llx -> %016llx\n",
+-					res->start, res->end, i, r->start, r->end);
+-			
+-				if (allocate_resource(r, res, res->end + 1, res->start, max,
+-				    res->end + 1, NULL, NULL) < 0) {
+-					DBG("Failed !\n");
+-					continue;
+-				}
+-				do_update_p2p_io_resource(b, found_vga);
+-				break;
+-			}
+-		}
+-		do_fixup_p2p_level(b);
+-	}
+-}
+-
+-static void
+-pcibios_fixup_p2p_bridges(void)
+-{
+-	struct pci_bus *b;
+-
+-	list_for_each_entry(b, &pci_root_buses, node)
+-		do_fixup_p2p_level(b);
+-}
+-
+-#endif /* CONFIG_PPC_PMAC */
+-
+ static int __init
+ pcibios_init(void)
+ {
+@@ -972,9 +761,7 @@ pcibios_init(void)
+ 	pcibios_allocate_bus_resources(&pci_root_buses);
+ 	pcibios_allocate_resources(0);
+ 	pcibios_allocate_resources(1);
+-#ifdef CONFIG_PPC_PMAC
+-	pcibios_fixup_p2p_bridges();
+-#endif /* CONFIG_PPC_PMAC */
++
+ 	DBG("PCI: Assigning unassigned resouces...\n");
+ 	pci_assign_unassigned_resources();
+ 
+Index: linux-2.6.18/mvl_patches/pro50-0850.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0850.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(850);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

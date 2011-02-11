@@ -1,0 +1,433 @@
+#! /usr/bin/env bash
+# Patch: -MTD_NAND_platform_NAND_driver_add_driver
+# Date: Fri Jun 15 10:07:56 2007
+# MR: 23335
+# Type: Enhancement
+# Disposition: Backport from 2.6.22-rc1
+# Description:
+#     Made modifications in Kconfig/Makefile to apply cleanly
+#     
+# 
+# From 711fdf627ce1374796632f16acec1ab63d11e38f Mon Sep 17 00:00:00 2001
+# From: Vitaly Wool <vitalywool@gmail.com>
+# Date: Sun, 6 May 2007 19:31:18 +0400
+# Subject: [PATCH] [MTD] [NAND] platform NAND driver: add driver
+# 
+# This patch adds support for generic platform NAND driver.
+# Updated after tglx's review/discussion in IRC #mtd channel.
+# 
+# Signed-off-by: Vitaly Wool <vitalywool@gmail.com>
+# Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+# Signed-off-by: David Woodhouse <dwmw2@infradead.org>
+
+PATCHNUM=14
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 23335
+Type: Enhancement
+Disposition: Backport from 2.6.22-rc1
+Description:
+    Made modifications in Kconfig/Makefile to apply cleanly
+    
+
+From 711fdf627ce1374796632f16acec1ab63d11e38f Mon Sep 17 00:00:00 2001
+From: Vitaly Wool <vitalywool@gmail.com>
+Date: Sun, 6 May 2007 19:31:18 +0400
+Subject: [PATCH] [MTD] [NAND] platform NAND driver: add driver
+
+This patch adds support for generic platform NAND driver.
+Updated after tglx's review/discussion in IRC #mtd channel.
+
+Signed-off-by: Vitaly Wool <vitalywool@gmail.com>
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Signed-off-by: David Woodhouse <dwmw2@infradead.org>
+Index: linux-2.6.18/drivers/mtd/nand/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/mtd/nand/Kconfig
++++ linux-2.6.18/drivers/mtd/nand/Kconfig
+@@ -252,4 +252,13 @@ config MTD_NAND_NANDSIM
+ 	  The simulator may simulate various NAND flash chips for the
+ 	  MTD nand layer.
+ 
++config MTD_NAND_PLATFORM
++	tristate "Support for generic platform NAND driver"
++	depends on MTD_NAND
++	help
++	  This implements a generic NAND driver for on-SOC platform
++	  devices. You will need to provide platform-specific functions
++	  via platform_data.
++
++
+ endmenu
+Index: linux-2.6.18/drivers/mtd/nand/Makefile
+===================================================================
+--- linux-2.6.18.orig/drivers/mtd/nand/Makefile
++++ linux-2.6.18/drivers/mtd/nand/Makefile
+@@ -24,5 +24,6 @@ obj-$(CONFIG_MTD_NAND_CS553X)		+= cs553x
+ obj-$(CONFIG_MTD_NAND_NDFC)		+= ndfc.o
+ obj-$(CONFIG_MTD_NAND_OMAP) 		+= omap-nand-flash.o
+ obj-$(CONFIG_MTD_NAND_OMAP_HW)		+= omap-hw.o
++obj-$(CONFIG_MTD_NAND_PLATFORM)		+= plat_nand.o
+ 
+ nand-objs = nand_base.o nand_bbt.o
+Index: linux-2.6.18/drivers/mtd/nand/plat_nand.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/mtd/nand/plat_nand.c
+@@ -0,0 +1,150 @@
++/*
++ * Generic NAND driver
++ *
++ * Author: Vitaly Wool <vitalywool@gmail.com>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ *
++ */
++
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <linux/slab.h>
++#include <linux/mtd/mtd.h>
++#include <linux/mtd/nand.h>
++#include <linux/mtd/partitions.h>
++
++struct plat_nand_data {
++	struct nand_chip	chip;
++	struct mtd_info		mtd;
++	void __iomem		*io_base;
++#ifdef CONFIG_MTD_PARTITIONS
++	int			nr_parts;
++	struct mtd_partition	*parts;
++#endif
++};
++
++/*
++ * Probe for the NAND device.
++ */
++static int __init plat_nand_probe(struct platform_device *pdev)
++{
++	struct platform_nand_data *pdata = pdev->dev.platform_data;
++	struct plat_nand_data *data;
++	int res = 0;
++
++	/* Allocate memory for the device structure (and zero it) */
++	data = kzalloc(sizeof(struct plat_nand_data), GFP_KERNEL);
++	if (!data) {
++		dev_err(&pdev->dev, "failed to allocate device structure.\n");
++		return -ENOMEM;
++	}
++
++	data->io_base = ioremap(pdev->resource[0].start,
++				pdev->resource[0].end - pdev->resource[0].start + 1);
++	if (data->io_base == NULL) {
++		dev_err(&pdev->dev, "ioremap failed\n");
++		kfree(data);
++		return -EIO;
++	}
++
++	data->chip.priv = &data;
++	data->mtd.priv = &data->chip;
++	data->mtd.owner = THIS_MODULE;
++
++	data->chip.IO_ADDR_R = data->io_base;
++	data->chip.IO_ADDR_W = data->io_base;
++	data->chip.cmd_ctrl = pdata->ctrl.cmd_ctrl;
++	data->chip.dev_ready = pdata->ctrl.dev_ready;
++	data->chip.select_chip = pdata->ctrl.select_chip;
++	data->chip.chip_delay = pdata->chip.chip_delay;
++	data->chip.options |= pdata->chip.options;
++
++	data->chip.ecc.hwctl = pdata->ctrl.hwcontrol;
++	data->chip.ecc.layout = pdata->chip.ecclayout;
++	data->chip.ecc.mode = NAND_ECC_SOFT;
++
++	platform_set_drvdata(pdev, data);
++
++	/* Scan to find existance of the device */
++	if (nand_scan(&data->mtd, 1)) {
++		res = -ENXIO;
++		goto out;
++	}
++
++#ifdef CONFIG_MTD_PARTITIONS
++	if (pdata->chip.part_probe_types) {
++		res = parse_mtd_partitions(&data->mtd,
++					pdata->chip.part_probe_types,
++					&data->parts, 0);
++		if (res > 0) {
++			add_mtd_partitions(&data->mtd, data->parts, res);
++			return 0;
++		}
++	}
++	if (pdata->chip.partitions) {
++		data->parts = pdata->chip.partitions;
++		res = add_mtd_partitions(&data->mtd, data->parts,
++			pdata->chip.nr_partitions);
++	} else
++#endif
++	res = add_mtd_device(&data->mtd);
++
++	if (!res)
++		return res;
++
++	nand_release(&data->mtd);
++out:
++	platform_set_drvdata(pdev, NULL);
++	iounmap(data->io_base);
++	kfree(data);
++	return res;
++}
++
++/*
++ * Remove a NAND device.
++ */
++static int __devexit plat_nand_remove(struct platform_device *pdev)
++{
++	struct plat_nand_data *data = platform_get_drvdata(pdev);
++	struct platform_nand_data *pdata = pdev->dev.platform_data;
++
++	nand_release(&data->mtd);
++#ifdef CONFIG_MTD_PARTITIONS
++	if (data->parts && data->parts != pdata->chip.partitions)
++		kfree(data->parts);
++#endif
++	iounmap(data->io_base);
++	kfree(data);
++
++	return 0;
++}
++
++static struct platform_driver plat_nand_driver = {
++	.probe		= plat_nand_probe,
++	.remove		= plat_nand_remove,
++	.driver		= {
++		.name	= "gen_nand",
++		.owner	= THIS_MODULE,
++	},
++};
++
++static int __init plat_nand_init(void)
++{
++	return platform_driver_register(&plat_nand_driver);
++}
++
++static void __exit plat_nand_exit(void)
++{
++	platform_driver_unregister(&plat_nand_driver);
++}
++
++module_init(plat_nand_init);
++module_exit(plat_nand_exit);
++
++MODULE_LICENSE("GPL");
++MODULE_AUTHOR("Vitaly Wool");
++MODULE_DESCRIPTION("Simple generic NAND driver");
+Index: linux-2.6.18/mvl_patches/pro50-0014.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0014.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(14);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

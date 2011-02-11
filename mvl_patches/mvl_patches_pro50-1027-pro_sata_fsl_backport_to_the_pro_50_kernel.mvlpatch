@@ -1,0 +1,856 @@
+#! /usr/bin/env bash
+# Patch: -pro_sata_fsl_backport_to_the_pro_50_kernel
+# Date: Fri Apr 25 11:50:22 2008
+# Source: local
+# MR: 27333
+# Type: Integration
+# Disposition: local
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# [PRO] sata_fsl: backport to the pro_50 kernel
+# 
+# This patch represents libata subsystem changes that has been made between
+# 2.6.18 and the current mainline. Specifically: libata functions renames,
+# probe and remove procedure changes, changes in the functions prototypes,
+# scatter-gather changes (libata switched to the generic sg api), taskfile
+# interface changes, plus this driver needs ata_tf_to_fis() function with
+# the is_cmd argument, new argument is used to set fis[1]'s seventh bit
+# conditionally, otherwise sata_fsl will do `task file'->`frame information'
+# conversion incorrectly.
+# 
+#  drivers/scsi/Kconfig    |    9 ++
+#  drivers/scsi/Makefile   |    1 
+#  drivers/scsi/sata_fsl.c |  203 +++++++++++++++++++++++++++++------------------
+#  3 files changed, 135 insertions(+), 78 deletions(-)
+# 
+
+PATCHNUM=1027
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: local
+MR: 27333
+Type: Integration
+Disposition: local
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+[PRO] sata_fsl: backport to the pro_50 kernel
+
+This patch represents libata subsystem changes that has been made between
+2.6.18 and the current mainline. Specifically: libata functions renames,
+probe and remove procedure changes, changes in the functions prototypes,
+scatter-gather changes (libata switched to the generic sg api), taskfile
+interface changes, plus this driver needs ata_tf_to_fis() function with
+the is_cmd argument, new argument is used to set fis[1]'s seventh bit
+conditionally, otherwise sata_fsl will do `task file'->`frame information'
+conversion incorrectly.
+
+ drivers/scsi/Kconfig     |    9 ++
+ drivers/scsi/Makefile    |    1 
+ drivers/scsi/sata_fsl.c  |  205 ++++++++++++++++++++++++++++-------------------
+ mvl_patches/pro50-1027.c |   16 +++
+ 4 files changed, 152 insertions(+), 79 deletions(-)
+
+Index: linux-2.6.18/drivers/scsi/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/scsi/Kconfig
++++ linux-2.6.18/drivers/scsi/Kconfig
+@@ -619,6 +619,15 @@ config SCSI_SATA_INTEL_COMBINED
+ 	depends on IDE=y && !BLK_DEV_IDE_SATA && (SCSI_SATA_AHCI || SCSI_ATA_PIIX)
+ 	default y
+ 
++config SATA_FSL
++	tristate "Freescale 3.0Gbps SATA support"
++	depends on FSL_SOC && SCSI_SATA
++	help
++	  This option enables support for Freescale 3.0Gbps SATA controller.
++	  It can be found on MPC837x and MPC8315.
++
++	  If unsure, say N.
++
+ config SCSI_BUSLOGIC
+ 	tristate "BusLogic SCSI support"
+ 	depends on (PCI || ISA || MCA) && SCSI && ISA_DMA_API
+Index: linux-2.6.18/drivers/scsi/Makefile
+===================================================================
+--- linux-2.6.18.orig/drivers/scsi/Makefile
++++ linux-2.6.18/drivers/scsi/Makefile
+@@ -136,6 +136,7 @@ obj-$(CONFIG_SCSI_SATA_SX4)	+= libata.o 
+ obj-$(CONFIG_SCSI_SATA_NV)	+= libata.o sata_nv.o
+ obj-$(CONFIG_SCSI_SATA_ULI)	+= libata.o sata_uli.o
+ obj-$(CONFIG_SCSI_SATA_MV)	+= libata.o sata_mv.o
++obj-$(CONFIG_SATA_FSL)		+= libata.o sata_fsl.o
+ obj-$(CONFIG_SCSI_PDC_ADMA)	+= libata.o pdc_adma.o
+ obj-$(CONFIG_SCSI_HPTIOP)	+= hptiop.o
+ 
+Index: linux-2.6.18/drivers/scsi/sata_fsl.c
+===================================================================
+--- linux-2.6.18.orig/drivers/scsi/sata_fsl.c
++++ linux-2.6.18/drivers/scsi/sata_fsl.c
+@@ -23,7 +23,42 @@
+ #include <scsi/scsi_cmnd.h>
+ #include <linux/libata.h>
+ #include <asm/io.h>
+-#include <linux/of_platform.h>
++#include <asm/of_platform.h>
++
++/* this is from the new libata layer, with is_cmd argument */
++void __ata_tf_to_fis(const struct ata_taskfile *tf, u8 pmp, int is_cmd, u8 *fis)
++{
++	fis[0] = 0x27;			/* Register - Host to Device FIS */
++	fis[1] = pmp & 0xf;		/* Port multiplier number*/
++	if (is_cmd)
++		fis[1] |= (1 << 7);	/* bit 7 indicates Command FIS */
++
++	fis[2] = tf->command;
++	fis[3] = tf->feature;
++
++	fis[4] = tf->lbal;
++	fis[5] = tf->lbam;
++	fis[6] = tf->lbah;
++	fis[7] = tf->device;
++
++	fis[8] = tf->hob_lbal;
++	fis[9] = tf->hob_lbam;
++	fis[10] = tf->hob_lbah;
++	fis[11] = tf->hob_feature;
++
++	fis[12] = tf->nsect;
++	fis[13] = tf->hob_nsect;
++	fis[14] = 0;
++	fis[15] = tf->ctl;
++
++	fis[16] = 0;
++	fis[17] = 0;
++	fis[18] = 0;
++	fis[19] = 0;
++}
++
++static irqreturn_t sata_fsl_interrupt(int irq, void *dev_instance,
++				      struct pt_regs *regs);
+ 
+ /* Controller information */
+ enum {
+@@ -35,7 +70,7 @@ enum {
+ 	SATA_FSL_HOST_FLAGS	= (ATA_FLAG_SATA | ATA_FLAG_NO_LEGACY |
+ 				ATA_FLAG_MMIO | ATA_FLAG_PIO_DMA |
+ 				ATA_FLAG_NCQ),
+-	SATA_FSL_HOST_LFLAGS	= ATA_LFLAG_SKIP_D2H_BSY,
++	SATA_FSL_HOST_LFLAGS	= ATA_FLAG_SKIP_D2H_BSY,
+ 
+ 	SATA_FSL_MAX_CMDS	= SATA_FSL_QUEUE_DEPTH,
+ 	SATA_FSL_CMD_HDR_SIZE	= 16,	/* 4 DWORDS */
+@@ -333,14 +368,13 @@ static unsigned int sata_fsl_fill_sg(str
+ 	struct prde *prd_ptr_to_indirect_ext = NULL;
+ 	unsigned indirect_ext_segment_sz = 0;
+ 	dma_addr_t indirect_ext_segment_paddr;
+-	unsigned int si;
+ 
+ 	VPRINTK("SATA FSL : cd = 0x%p, prd = 0x%p\n", cmd_desc, prd);
+ 
+ 	indirect_ext_segment_paddr = cmd_desc_paddr +
+ 	    SATA_FSL_CMD_DESC_OFFSET_TO_PRDT + SATA_FSL_MAX_PRD_DIRECT * 16;
+ 
+-	for_each_sg(qc->sg, sg, qc->n_elem, si) {
++	ata_for_each_sg(sg, qc) {
+ 		dma_addr_t sg_addr = sg_dma_address(sg);
+ 		u32 sg_len = sg_dma_len(sg);
+ 
+@@ -356,7 +390,7 @@ static unsigned int sata_fsl_fill_sg(str
+ 					"s/g len unaligned : 0x%x\n", sg_len);
+ 
+ 		if (num_prde == (SATA_FSL_MAX_PRD_DIRECT - 1) &&
+-		    sg_next(sg) != NULL) {
++		    !ata_sg_is_last(sg, qc)) {
+ 			VPRINTK("setting indirect prde\n");
+ 			prd_ptr_to_indirect_ext = prd;
+ 			prd->dba = cpu_to_le32(indirect_ext_segment_paddr);
+@@ -395,7 +429,7 @@ static void sata_fsl_qc_prep(struct ata_
+ {
+ 	struct ata_port *ap = qc->ap;
+ 	struct sata_fsl_port_priv *pp = ap->private_data;
+-	struct sata_fsl_host_priv *host_priv = ap->host->private_data;
++	struct sata_fsl_host_priv *host_priv = ap->host_set->private_data;
+ 	void __iomem *hcr_base = host_priv->hcr_base;
+ 	unsigned int tag = sata_fsl_tag(qc->tag, hcr_base);
+ 	struct command_desc *cd;
+@@ -407,7 +441,7 @@ static void sata_fsl_qc_prep(struct ata_
+ 	cd = (struct command_desc *)pp->cmdentry + tag;
+ 	cd_paddr = pp->cmdentry_paddr + tag * SATA_FSL_CMD_DESC_SIZE;
+ 
+-	ata_tf_to_fis(&qc->tf, 0, 1, (u8 *) &cd->cfis);
++	__ata_tf_to_fis(&qc->tf, 0, 1, (u8 *)&cd->cfis);
+ 
+ 	VPRINTK("Dumping cfis : 0x%x, 0x%x, 0x%x\n",
+ 		cd->cfis[0], cd->cfis[1], cd->cfis[2]);
+@@ -418,7 +452,7 @@ static void sata_fsl_qc_prep(struct ata_
+ 	}
+ 
+ 	/* setup "ACMD - atapi command" in cmd. desc. if this is ATAPI cmd */
+-	if (ata_is_atapi(qc->tf.protocol)) {
++	if (is_atapi_taskfile(&qc->tf)) {
+ 		desc_info |= ATAPI_CMD;
+ 		memset((void *)&cd->acmd, 0, 32);
+ 		memcpy((void *)&cd->acmd, qc->cdb, qc->dev->cdb_len);
+@@ -441,7 +475,7 @@ static void sata_fsl_qc_prep(struct ata_
+ static unsigned int sata_fsl_qc_issue(struct ata_queued_cmd *qc)
+ {
+ 	struct ata_port *ap = qc->ap;
+-	struct sata_fsl_host_priv *host_priv = ap->host->private_data;
++	struct sata_fsl_host_priv *host_priv = ap->host_set->private_data;
+ 	void __iomem *hcr_base = host_priv->hcr_base;
+ 	unsigned int tag = sata_fsl_tag(qc->tag, hcr_base);
+ 
+@@ -465,10 +499,10 @@ static unsigned int sata_fsl_qc_issue(st
+ 	return 0;
+ }
+ 
+-static int sata_fsl_scr_write(struct ata_port *ap, unsigned int sc_reg_in,
++static void sata_fsl_scr_write(struct ata_port *ap, unsigned int sc_reg_in,
+ 			       u32 val)
+ {
+-	struct sata_fsl_host_priv *host_priv = ap->host->private_data;
++	struct sata_fsl_host_priv *host_priv = ap->host_set->private_data;
+ 	void __iomem *ssr_base = host_priv->ssr_base;
+ 	unsigned int sc_reg;
+ 
+@@ -480,19 +514,18 @@ static int sata_fsl_scr_write(struct ata
+ 		sc_reg = sc_reg_in;
+ 		break;
+ 	default:
+-		return -EINVAL;
++		BUG();
++		return;
+ 	}
+ 
+ 	VPRINTK("xx_scr_write, reg_in = %d\n", sc_reg);
+ 
+ 	iowrite32(val, ssr_base + (sc_reg * 4));
+-	return 0;
+ }
+ 
+-static int sata_fsl_scr_read(struct ata_port *ap, unsigned int sc_reg_in,
+-			u32 *val)
++static u32 sata_fsl_scr_read(struct ata_port *ap, unsigned int sc_reg_in)
+ {
+-	struct sata_fsl_host_priv *host_priv = ap->host->private_data;
++	struct sata_fsl_host_priv *host_priv = ap->host_set->private_data;
+ 	void __iomem *ssr_base = host_priv->ssr_base;
+ 	unsigned int sc_reg;
+ 
+@@ -504,18 +537,18 @@ static int sata_fsl_scr_read(struct ata_
+ 		sc_reg = sc_reg_in;
+ 		break;
+ 	default:
++		BUG();
+ 		return -EINVAL;
+ 	}
+ 
+ 	VPRINTK("xx_scr_read, reg_in = %d\n", sc_reg);
+ 
+-	*val = ioread32(ssr_base + (sc_reg * 4));
+-	return 0;
++	return ioread32(ssr_base + (sc_reg * 4));
+ }
+ 
+ static void sata_fsl_freeze(struct ata_port *ap)
+ {
+-	struct sata_fsl_host_priv *host_priv = ap->host->private_data;
++	struct sata_fsl_host_priv *host_priv = ap->host_set->private_data;
+ 	void __iomem *hcr_base = host_priv->hcr_base;
+ 	u32 temp;
+ 
+@@ -536,7 +569,7 @@ static void sata_fsl_freeze(struct ata_p
+ 
+ static void sata_fsl_thaw(struct ata_port *ap)
+ {
+-	struct sata_fsl_host_priv *host_priv = ap->host->private_data;
++	struct sata_fsl_host_priv *host_priv = ap->host_set->private_data;
+ 	void __iomem *hcr_base = host_priv->hcr_base;
+ 	u32 temp;
+ 
+@@ -564,7 +597,7 @@ static inline void sata_fsl_cache_taskfi
+ 							struct ata_port *ap)
+ {
+ 	struct sata_fsl_port_priv *pp = ap->private_data;
+-	struct sata_fsl_host_priv *host_priv = ap->host->private_data;
++	struct sata_fsl_host_priv *host_priv = ap->host_set->private_data;
+ 	void __iomem *hcr_base = host_priv->hcr_base;
+ 	unsigned int tag = sata_fsl_tag(qc->tag, hcr_base);
+ 	struct command_desc *cd;
+@@ -590,12 +623,12 @@ static void sata_fsl_tf_read(struct ata_
+ 
+ static int sata_fsl_port_start(struct ata_port *ap)
+ {
+-	struct device *dev = ap->host->dev;
++	struct device *dev = ap->host_set->dev;
+ 	struct sata_fsl_port_priv *pp;
+ 	int retval;
+ 	void *mem;
+ 	dma_addr_t mem_dma;
+-	struct sata_fsl_host_priv *host_priv = ap->host->private_data;
++	struct sata_fsl_host_priv *host_priv = ap->host_set->private_data;
+ 	void __iomem *hcr_base = host_priv->hcr_base;
+ 	u32 temp;
+ 
+@@ -660,12 +693,12 @@ static int sata_fsl_port_start(struct at
+ 	 * Workaround for 8315DS board 3gbps link-up issue,
+ 	 * currently limit SATA port to GEN1 speed
+ 	 */
+-	sata_fsl_scr_read(ap, SCR_CONTROL, &temp);
++	temp = sata_fsl_scr_read(ap, SCR_CONTROL);
+ 	temp &= ~(0xF << 4);
+ 	temp |= (0x1 << 4);
+ 	sata_fsl_scr_write(ap, SCR_CONTROL, temp);
+ 
+-	sata_fsl_scr_read(ap, SCR_CONTROL, &temp);
++	temp = sata_fsl_scr_read(ap, SCR_CONTROL);
+ 	dev_printk(KERN_WARNING, dev, "scr_control, speed limited to %x\n",
+ 			temp);
+ #endif
+@@ -675,9 +708,9 @@ static int sata_fsl_port_start(struct at
+ 
+ static void sata_fsl_port_stop(struct ata_port *ap)
+ {
+-	struct device *dev = ap->host->dev;
++	struct device *dev = ap->host_set->dev;
+ 	struct sata_fsl_port_priv *pp = ap->private_data;
+-	struct sata_fsl_host_priv *host_priv = ap->host->private_data;
++	struct sata_fsl_host_priv *host_priv = ap->host_set->private_data;
+ 	void __iomem *hcr_base = host_priv->hcr_base;
+ 	u32 temp;
+ 
+@@ -702,7 +735,7 @@ static void sata_fsl_port_stop(struct at
+ 
+ static unsigned int sata_fsl_dev_classify(struct ata_port *ap)
+ {
+-	struct sata_fsl_host_priv *host_priv = ap->host->private_data;
++	struct sata_fsl_host_priv *host_priv = ap->host_set->private_data;
+ 	void __iomem *hcr_base = host_priv->hcr_base;
+ 	struct ata_taskfile tf;
+ 	u32 temp;
+@@ -721,12 +754,10 @@ static unsigned int sata_fsl_dev_classif
+ 	return ata_dev_classify(&tf);
+ }
+ 
+-static int sata_fsl_softreset(struct ata_link *link, unsigned int *class,
+-			      unsigned long deadline)
++static int sata_fsl_softreset(struct ata_port *ap, unsigned int *class)
+ {
+-	struct ata_port *ap = link->ap;
+ 	struct sata_fsl_port_priv *pp = ap->private_data;
+-	struct sata_fsl_host_priv *host_priv = ap->host->private_data;
++	struct sata_fsl_host_priv *host_priv = ap->host_set->private_data;
+ 	void __iomem *hcr_base = host_priv->hcr_base;
+ 	u32 temp;
+ 	struct ata_taskfile tf;
+@@ -801,7 +832,7 @@ try_offline_again:
+ 	 */
+ 
+ 	temp = ata_wait_register(hcr_base + HSTATUS, 0xFF, 0, 1, 500);
+-	if ((!(temp & 0x10)) || ata_link_offline(link)) {
++	if ((!(temp & 0x10)) || ata_port_offline(ap)) {
+ 		ata_port_printk(ap, KERN_WARNING,
+ 				"No Device OR PHYRDY change,Hstatus = 0x%x\n",
+ 				ioread32(hcr_base + HSTATUS));
+@@ -813,7 +844,7 @@ try_offline_again:
+ 	 */
+ 	start_jiffies = jiffies;
+ 	temp = ata_wait_register(hcr_base + HSTATUS, 0xFF, 0x10,
+-			500, jiffies_to_msecs(deadline - start_jiffies));
++			500, 500);
+ 
+ 	if ((temp & 0xFF) != 0x18) {
+ 		ata_port_printk(ap, KERN_WARNING, "No Signature Update\n");
+@@ -834,7 +865,7 @@ try_offline_again:
+ 
+ 	DPRINTK("Sending SRST/device reset\n");
+ 
+-	ata_tf_init(link->device, &tf);
++	ata_tf_init(ap->device, &tf);
+ 	cfis = (u8 *) &pp->cmdentry->cfis;
+ 
+ 	/* device reset/SRST is a control register update FIS, uses tag0 */
+@@ -842,7 +873,7 @@ try_offline_again:
+ 				     SRST_CMD | CMD_DESC_SNOOP_ENABLE, 0, 0, 5);
+ 
+ 	tf.ctl |= ATA_SRST;	/* setup SRST bit in taskfile control reg */
+-	ata_tf_to_fis(&tf, 0, 0, cfis);
++	__ata_tf_to_fis(&tf, 0, 0, cfis);
+ 
+ 	DPRINTK("Dumping cfis : 0x%x, 0x%x, 0x%x, 0x%x\n",
+ 		cfis[0], cfis[1], cfis[2], cfis[3]);
+@@ -867,7 +898,7 @@ try_offline_again:
+ 			ioread32(CQ + hcr_base),
+ 			ioread32(CA + hcr_base), ioread32(CC + hcr_base));
+ 
+-		sata_fsl_scr_read(ap, SCR_ERROR, &Serror);
++		Serror = sata_fsl_scr_read(ap, SCR_ERROR);
+ 
+ 		DPRINTK("HStatus = 0x%x\n", ioread32(hcr_base + HSTATUS));
+ 		DPRINTK("HControl = 0x%x\n", ioread32(hcr_base + HCONTROL));
+@@ -888,7 +919,7 @@ try_offline_again:
+ 	sata_fsl_setup_cmd_hdr_entry(pp, 0, CMD_DESC_SNOOP_ENABLE, 0, 0, 5);
+ 
+ 	tf.ctl &= ~ATA_SRST;	/* 2nd H2D Ctl. register FIS */
+-	ata_tf_to_fis(&tf, 0, 0, cfis);
++	__ata_tf_to_fis(&tf, 0, 0, cfis);
+ 
+ 	iowrite32(1, CQ + hcr_base);
+ 	msleep(150);		/* ?? */
+@@ -905,7 +936,7 @@ try_offline_again:
+ 	*class = ATA_DEV_NONE;
+ 
+ 	/* Verify if SStatus indicates device presence */
+-	if (ata_link_online(link)) {
++	if (ata_port_online(ap)) {
+ 		/*
+ 		 * if we are here, device presence has been detected,
+ 		 * 1st D2H FIS would have been received, but sfis in
+@@ -954,9 +985,8 @@ static void sata_fsl_irq_clear(struct at
+ 
+ static void sata_fsl_error_intr(struct ata_port *ap)
+ {
+-	struct ata_link *link = &ap->link;
+-	struct ata_eh_info *ehi = &link->eh_info;
+-	struct sata_fsl_host_priv *host_priv = ap->host->private_data;
++	struct ata_eh_info *ehi = &ap->eh_info;
++	struct sata_fsl_host_priv *host_priv = ap->host_set->private_data;
+ 	void __iomem *hcr_base = host_priv->hcr_base;
+ 	u32 hstatus, dereg, cereg = 0, SError = 0;
+ 	unsigned int err_mask = 0, action = 0;
+@@ -972,7 +1002,7 @@ static void sata_fsl_error_intr(struct a
+ 	 * Handle & Clear SError
+ 	 */
+ 
+-	sata_fsl_scr_read(ap, SCR_ERROR, &SError);
++	SError = sata_fsl_scr_read(ap, SCR_ERROR);
+ 	if (unlikely(SError & 0xFFFF0000)) {
+ 		sata_fsl_scr_write(ap, SCR_ERROR, SError);
+ 		err_mask |= AC_ERR_ATA_BUS;
+@@ -1024,7 +1054,7 @@ static void sata_fsl_error_intr(struct a
+ 	}
+ 
+ 	/* record error info */
+-	qc = ata_qc_from_tag(ap, link->active_tag);
++	qc = ata_qc_from_tag(ap, ap->active_tag);
+ 
+ 	if (qc) {
+ 		sata_fsl_cache_taskfile_from_d2h_fis(qc, qc->ap);
+@@ -1052,8 +1082,7 @@ static void sata_fsl_qc_complete(struct 
+ 
+ static void sata_fsl_host_intr(struct ata_port *ap)
+ {
+-	struct ata_link *link = &ap->link;
+-	struct sata_fsl_host_priv *host_priv = ap->host->private_data;
++	struct sata_fsl_host_priv *host_priv = ap->host_set->private_data;
+ 	void __iomem *hcr_base = host_priv->hcr_base;
+ 	u32 hstatus, qc_active = 0;
+ 	struct ata_queued_cmd *qc;
+@@ -1061,7 +1090,7 @@ static void sata_fsl_host_intr(struct at
+ 
+ 	hstatus = ioread32(hcr_base + HSTATUS);
+ 
+-	sata_fsl_scr_read(ap, SCR_ERROR, &SError);
++	SError = sata_fsl_scr_read(ap, SCR_ERROR);
+ 
+ 	if (unlikely(SError & 0xFFFF0000)) {
+ 		DPRINTK("serror @host_intr : 0x%x\n", SError);
+@@ -1075,7 +1104,7 @@ static void sata_fsl_host_intr(struct at
+ 		return;
+ 	}
+ 
+-	if (link->sactive) {	/* only true for NCQ commands */
++	if (ap->sactive) {	/* only true for NCQ commands */
+ 		int i;
+ 		/* Read command completed register */
+ 		qc_active = ioread32(hcr_base + CC);
+@@ -1104,10 +1133,10 @@ static void sata_fsl_host_intr(struct at
+ 
+ 	} else if (ap->qc_active) {
+ 		iowrite32(1, hcr_base + CC);
+-		qc = ata_qc_from_tag(ap, link->active_tag);
++		qc = ata_qc_from_tag(ap, ap->active_tag);
+ 
+ 		DPRINTK("completing non-ncq cmd, tag=%d,CC=0x%x\n",
+-			link->active_tag, ioread32(hcr_base + CC));
++			ap->active_tag, ioread32(hcr_base + CC));
+ 
+ 		if (qc) {
+ 			sata_fsl_qc_complete(qc);
+@@ -1121,10 +1150,11 @@ static void sata_fsl_host_intr(struct at
+ 	}
+ }
+ 
+-static irqreturn_t sata_fsl_interrupt(int irq, void *dev_instance)
++static irqreturn_t sata_fsl_interrupt(int irq, void *dev_instance,
++				      struct pt_regs *regs)
+ {
+-	struct ata_host *host = dev_instance;
+-	struct sata_fsl_host_priv *host_priv = host->private_data;
++	struct ata_host_set *host_set = dev_instance;
++	struct sata_fsl_host_priv *host_priv = host_set->private_data;
+ 	void __iomem *hcr_base = host_priv->hcr_base;
+ 	u32 interrupt_enables;
+ 	unsigned handled = 0;
+@@ -1139,22 +1169,22 @@ static irqreturn_t sata_fsl_interrupt(in
+ 	if (!interrupt_enables)
+ 		return IRQ_NONE;
+ 
+-	spin_lock(&host->lock);
++	spin_lock(&host_set->lock);
+ 
+ 	/* Assuming one port per host controller */
+ 
+-	ap = host->ports[0];
++	ap = host_set->ports[0];
+ 	if (ap) {
+ 		sata_fsl_host_intr(ap);
+ 	} else {
+-		dev_printk(KERN_WARNING, host->dev,
++		dev_printk(KERN_WARNING, host_set->dev,
+ 			   "interrupt on disabled port 0\n");
+ 	}
+ 
+ 	iowrite32(interrupt_enables, hcr_base + HSTATUS);
+ 	handled = 1;
+ 
+-	spin_unlock(&host->lock);
++	spin_unlock(&host_set->lock);
+ 
+ 	return IRQ_RETVAL(handled);
+ }
+@@ -1163,9 +1193,8 @@ static irqreturn_t sata_fsl_interrupt(in
+  * Multiple ports are represented by multiple SATA controllers with
+  * one port per controller
+  */
+-static int sata_fsl_init_controller(struct ata_host *host)
++static int sata_fsl_init_controller(struct sata_fsl_host_priv *host_priv)
+ {
+-	struct sata_fsl_host_priv *host_priv = host->private_data;
+ 	void __iomem *hcr_base = host_priv->hcr_base;
+ 	u32 temp;
+ 
+@@ -1247,14 +1276,15 @@ static const struct ata_port_operations 
+ 	.error_handler = sata_fsl_error_handler,
+ 	.post_internal_cmd = sata_fsl_post_internal_cmd,
+ 
++	.irq_handler = sata_fsl_interrupt,
++
+ 	.port_start = sata_fsl_port_start,
+ 	.port_stop = sata_fsl_port_stop,
+ };
+ 
+ static const struct ata_port_info sata_fsl_port_info[] = {
+ 	{
+-	 .flags = SATA_FSL_HOST_FLAGS,
+-	 .link_flags = SATA_FSL_HOST_LFLAGS,
++	 .host_flags = SATA_FSL_HOST_FLAGS,
+ 	 .pio_mask = 0x1f,	/* pio 0-4 */
+ 	 .udma_mask = 0x7f,	/* udma 0-6 */
+ 	 .port_ops = &sata_fsl_ops,
+@@ -1271,10 +1301,7 @@ static int sata_fsl_probe(struct of_devi
+ 	struct sata_fsl_host_priv *host_priv = NULL;
+ 	struct resource *r;
+ 	int irq;
+-	struct ata_host *host;
+-
+-	struct ata_port_info pi = sata_fsl_port_info[0];
+-	const struct ata_port_info *ppi[] = { &pi, NULL };
++	struct ata_probe_ent *pe = NULL;
+ 
+ 	dev_printk(KERN_INFO, &ofdev->dev,
+ 		   "Sata FSL Platform/CSB Driver init\n");
+@@ -1307,29 +1334,41 @@ static int sata_fsl_probe(struct of_devi
+ 	}
+ 	host_priv->irq = irq;
+ 
+-	/* allocate host structure */
+-	host = ata_host_alloc_pinfo(&ofdev->dev, ppi, SATA_FSL_MAX_PORTS);
++	pe = kzalloc(sizeof(*pe), GFP_KERNEL);
++	if (!pe)
++		goto error_exit_with_cleanup;
+ 
+-	/* host->iomap is not used currently */
+-	host->private_data = host_priv;
++	pe->dev = &ofdev->dev;
++	INIT_LIST_HEAD(&pe->node);
++	pe->sht = &sata_fsl_sht;
++	pe->host_flags = SATA_FSL_HOST_FLAGS;
++	pe->port_ops = &sata_fsl_ops;
++	pe->n_ports = SATA_FSL_MAX_PORTS;
++	pe->irq = irq;
++	pe->irq_flags = SATA_FSL_IRQ_FLAG;
++	pe->pio_mask = 0x1f;
++	pe->udma_mask = 0x7f;
+ 
+ 	/* setup port(s) */
++	pe->port[0].cmd_addr = (unsigned long)host_priv->hcr_base;
++	pe->port[0].scr_addr = (unsigned long)host_priv->ssr_base;
+ 
+-	host->ports[0]->ioaddr.cmd_addr = host_priv->hcr_base;
+-	host->ports[0]->ioaddr.scr_addr = host_priv->ssr_base;
++	/* host->iomap is not used currently */
++	pe->private_data = host_priv;
+ 
+ 	/* initialize host controller */
+-	sata_fsl_init_controller(host);
++	sata_fsl_init_controller(host_priv);;
+ 
+ 	/*
+ 	 * Now, register with libATA core, this will also initiate the
+ 	 * device discovery process, invoking our port_start() handler &
+ 	 * error_handler() to execute a dummy Softreset EH session
+ 	 */
+-	ata_host_activate(host, irq, sata_fsl_interrupt, SATA_FSL_IRQ_FLAG,
+-			  &sata_fsl_sht);
++	retval = ata_device_add(pe);
++	if (!retval)
++		goto error_exit_with_cleanup;
+ 
+-	dev_set_drvdata(&ofdev->dev, host);
++	kfree(pe);
+ 
+ 	return 0;
+ 
+@@ -1339,16 +1378,21 @@ error_exit_with_cleanup:
+ 		iounmap(hcr_base);
+ 	if (host_priv)
+ 		kfree(host_priv);
++	if (pe)
++		kfree(pe);
+ 
+ 	return retval;
+ }
+ 
+ static int sata_fsl_remove(struct of_device *ofdev)
+ {
+-	struct ata_host *host = dev_get_drvdata(&ofdev->dev);
+-	struct sata_fsl_host_priv *host_priv = host->private_data;
+-
+-	ata_host_detach(host);
++	struct ata_host_set *host_set = dev_get_drvdata(&ofdev->dev);
++	struct ata_host_set *host_set2 = host_set->next;
++	struct sata_fsl_host_priv *host_priv = host_set->private_data;
++
++	ata_host_set_remove(host_set);
++	if (host_set2)
++		ata_host_set_remove(host_set2);
+ 
+ 	dev_set_drvdata(&ofdev->dev, NULL);
+ 
+@@ -1366,6 +1410,9 @@ static struct of_device_id fsl_sata_matc
+ 	{
+ 		.compatible = "fsl,mpc8379-sata",
+ 	},
++	{
++		.compatible = "fsl,pq-sata",
++	},
+ 	{},
+ };
+ 
+Index: linux-2.6.18/mvl_patches/pro50-1027.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1027.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1027);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

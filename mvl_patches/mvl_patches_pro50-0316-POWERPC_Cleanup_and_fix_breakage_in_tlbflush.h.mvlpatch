@@ -1,0 +1,499 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Cleanup_and_fix_breakage_in_tlbflush.h
+# Date: Wed Sep 26 11:16:33 2007
+# MR: 24856
+# From 621023072524fc0155ed16490255e1ea3aa11585 Mon Sep 17 00:00:00 2001
+# From: David Gibson <david@gibson.dropbear.id.au>
+# Date: Tue, 24 Apr 2007 13:09:12 +1000
+# Subject: [PATCH] [POWERPC] Cleanup and fix breakage in tlbflush.h
+# 
+# BenH's commit a741e67969577163a4cfc78d7fd2753219087ef1 in powerpc.git,
+# although (AFAICT) only intended to affect ppc64, also has side-effects
+# which break 44x.  I think 40x, 8xx and Freescale Book E are also
+# affected, though I haven't tested them.
+# 
+# The problem lies in unconditionally removing flush_tlb_pending() from
+# the versions of flush_tlb_mm(), flush_tlb_range() and
+# flush_tlb_kernel_range() used on ppc64 - which are also used the
+# embedded platforms mentioned above.
+# 
+# The patch below cleans up the convoluted #ifdef logic in tlbflush.h,
+# in the process restoring the necessary flushes for the software TLB
+# platforms.  There are three sets of definitions for the flushing
+# hooks: the software TLB versions (revised to avoid using names which
+# appear to related to TLB batching), the 32-bit hash based versions
+# (external functions) amd the 64-bit hash based versions (which
+# implement batching).
+# 
+# It also moves the declaration of update_mmu_cache() to always be in
+# tlbflush.h (previously it was in tlbflush.h except for PPC64, where it
+# was in pgtable.h).
+# 
+# Booted on Ebony (440GP) and compiled for 64-bit and 32-bit
+# multiplatform.
+# 
+# Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+# Acked-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=316
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From 621023072524fc0155ed16490255e1ea3aa11585 Mon Sep 17 00:00:00 2001
+From: David Gibson <david@gibson.dropbear.id.au>
+Date: Tue, 24 Apr 2007 13:09:12 +1000
+Subject: [PATCH] [POWERPC] Cleanup and fix breakage in tlbflush.h
+
+BenH's commit a741e67969577163a4cfc78d7fd2753219087ef1 in powerpc.git,
+although (AFAICT) only intended to affect ppc64, also has side-effects
+which break 44x.  I think 40x, 8xx and Freescale Book E are also
+affected, though I haven't tested them.
+
+The problem lies in unconditionally removing flush_tlb_pending() from
+the versions of flush_tlb_mm(), flush_tlb_range() and
+flush_tlb_kernel_range() used on ppc64 - which are also used the
+embedded platforms mentioned above.
+
+The patch below cleans up the convoluted #ifdef logic in tlbflush.h,
+in the process restoring the necessary flushes for the software TLB
+platforms.  There are three sets of definitions for the flushing
+hooks: the software TLB versions (revised to avoid using names which
+appear to related to TLB batching), the 32-bit hash based versions
+(external functions) amd the 64-bit hash based versions (which
+implement batching).
+
+It also moves the declaration of update_mmu_cache() to always be in
+tlbflush.h (previously it was in tlbflush.h except for PPC64, where it
+was in pgtable.h).
+
+Booted on Ebony (440GP) and compiled for 64-bit and 32-bit
+multiplatform.
+
+Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+Acked-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/mm/mmu_decl.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/mm/mmu_decl.h
++++ linux-2.6.18/arch/powerpc/mm/mmu_decl.h
+@@ -19,6 +19,7 @@
+  *  2 of the License, or (at your option) any later version.
+  *
+  */
++#include <linux/mm.h>
+ #include <asm/tlbflush.h>
+ #include <asm/mmu.h>
+ 
+Index: linux-2.6.18/include/asm-powerpc/pgtable.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pgtable.h
++++ linux-2.6.18/include/asm-powerpc/pgtable.h
+@@ -448,16 +448,6 @@ extern pgd_t swapper_pg_dir[];
+ 
+ extern void paging_init(void);
+ 
+-/*
+- * This gets called at the end of handling a page fault, when
+- * the kernel has put a new PTE into the page table for the process.
+- * We use it to put a corresponding HPTE into the hash table
+- * ahead of time, instead of waiting for the inevitable extra
+- * hash-table miss exception.
+- */
+-struct vm_area_struct;
+-extern void update_mmu_cache(struct vm_area_struct *, unsigned long, pte_t);
+-
+ /* Encode and de-code a swap entry */
+ #define __swp_type(entry)	(((entry).val >> 1) & 0x3f)
+ #define __swp_offset(entry)	((entry).val >> 8)
+Index: linux-2.6.18/include/asm-powerpc/tlbflush.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/tlbflush.h
++++ linux-2.6.18/include/asm-powerpc/tlbflush.h
+@@ -17,10 +17,73 @@
+  */
+ #ifdef __KERNEL__
+ 
+-
+ struct mm_struct;
++struct vm_area_struct;
++
++#if defined(CONFIG_4xx) || defined(CONFIG_8xx) || defined(CONFIG_FSL_BOOKE)
++/*
++ * TLB flushing for software loaded TLB chips
++ *
++ * TODO: (CONFIG_FSL_BOOKE) determine if flush_tlb_range &
++ * flush_tlb_kernel_range are best implemented as tlbia vs
++ * specific tlbie's
++ */
+ 
+-#ifdef CONFIG_PPC64
++extern void _tlbie(unsigned long address);
++
++#if defined(CONFIG_40x) || defined(CONFIG_8xx)
++#define _tlbia()	asm volatile ("tlbia; sync" : : : "memory")
++#else /* CONFIG_44x || CONFIG_FSL_BOOKE */
++extern void _tlbia(void);
++#endif
++
++static inline void flush_tlb_mm(struct mm_struct *mm)
++{
++	_tlbia();
++}
++
++static inline void flush_tlb_page(struct vm_area_struct *vma,
++				  unsigned long vmaddr)
++{
++	_tlbie(vmaddr);
++}
++
++static inline void flush_tlb_page_nohash(struct vm_area_struct *vma,
++					 unsigned long vmaddr)
++{
++	_tlbie(vmaddr);
++}
++
++static inline void flush_tlb_range(struct vm_area_struct *vma,
++				   unsigned long start, unsigned long end)
++{
++	_tlbia();
++}
++
++static inline void flush_tlb_kernel_range(unsigned long start,
++					  unsigned long end)
++{
++	_tlbia();
++}
++
++#elif defined(CONFIG_PPC32)
++/*
++ * TLB flushing for "classic" hash-MMMU 32-bit CPUs, 6xx, 7xx, 7xxx
++ */
++extern void _tlbie(unsigned long address);
++extern void _tlbia(void);
++
++extern void flush_tlb_mm(struct mm_struct *mm);
++extern void flush_tlb_page(struct vm_area_struct *vma, unsigned long vmaddr);
++extern void flush_tlb_page_nohash(struct vm_area_struct *vma, unsigned long addr);
++extern void flush_tlb_range(struct vm_area_struct *vma, unsigned long start,
++			    unsigned long end);
++extern void flush_tlb_kernel_range(unsigned long start, unsigned long end);
++
++#else
++/*
++ * TLB flushing for 64-bit has-MMU CPUs
++ */
+ 
+ #include <linux/percpu.h>
+ #include <asm/page.h>
+@@ -67,89 +130,51 @@ extern void flush_hash_page(unsigned lon
+ 			    int local);
+ extern void flush_hash_range(unsigned long number, int local);
+ 
+-#else /* CONFIG_PPC64 */
+-
+-#include <linux/mm.h>
+-
+-extern void _tlbie(unsigned long address);
+-extern void _tlbia(void);
+-
+-/*
+- * TODO: (CONFIG_FSL_BOOKE) determine if flush_tlb_range &
+- * flush_tlb_kernel_range are best implemented as tlbia vs
+- * specific tlbie's
+- */
+-
+-#if (defined(CONFIG_4xx) && !defined(CONFIG_44x)) || defined(CONFIG_8xx)
+-#define flush_tlb_pending()	asm volatile ("tlbia; sync" : : : "memory")
+-#elif defined(CONFIG_4xx) || defined(CONFIG_FSL_BOOKE)
+-#define flush_tlb_pending()	_tlbia()
+-#endif
+-
+-/*
+- * This gets called at the end of handling a page fault, when
+- * the kernel has put a new PTE into the page table for the process.
+- * We use it to ensure coherency between the i-cache and d-cache
+- * for the page which has just been mapped in.
+- * On machines which use an MMU hash table, we use this to put a
+- * corresponding HPTE into the hash table ahead of time, instead of
+- * waiting for the inevitable extra hash-table miss exception.
+- */
+-extern void update_mmu_cache(struct vm_area_struct *, unsigned long, pte_t);
+-
+-#endif /* CONFIG_PPC64 */
+-
+-#if defined(CONFIG_PPC64) || defined(CONFIG_4xx) || \
+-	defined(CONFIG_FSL_BOOKE) || defined(CONFIG_8xx)
+ 
+ static inline void flush_tlb_mm(struct mm_struct *mm)
+ {
+ }
+ 
+ static inline void flush_tlb_page(struct vm_area_struct *vma,
+-				unsigned long vmaddr)
++				  unsigned long vmaddr)
+ {
+-#ifndef CONFIG_PPC64
+-	_tlbie(vmaddr);
+-#endif
+ }
+ 
+ static inline void flush_tlb_page_nohash(struct vm_area_struct *vma,
+ 					 unsigned long vmaddr)
+ {
+-#ifndef CONFIG_PPC64
+-	_tlbie(vmaddr);
+-#endif
+ }
+ 
+ static inline void flush_tlb_range(struct vm_area_struct *vma,
+-		unsigned long start, unsigned long end)
++				   unsigned long start, unsigned long end)
+ {
+ }
+ 
+ static inline void flush_tlb_kernel_range(unsigned long start,
+-		unsigned long end)
++					  unsigned long end)
+ {
+ }
+ 
+-#else	/* 6xx, 7xx, 7xxx cpus */
+-
+-extern void flush_tlb_mm(struct mm_struct *mm);
+-extern void flush_tlb_page(struct vm_area_struct *vma, unsigned long vmaddr);
+-extern void flush_tlb_page_nohash(struct vm_area_struct *vma, unsigned long addr);
+-extern void flush_tlb_range(struct vm_area_struct *vma, unsigned long start,
+-			    unsigned long end);
+-extern void flush_tlb_kernel_range(unsigned long start, unsigned long end);
+-
+ #endif
+ 
+ /*
++ * This gets called at the end of handling a page fault, when
++ * the kernel has put a new PTE into the page table for the process.
++ * We use it to ensure coherency between the i-cache and d-cache
++ * for the page which has just been mapped in.
++ * On machines which use an MMU hash table, we use this to put a
++ * corresponding HPTE into the hash table ahead of time, instead of
++ * waiting for the inevitable extra hash-table miss exception.
++ */
++extern void update_mmu_cache(struct vm_area_struct *, unsigned long, pte_t);
++
++/*
+  * This is called in munmap when we have freed up some page-table
+  * pages.  We don't need to do anything here, there's nothing special
+  * about our page-table pages.  -- paulus
+  */
+ static inline void flush_tlb_pgtables(struct mm_struct *mm,
+-		unsigned long start, unsigned long end)
++				      unsigned long start, unsigned long end)
+ {
+ }
+ 
+Index: linux-2.6.18/mvl_patches/pro50-0316.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0316.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(316);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

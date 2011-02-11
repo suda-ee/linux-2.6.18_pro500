@@ -1,0 +1,1358 @@
+#! /usr/bin/env bash
+# Patch: -dev_spidevb_c_interface
+# Date: Wed Nov  7 15:18:02 2007
+# Source: Andrea Paterniani <a.paterniani@swapp-eng.it>
+# MR: 24646
+# Type: Enhancement
+# Disposition: backport from 2.6.22-rc1 (814a8d50eb1d88cedcef97567be53ee0d4512631)
+# Signed-off-by: Andrea Paterniani <a.paterniani@swapp-eng.it>
+# Signed-off-by: David Brownell <dbrownell@users.sourceforge.net>
+# Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+# Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+# Description:
+# /dev/spidevB.C interface
+# 
+# Add a filesystem API for <linux/spi/spi.h> stack.  The initial version of
+# this interface is purely synchronous.
+# 
+# dbrownell@users.sourceforge.net:
+# 
+#  Cleaned up, bugfixed; much simplified; added preliminary documentation.
+# 
+#  Works with mdev given CONFIG_SYSFS_DEPRECATED; and presumably udev.
+# 
+#  Updated SPI_IOC_MESSAGE ioctl to full spi_message semantics, supporting
+#  groups of one or more transfers (each of which may be full duplex if
+#  desired).
+# 
+#  This is marked as EXPERIMENTAL with an explicit disclaimer that the API
+#  (notably the ioctls) is subject to change.
+# 
+#  Documentation/spi/spidev   |  307 +++++++++++++++++++++++
+#  drivers/spi/Kconfig        |   10 +
+#  drivers/spi/Makefile       |    1 
+#  drivers/spi/spidev.c       |  575 ++++++++++++++++++++++++++++++++++++++++++++
+#  include/linux/Kbuild       |    1 
+#  include/linux/spi/Kbuild   |    1 
+#  include/linux/spi/spidev.h |  124 +++++++++
+#  7 files changed, 1019 insertions(+), 0 deletions(-)
+# 
+
+PATCHNUM=593
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Andrea Paterniani <a.paterniani@swapp-eng.it>
+MR: 24646
+Type: Enhancement
+Disposition: backport from 2.6.22-rc1 (814a8d50eb1d88cedcef97567be53ee0d4512631)
+Signed-off-by: Andrea Paterniani <a.paterniani@swapp-eng.it>
+Signed-off-by: David Brownell <dbrownell@users.sourceforge.net>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+Description:
+/dev/spidevB.C interface
+
+Add a filesystem API for <linux/spi/spi.h> stack.  The initial version of
+this interface is purely synchronous.
+
+dbrownell@users.sourceforge.net:
+
+ Cleaned up, bugfixed; much simplified; added preliminary documentation.
+
+ Works with mdev given CONFIG_SYSFS_DEPRECATED; and presumably udev.
+
+ Updated SPI_IOC_MESSAGE ioctl to full spi_message semantics, supporting
+ groups of one or more transfers (each of which may be full duplex if
+ desired).
+
+ This is marked as EXPERIMENTAL with an explicit disclaimer that the API
+ (notably the ioctls) is subject to change.
+
+ Documentation/spi/spidev   |  307 ++++++++++++++++++++++++
+ drivers/spi/Kconfig        |   10 
+ drivers/spi/Makefile       |    1 
+ drivers/spi/spidev.c       |  575 +++++++++++++++++++++++++++++++++++++++++++++
+ include/linux/Kbuild       |    1 
+ include/linux/spi/Kbuild   |    1 
+ include/linux/spi/spidev.h |  124 +++++++++
+ mvl_patches/pro50-0593.c   |   16 +
+ 8 files changed, 1035 insertions(+)
+
+Index: linux-2.6.18/Documentation/spi/spidev
+===================================================================
+--- /dev/null
++++ linux-2.6.18/Documentation/spi/spidev
+@@ -0,0 +1,307 @@
++SPI devices have a limited userspace API, supporting basic half-duplex
++read() and write() access to SPI slave devices.  Using ioctl() requests,
++full duplex transfers and device I/O configuration are also available.
++
++	#include <fcntl.h>
++	#include <unistd.h>
++	#include <sys/ioctl.h>
++	#include <linux/types.h>
++	#include <linux/spi/spidev.h>
++
++Some reasons you might want to use this programming interface include:
++
++ * Prototyping in an environment that's not crash-prone; stray pointers
++   in userspace won't normally bring down any Linux system.
++
++ * Developing simple protocols used to talk to microcontrollers acting
++   as SPI slaves, which you may need to change quite often.
++
++Of course there are drivers that can never be written in userspace, because
++they need to access kernel interfaces (such as IRQ handlers or other layers
++of the driver stack) that are not accessible to userspace.
++
++
++DEVICE CREATION, DRIVER BINDING
++===============================
++The simplest way to arrange to use this driver is to just list it in the
++spi_board_info for a device as the driver it should use:  the "modalias"
++entry is "spidev", matching the name of the driver exposing this API.
++Set up the other device characteristics (bits per word, SPI clocking,
++chipselect polarity, etc) as usual, so you won't always need to override
++them later.
++
++(Sysfs also supports userspace driven binding/unbinding of drivers to
++devices.  That mechanism might be supported here in the future.)
++
++When you do that, the sysfs node for the SPI device will include a child
++device node with a "dev" attribute that will be understood by udev or mdev.
++(Larger systems will have "udev".  Smaller ones may configure "mdev" into
++busybox; it's less featureful, but often enough.)  For a SPI device with
++chipselect C on bus B, you should see:
++
++    /dev/spidevB.C ... character special device, major number 153 with
++	a dynamically chosen minor device number.  This is the node
++	that userspace programs will open, created by "udev" or "mdev".
++
++    /sys/devices/.../spiB.C ... as usual, the SPI device node will
++	be a child of its SPI master controller.
++
++    /sys/class/spidev/spidevB.C ... created when the "spidev" driver
++	binds to that device.  (Directory or symlink, based on whether
++	or not you enabled the "deprecated sysfs files" Kconfig option.)
++
++Do not try to manage the /dev character device special file nodes by hand.
++That's error prone, and you'd need to pay careful attention to system
++security issues; udev/mdev should already be configured securely.
++
++If you unbind the "spidev" driver from that device, those two "spidev" nodes
++(in sysfs and in /dev) should automatically be removed (respectively by the
++kernel and by udev/mdev).  You can unbind by removing the "spidev" driver
++module, which will affect all devices using this driver.  You can also unbind
++by having kernel code remove the SPI device, probably by removing the driver
++for its SPI controller (so its spi_master vanishes).
++
++Since this is a standard Linux device driver -- even though it just happens
++to expose a low level API to userspace -- it can be associated with any number
++of devices at a time.  Just provide one spi_board_info record for each such
++SPI device, and you'll get a /dev device node for each device.
++
++
++BASIC CHARACTER DEVICE API
++==========================
++Normal open() and close() operations on /dev/spidevB.D files work as you
++would expect.
++
++Standard read() and write() operations are obviously only half-duplex, and
++the chipselect is deactivated between those operations.  Full-duplex access,
++and composite operation without chipselect de-activation, is available using
++the SPI_IOC_MESSAGE(N) request.
++
++Several ioctl() requests let your driver read or override the device's current
++settings for data transfer parameters:
++
++    SPI_IOC_RD_MODE, SPI_IOC_WR_MODE ... pass a pointer to a byte which will
++	return (RD) or assign (WR) the SPI transfer mode.  Use the constants
++	SPI_MODE_0..SPI_MODE_3; or if you prefer you can combine SPI_CPOL
++	(clock polarity, idle high iff this is set) or SPI_CPHA (clock phase,
++	sample on trailing edge iff this is set) flags.
++
++    SPI_IOC_RD_LSB_FIRST, SPI_IOC_WR_LSB_FIRST ... pass a pointer to a byte
++	which will return (RD) or assign (WR) the bit justification used to
++	transfer SPI words.  Zero indicates MSB-first; other values indicate
++	the less common LSB-first encoding.  In both cases the specified value
++	is right-justified in each word, so that unused (TX) or undefined (RX)
++	bits are in the MSBs.
++
++    SPI_IOC_RD_BITS_PER_WORD, SPI_IOC_WR_BITS_PER_WORD ... pass a pointer to
++	a byte which will return (RD) or assign (WR) the number of bits in
++	each SPI transfer word.  The value zero signifies eight bits.
++
++    SPI_IOC_RD_MAX_SPEED_HZ, SPI_IOC_WR_MAX_SPEED_HZ ... pass a pointer to a
++	u32 which will return (RD) or assign (WR) the maximum SPI transfer
++	speed, in Hz.  The controller can't necessarily assign that specific
++	clock speed.
++
++NOTES:
++
++    - At this time there is no async I/O support; everything is purely
++      synchronous.
++
++    - There's currently no way to report the actual bit rate used to
++      shift data to/from a given device.
++
++    - From userspace, you can't currently change the chip select polarity;
++      that could corrupt transfers to other devices sharing the SPI bus.
++      Each SPI device is deselected when it's not in active use, allowing
++      other drivers to talk to other devices.
++
++    - There's a limit on the number of bytes each I/O request can transfer
++      to the SPI device.  It defaults to one page, but that can be changed
++      using a module parameter.
++
++    - Because SPI has no low-level transfer acknowledgement, you usually
++      won't see any I/O errors when talking to a non-existent device.
++
++
++FULL DUPLEX CHARACTER DEVICE API
++================================
++
++See the sample program below for one example showing the use of the full
++duplex programming interface.  (Although it doesn't perform a full duplex
++transfer.)  The model is the same as that used in the kernel spi_sync()
++request; the individual transfers offer the same capabilities as are
++available to kernel drivers (except that it's not asynchronous).
++
++The example shows one half-duplex RPC-style request and response message.
++These requests commonly require that the chip not be deselected between
++the request and response.  Several such requests could be chained into
++a single kernel request, even allowing the chip to be deselected after
++each response.  (Other protocol options include changing the word size
++and bitrate for each transfer segment.)
++
++To make a full duplex request, provide both rx_buf and tx_buf for the
++same transfer.  It's even OK if those are the same buffer.
++
++
++SAMPLE PROGRAM
++==============
++
++--------------------------------	CUT HERE
++#include <stdio.h>
++#include <unistd.h>
++#include <stdlib.h>
++#include <fcntl.h>
++#include <string.h>
++
++#include <sys/ioctl.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++
++#include <linux/types.h>
++#include <linux/spi/spidev.h>
++
++
++static int verbose;
++
++static void do_read(int fd, int len)
++{
++	unsigned char	buf[32], *bp;
++	int		status;
++
++	/* read at least 2 bytes, no more than 32 */
++	if (len < 2)
++		len = 2;
++	else if (len > sizeof(buf))
++		len = sizeof(buf);
++	memset(buf, 0, sizeof buf);
++
++	status = read(fd, buf, len);
++	if (status < 0) {
++		perror("read");
++		return;
++	}
++	if (status != len) {
++		fprintf(stderr, "short read\n");
++		return;
++	}
++
++	printf("read(%2d, %2d): %02x %02x,", len, status,
++		buf[0], buf[1]);
++	status -= 2;
++	bp = buf + 2;
++	while (status-- > 0)
++		printf(" %02x", *bp++);
++	printf("\n");
++}
++
++static void do_msg(int fd, int len)
++{
++	struct spi_ioc_transfer	xfer[2];
++	unsigned char		buf[32], *bp;
++	int			status;
++
++	memset(xfer, 0, sizeof xfer);
++	memset(buf, 0, sizeof buf);
++
++	if (len > sizeof buf)
++		len = sizeof buf;
++
++	buf[0] = 0xaa;
++	xfer[0].tx_buf = (__u64) buf;
++	xfer[0].len = 1;
++
++	xfer[1].rx_buf = (__u64) buf;
++	xfer[1].len = len;
++
++	status = ioctl(fd, SPI_IOC_MESSAGE(2), xfer);
++	if (status < 0) {
++		perror("SPI_IOC_MESSAGE");
++		return;
++	}
++
++	printf("response(%2d, %2d): ", len, status);
++	for (bp = buf; len; len--)
++		printf(" %02x", *bp++);
++	printf("\n");
++}
++
++static void dumpstat(const char *name, int fd)
++{
++	__u8	mode, lsb, bits;
++	__u32	speed;
++
++	if (ioctl(fd, SPI_IOC_RD_MODE, &mode) < 0) {
++		perror("SPI rd_mode");
++		return;
++	}
++	if (ioctl(fd, SPI_IOC_RD_LSB_FIRST, &lsb) < 0) {
++		perror("SPI rd_lsb_fist");
++		return;
++	}
++	if (ioctl(fd, SPI_IOC_RD_BITS_PER_WORD, &bits) < 0) {
++		perror("SPI bits_per_word");
++		return;
++	}
++	if (ioctl(fd, SPI_IOC_RD_MAX_SPEED_HZ, &speed) < 0) {
++		perror("SPI max_speed_hz");
++		return;
++	}
++
++	printf("%s: spi mode %d, %d bits %sper word, %d Hz max\n",
++		name, mode, bits, lsb ? "(lsb first) " : "", speed);
++}
++
++int main(int argc, char **argv)
++{
++	int		c;
++	int		readcount = 0;
++	int		msglen = 0;
++	int		fd;
++	const char	*name;
++
++	while ((c = getopt(argc, argv, "hm:r:v")) != EOF) {
++		switch (c) {
++		case 'm':
++			msglen = atoi(optarg);
++			if (msglen < 0)
++				goto usage;
++			continue;
++		case 'r':
++			readcount = atoi(optarg);
++			if (readcount < 0)
++				goto usage;
++			continue;
++		case 'v':
++			verbose++;
++			continue;
++		case 'h':
++		case '?':
++usage:
++			fprintf(stderr,
++				"usage: %s [-h] [-m N] [-r N] /dev/spidevB.D\n",
++				argv[0]);
++			return 1;
++		}
++	}
++
++	if ((optind + 1) != argc)
++		goto usage;
++	name = argv[optind];
++
++	fd = open(name, O_RDWR);
++	if (fd < 0) {
++		perror("open");
++		return 1;
++	}
++
++	dumpstat(name, fd);
++
++	if (msglen)
++		do_msg(fd, msglen);
++
++	if (readcount)
++		do_read(fd, readcount);
++
++	close(fd);
++	return 0;
++}
+Index: linux-2.6.18/drivers/spi/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/spi/Kconfig
++++ linux-2.6.18/drivers/spi/Kconfig
+@@ -169,6 +169,16 @@ config TSC2102
+ 	---help---
+ 	  Say Y here if you want support for the TSC2102 chip.  It
+ 	  will be needed for the touchscreen driver on some boards.
++
++config SPI_SPIDEV
++	tristate "User mode SPI device driver support"
++	depends on SPI_MASTER && EXPERIMENTAL
++	help
++	  This supports user mode SPI protocol drivers.
++
++	  Note that this application programming interface is EXPERIMENTAL
++	  and hence SUBJECT TO CHANGE WITHOUT NOTICE while it stabilizes.
++
+ #
+ # Add new SPI protocol masters in alphabetical order above this line
+ #
+Index: linux-2.6.18/drivers/spi/Makefile
+===================================================================
+--- linux-2.6.18.orig/drivers/spi/Makefile
++++ linux-2.6.18/drivers/spi/Makefile
+@@ -24,6 +24,7 @@ obj-$(CONFIG_SPI_MXC)                   
+ 
+ # SPI protocol drivers (device/link on bus)
+ obj-$(CONFIG_TSC2102)			+= tsc2102.o
++obj-$(CONFIG_SPI_SPIDEV)	+= spidev.o
+ # 	... add above this line ...
+ 
+ # SPI slave controller drivers (upstream link)
+Index: linux-2.6.18/drivers/spi/spidev.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/spi/spidev.c
+@@ -0,0 +1,575 @@
++/*
++ * spidev.c -- simple synchronous userspace interface to SPI devices
++ *
++ * Copyright (C) 2006 SWAPP
++ *	Andrea Paterniani <a.paterniani@swapp-eng.it>
++ * Copyright (C) 2007 David Brownell (simplification, cleanup)
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++ */
++
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/ioctl.h>
++#include <linux/fs.h>
++#include <linux/device.h>
++#include <linux/list.h>
++#include <linux/errno.h>
++#include <linux/mutex.h>
++#include <linux/slab.h>
++
++#include <linux/spi/spi.h>
++#include <linux/spi/spidev.h>
++
++#include <asm/uaccess.h>
++
++
++/*
++ * This supports acccess to SPI devices using normal userspace I/O calls.
++ * Note that while traditional UNIX/POSIX I/O semantics are half duplex,
++ * and often mask message boundaries, full SPI support requires full duplex
++ * transfers.  There are several kinds of of internal message boundaries to
++ * handle chipselect management and other protocol options.
++ *
++ * SPI has a character major number assigned.  We allocate minor numbers
++ * dynamically using a bitmask.  You must use hotplug tools, such as udev
++ * (or mdev with busybox) to create and destroy the /dev/spidevB.C device
++ * nodes, since there is no fixed association of minor numbers with any
++ * particular SPI bus or device.
++ */
++#define SPIDEV_MAJOR			153	/* assigned */
++#define N_SPI_MINORS			32	/* ... up to 256 */
++
++static unsigned long	minors[N_SPI_MINORS / BITS_PER_LONG];
++
++
++/* Bit masks for spi_device.mode management */
++#define SPI_MODE_MASK			(SPI_CPHA | SPI_CPOL)
++
++
++struct spidev_data {
++	struct device		dev;
++	struct spi_device	*spi;
++	struct list_head	device_entry;
++
++	struct mutex		buf_lock;
++	unsigned		users;
++	u8			*buffer;
++};
++
++static LIST_HEAD(device_list);
++static DEFINE_MUTEX(device_list_lock);
++
++static unsigned bufsiz = 4096;
++module_param(bufsiz, uint, S_IRUGO);
++MODULE_PARM_DESC(bufsiz, "data bytes in biggest supported SPI message");
++
++/*-------------------------------------------------------------------------*/
++
++/* Read-only message with current device setup */
++static ssize_t
++spidev_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
++{
++	struct spidev_data	*spidev;
++	struct spi_device	*spi;
++	ssize_t			status = 0;
++
++	/* chipselect only toggles at start or end of operation */
++	if (count > bufsiz)
++		return -EMSGSIZE;
++
++	spidev = filp->private_data;
++	spi = spidev->spi;
++
++	mutex_lock(&spidev->buf_lock);
++	status = spi_read(spi, spidev->buffer, count);
++	if (status == 0) {
++		unsigned long	missing;
++
++		missing = copy_to_user(buf, spidev->buffer, count);
++		if (count && missing == count)
++			status = -EFAULT;
++		else
++			status = count - missing;
++	}
++	mutex_unlock(&spidev->buf_lock);
++
++	return status;
++}
++
++/* Write-only message with current device setup */
++static ssize_t
++spidev_write(struct file *filp, const char __user *buf,
++		size_t count, loff_t *f_pos)
++{
++	struct spidev_data	*spidev;
++	struct spi_device	*spi;
++	ssize_t			status = 0;
++	unsigned long		missing;
++
++	/* chipselect only toggles at start or end of operation */
++	if (count > bufsiz)
++		return -EMSGSIZE;
++
++	spidev = filp->private_data;
++	spi = spidev->spi;
++
++	mutex_lock(&spidev->buf_lock);
++	missing = copy_from_user(spidev->buffer, buf, count);
++	if (missing == 0) {
++		status = spi_write(spi, spidev->buffer, count);
++		if (status == 0)
++			status = count;
++	} else
++		status = -EFAULT;
++	mutex_unlock(&spidev->buf_lock);
++
++	return status;
++}
++
++static int spidev_message(struct spidev_data *spidev,
++		struct spi_ioc_transfer *u_xfers, unsigned n_xfers)
++{
++	struct spi_message	msg;
++	struct spi_transfer	*k_xfers;
++	struct spi_transfer	*k_tmp;
++	struct spi_ioc_transfer *u_tmp;
++	struct spi_device	*spi = spidev->spi;
++	unsigned		n, total;
++	u8			*buf;
++	int			status = -EFAULT;
++
++	spi_message_init(&msg);
++	k_xfers = kcalloc(n_xfers, sizeof(*k_tmp), GFP_KERNEL);
++	if (k_xfers == NULL)
++		return -ENOMEM;
++
++	/* Construct spi_message, copying any tx data to bounce buffer.
++	 * We walk the array of user-provided transfers, using each one
++	 * to initialize a kernel version of the same transfer.
++	 */
++	mutex_lock(&spidev->buf_lock);
++	buf = spidev->buffer;
++	total = 0;
++	for (n = n_xfers, k_tmp = k_xfers, u_tmp = u_xfers;
++			n;
++			n--, k_tmp++, u_tmp++) {
++		k_tmp->len = u_tmp->len;
++
++		if (u_tmp->rx_buf) {
++			k_tmp->rx_buf = buf;
++			if (!access_ok(VERIFY_WRITE, u_tmp->rx_buf, u_tmp->len))
++				goto done;
++		}
++		if (u_tmp->tx_buf) {
++			k_tmp->tx_buf = buf;
++			if (copy_from_user(buf, (const u8 __user *)u_tmp->tx_buf,
++					u_tmp->len))
++				goto done;
++		}
++
++		total += k_tmp->len;
++		if (total > bufsiz) {
++			status = -EMSGSIZE;
++			goto done;
++		}
++		buf += k_tmp->len;
++
++		k_tmp->cs_change = !!u_tmp->cs_change;
++		k_tmp->bits_per_word = u_tmp->bits_per_word;
++		k_tmp->delay_usecs = u_tmp->delay_usecs;
++		k_tmp->speed_hz = u_tmp->speed_hz;
++#ifdef VERBOSE
++		dev_dbg(&spi->dev,
++			"  xfer len %zd %s%s%s%dbits %u usec %uHz\n",
++			u_tmp->len,
++			u_tmp->rx_buf ? "rx " : "",
++			u_tmp->tx_buf ? "tx " : "",
++			u_tmp->cs_change ? "cs " : "",
++			u_tmp->bits_per_word ? : spi->bits_per_word,
++			u_tmp->delay_usecs,
++			u_tmp->speed_hz ? : spi->max_speed_hz);
++#endif
++		spi_message_add_tail(k_tmp, &msg);
++	}
++
++	status = spi_sync(spi, &msg);
++	if (status < 0)
++		goto done;
++
++	/* copy any rx data out of bounce buffer */
++	buf = spidev->buffer;
++	for (n = n_xfers, u_tmp = u_xfers; n; n--, u_tmp++) {
++		if (u_tmp->rx_buf) {
++			if (__copy_to_user((u8 __user *)u_tmp->rx_buf, buf,
++					u_tmp->len)) {
++				status = -EFAULT;
++				goto done;
++			}
++		}
++		buf += u_tmp->len;
++	}
++	status = total;
++
++done:
++	mutex_unlock(&spidev->buf_lock);
++	kfree(k_xfers);
++	return status;
++}
++
++static int
++spidev_ioctl(struct inode *inode, struct file *filp,
++		unsigned int cmd, unsigned long arg)
++{
++	int			err = 0;
++	int			retval = 0;
++	struct spidev_data	*spidev;
++	struct spi_device	*spi;
++	u32			tmp;
++	unsigned		n_ioc;
++	struct spi_ioc_transfer	*ioc;
++
++	/* Check type and command number */
++	if (_IOC_TYPE(cmd) != SPI_IOC_MAGIC)
++		return -ENOTTY;
++
++	/* Check access direction once here; don't repeat below.
++	 * IOC_DIR is from the user perspective, while access_ok is
++	 * from the kernel perspective; so they look reversed.
++	 */
++	if (_IOC_DIR(cmd) & _IOC_READ)
++		err = !access_ok(VERIFY_WRITE,
++				(void __user *)arg, _IOC_SIZE(cmd));
++	if (err == 0 && _IOC_DIR(cmd) & _IOC_WRITE)
++		err = !access_ok(VERIFY_READ,
++				(void __user *)arg, _IOC_SIZE(cmd));
++	if (err)
++		return -EFAULT;
++
++	spidev = filp->private_data;
++	spi = spidev->spi;
++
++	switch (cmd) {
++	/* read requests */
++	case SPI_IOC_RD_MODE:
++		retval = __put_user(spi->mode & SPI_MODE_MASK,
++					(__u8 __user *)arg);
++		break;
++	case SPI_IOC_RD_LSB_FIRST:
++		retval = __put_user((spi->mode & SPI_LSB_FIRST) ?  1 : 0,
++					(__u8 __user *)arg);
++		break;
++	case SPI_IOC_RD_BITS_PER_WORD:
++		retval = __put_user(spi->bits_per_word, (__u8 __user *)arg);
++		break;
++	case SPI_IOC_RD_MAX_SPEED_HZ:
++		retval = __put_user(spi->max_speed_hz, (__u32 __user *)arg);
++		break;
++
++	/* write requests */
++	case SPI_IOC_WR_MODE:
++		retval = __get_user(tmp, (u8 __user *)arg);
++		if (retval == 0) {
++			u8	save = spi->mode;
++
++			if (tmp & ~SPI_MODE_MASK) {
++				retval = -EINVAL;
++				break;
++			}
++
++			tmp |= spi->mode & ~SPI_MODE_MASK;
++			spi->mode = (u8)tmp;
++			retval = spi_setup(spi);
++			if (retval < 0)
++				spi->mode = save;
++			else
++				dev_dbg(&spi->dev, "spi mode %02x\n", tmp);
++		}
++		break;
++	case SPI_IOC_WR_LSB_FIRST:
++		retval = __get_user(tmp, (__u8 __user *)arg);
++		if (retval == 0) {
++			u8	save = spi->mode;
++
++			if (tmp)
++				spi->mode |= SPI_LSB_FIRST;
++			else
++				spi->mode &= ~SPI_LSB_FIRST;
++			retval = spi_setup(spi);
++			if (retval < 0)
++				spi->mode = save;
++			else
++				dev_dbg(&spi->dev, "%csb first\n",
++						tmp ? 'l' : 'm');
++		}
++		break;
++	case SPI_IOC_WR_BITS_PER_WORD:
++		retval = __get_user(tmp, (__u8 __user *)arg);
++		if (retval == 0) {
++			u8	save = spi->bits_per_word;
++
++			spi->bits_per_word = tmp;
++			retval = spi_setup(spi);
++			if (retval < 0)
++				spi->bits_per_word = save;
++			else
++				dev_dbg(&spi->dev, "%d bits per word\n", tmp);
++		}
++		break;
++	case SPI_IOC_WR_MAX_SPEED_HZ:
++		retval = __get_user(tmp, (__u32 __user *)arg);
++		if (retval == 0) {
++			u32	save = spi->max_speed_hz;
++
++			spi->max_speed_hz = tmp;
++			retval = spi_setup(spi);
++			if (retval < 0)
++				spi->max_speed_hz = save;
++			else
++				dev_dbg(&spi->dev, "%d Hz (max)\n", tmp);
++		}
++		break;
++
++	default:
++		/* segmented and/or full-duplex I/O request */
++		if (_IOC_NR(cmd) != _IOC_NR(SPI_IOC_MESSAGE(0))
++				|| _IOC_DIR(cmd) != _IOC_WRITE)
++			return -ENOTTY;
++
++		tmp = _IOC_SIZE(cmd);
++		if ((tmp % sizeof(struct spi_ioc_transfer)) != 0) {
++			retval = -EINVAL;
++			break;
++		}
++		n_ioc = tmp / sizeof(struct spi_ioc_transfer);
++		if (n_ioc == 0)
++			break;
++
++		/* copy into scratch area */
++		ioc = kmalloc(tmp, GFP_KERNEL);
++		if (!ioc) {
++			retval = -ENOMEM;
++			break;
++		}
++		if (__copy_from_user(ioc, (void __user *)arg, tmp)) {
++			retval = -EFAULT;
++			break;
++		}
++
++		/* translate to spi_message, execute */
++		retval = spidev_message(spidev, ioc, n_ioc);
++		kfree(ioc);
++		break;
++	}
++	return retval;
++}
++
++static int spidev_open(struct inode *inode, struct file *filp)
++{
++	struct spidev_data	*spidev;
++	int			status = -ENXIO;
++
++	mutex_lock(&device_list_lock);
++
++	list_for_each_entry(spidev, &device_list, device_entry) {
++		if (spidev->dev.devt == inode->i_rdev) {
++			status = 0;
++			break;
++		}
++	}
++	if (status == 0) {
++		if (!spidev->buffer) {
++			spidev->buffer = kmalloc(bufsiz, GFP_KERNEL);
++			if (!spidev->buffer) {
++				dev_dbg(&spidev->spi->dev, "open/ENOMEM\n");
++				status = -ENOMEM;
++			}
++		}
++		if (status == 0) {
++			spidev->users++;
++			filp->private_data = spidev;
++			nonseekable_open(inode, filp);
++		}
++	} else
++		pr_debug("spidev: nothing for minor %d\n", iminor(inode));
++
++	mutex_unlock(&device_list_lock);
++	return status;
++}
++
++static int spidev_release(struct inode *inode, struct file *filp)
++{
++	struct spidev_data	*spidev;
++	int			status = 0;
++
++	mutex_lock(&device_list_lock);
++	spidev = filp->private_data;
++	filp->private_data = NULL;
++	spidev->users--;
++	if (!spidev->users) {
++		kfree(spidev->buffer);
++		spidev->buffer = NULL;
++	}
++	mutex_unlock(&device_list_lock);
++
++	return status;
++}
++
++static struct file_operations spidev_fops = {
++	.owner =	THIS_MODULE,
++	/* REVISIT switch to aio primitives, so that userspace
++	 * gets more complete API coverage.  It'll simplify things
++	 * too, except for the locking.
++	 */
++	.write =	spidev_write,
++	.read =		spidev_read,
++	.ioctl =	spidev_ioctl,
++	.open =		spidev_open,
++	.release =	spidev_release,
++};
++
++/*-------------------------------------------------------------------------*/
++
++/* The main reason to have this class is to make mdev/udev create the
++ * /dev/spidevB.C character device nodes exposing our userspace API.
++ * It also simplifies memory management.
++ */
++
++static struct class spidev_class = {
++	.name		= "spidev",
++	.owner		= THIS_MODULE,
++};
++
++/*-------------------------------------------------------------------------*/
++
++static int spidev_probe(struct spi_device *spi)
++{
++	struct spidev_data	*spidev;
++	int			status;
++	unsigned long		minor;
++
++	/* Allocate driver data */
++	spidev = kzalloc(sizeof(*spidev), GFP_KERNEL);
++	if (!spidev)
++		return -ENOMEM;
++
++	/* Initialize the driver data */
++	spidev->spi = spi;
++	mutex_init(&spidev->buf_lock);
++
++	INIT_LIST_HEAD(&spidev->device_entry);
++
++	/* If we can allocate a minor number, hook up this device.
++	 * Reusing minors is fine so long as udev or mdev is working.
++	 */
++	mutex_lock(&device_list_lock);
++	minor = find_first_zero_bit(minors, ARRAY_SIZE(minors));
++	if (minor < N_SPI_MINORS) {
++		spidev->dev.parent = &spi->dev;
++		spidev->dev.class = &spidev_class;
++		spidev->dev.devt = MKDEV(SPIDEV_MAJOR, minor);
++		snprintf(spidev->dev.bus_id, sizeof spidev->dev.bus_id,
++				"spidev%d.%d",
++				spi->master->bus_num, spi->chip_select);
++		status = device_register(&spidev->dev);
++	} else {
++		dev_dbg(&spi->dev, "no minor number available!\n");
++		status = -ENODEV;
++	}
++	if (status == 0) {
++		set_bit(minor, minors);
++		dev_set_drvdata(&spi->dev, spidev);
++		list_add(&spidev->device_entry, &device_list);
++	}
++	mutex_unlock(&device_list_lock);
++
++	if (status != 0)
++		kfree(spidev);
++
++	return status;
++}
++
++static int spidev_remove(struct spi_device *spi)
++{
++	struct spidev_data	*spidev = dev_get_drvdata(&spi->dev);
++
++	mutex_lock(&device_list_lock);
++
++	list_del(&spidev->device_entry);
++	dev_set_drvdata(&spi->dev, NULL);
++	clear_bit(MINOR(spidev->dev.devt), minors);
++	device_unregister(&spidev->dev);
++
++	mutex_unlock(&device_list_lock);
++
++	return 0;
++}
++
++static struct spi_driver spidev_spi = {
++	.driver = {
++		.name =		"spidev",
++		.owner =	THIS_MODULE,
++	},
++	.probe =	spidev_probe,
++	.remove =	__devexit_p(spidev_remove),
++
++	/* NOTE:  suspend/resume methods are not necessary here.
++	 * We don't do anything except pass the requests to/from
++	 * the underlying controller.  The refrigerator handles
++	 * most issues; the controller driver handles the rest.
++	 */
++};
++
++/*-------------------------------------------------------------------------*/
++
++static int __init spidev_init(void)
++{
++	int status;
++
++	/* Claim our 256 reserved device numbers.  Then register a class
++	 * that will key udev/mdev to add/remove /dev nodes.  Last, register
++	 * the driver which manages those device numbers.
++	 */
++	BUILD_BUG_ON(N_SPI_MINORS > 256);
++	status = register_chrdev(SPIDEV_MAJOR, "spi", &spidev_fops);
++	if (status < 0)
++		return status;
++
++	status = class_register(&spidev_class);
++	if (status < 0) {
++		unregister_chrdev(SPIDEV_MAJOR, spidev_spi.driver.name);
++		return status;
++	}
++
++	status = spi_register_driver(&spidev_spi);
++	if (status < 0) {
++		class_unregister(&spidev_class);
++		unregister_chrdev(SPIDEV_MAJOR, spidev_spi.driver.name);
++	}
++	return status;
++}
++module_init(spidev_init);
++
++static void __exit spidev_exit(void)
++{
++	spi_unregister_driver(&spidev_spi);
++	class_unregister(&spidev_class);
++	unregister_chrdev(SPIDEV_MAJOR, spidev_spi.driver.name);
++}
++module_exit(spidev_exit);
++
++MODULE_AUTHOR("Andrea Paterniani, <a.paterniani@swapp-eng.it>");
++MODULE_DESCRIPTION("User mode SPI device interface");
++MODULE_LICENSE("GPL");
+Index: linux-2.6.18/include/linux/Kbuild
+===================================================================
+--- linux-2.6.18.orig/include/linux/Kbuild
++++ linux-2.6.18/include/linux/Kbuild
+@@ -4,6 +4,7 @@ header-y += hdlc/
+ header-y += isdn/
+ header-y += nfsd/
+ header-y += raid/
++header-y += spi/
+ header-y += sunrpc/
+ header-y += tc_act/
+ header-y += netfilter/
+Index: linux-2.6.18/include/linux/spi/Kbuild
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/linux/spi/Kbuild
+@@ -0,0 +1 @@
++header-y += spidev.h
+Index: linux-2.6.18/include/linux/spi/spidev.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/linux/spi/spidev.h
+@@ -0,0 +1,124 @@
++/*
++ * include/linux/spi/spidev.h
++ *
++ * Copyright (C) 2006 SWAPP
++ *	Andrea Paterniani <a.paterniani@swapp-eng.it>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++  */
++
++#ifndef SPIDEV_H
++#define SPIDEV_H
++
++
++/* User space versions of kernel symbols for SPI clocking modes,
++ * matching <linux/spi/spi.h>
++ */
++
++#define SPI_CPHA		0x01
++#define SPI_CPOL		0x02
++
++#define SPI_MODE_0		(0|0)
++#define SPI_MODE_1		(0|SPI_CPHA)
++#define SPI_MODE_2		(SPI_CPOL|0)
++#define SPI_MODE_3		(SPI_CPOL|SPI_CPHA)
++
++
++/*---------------------------------------------------------------------------*/
++
++/* IOCTL commands */
++
++#define SPI_IOC_MAGIC			'k'
++
++/**
++ * struct spi_ioc_transfer - describes a single SPI transfer
++ * @tx_buf: Holds pointer to userspace buffer with transmit data, or null.
++ *	If no data is provided, zeroes are shifted out.
++ * @rx_buf: Holds pointer to userspace buffer for receive data, or null.
++ * @len: Length of tx and rx buffers, in bytes.
++ * @speed_hz: Temporary override of the device's bitrate.
++ * @bits_per_word: Temporary override of the device's wordsize.
++ * @delay_usecs: If nonzero, how long to delay after the last bit transfer
++ *	before optionally deselecting the device before the next transfer.
++ * @cs_change: True to deselect device before starting the next transfer.
++ *
++ * This structure is mapped directly to the kernel spi_transfer structure;
++ * the fields have the same meanings, except of course that the pointers
++ * are in a different address space (and may be of different sizes in some
++ * cases, such as 32-bit i386 userspace over a 64-bit x86_64 kernel).
++ * Zero-initialize the structure, including currently unused fields, to
++ * accomodate potential future updates.
++ *
++ * SPI_IOC_MESSAGE gives userspace the equivalent of kernel spi_sync().
++ * Pass it an array of related transfers, they'll execute together.
++ * Each transfer may be half duplex (either direction) or full duplex.
++ *
++ *	struct spi_ioc_transfer mesg[4];
++ *	...
++ *	status = ioctl(fd, SPI_IOC_MESSAGE(4), mesg);
++ *
++ * So for example one transfer might send a nine bit command (right aligned
++ * in a 16-bit word), the next could read a block of 8-bit data before
++ * terminating that command by temporarily deselecting the chip; the next
++ * could send a different nine bit command (re-selecting the chip), and the
++ * last transfer might write some register values.
++ */
++struct spi_ioc_transfer {
++	__u64		tx_buf;
++	__u64		rx_buf;
++
++	__u32		len;
++	__u32		speed_hz;
++
++	__u16		delay_usecs;
++	__u8		bits_per_word;
++	__u8		cs_change;
++	__u32		pad;
++
++	/* If the contents of 'struct spi_ioc_transfer' ever change
++	 * incompatibly, then the ioctl number (currently 0) must change;
++	 * ioctls with constant size fields get a bit more in the way of
++	 * error checking than ones (like this) where that field varies.
++	 *
++	 * NOTE: struct layout is the same in 64bit and 32bit userspace.
++	 */
++};
++
++/* not all platforms use <asm-generic/ioctl.h> or _IOC_TYPECHECK() ... */
++#define SPI_MSGSIZE(N) \
++	((((N)*(sizeof (struct spi_ioc_transfer))) < (1 << _IOC_SIZEBITS)) \
++		? ((N)*(sizeof (struct spi_ioc_transfer))) : 0)
++#define SPI_IOC_MESSAGE(N) _IOW(SPI_IOC_MAGIC, 0, char[SPI_MSGSIZE(N)])
++
++
++/* Read / Write of SPI mode (SPI_MODE_0..SPI_MODE_3) */
++#define SPI_IOC_RD_MODE			_IOR(SPI_IOC_MAGIC, 1, __u8)
++#define SPI_IOC_WR_MODE			_IOW(SPI_IOC_MAGIC, 1, __u8)
++
++/* Read / Write SPI bit justification */
++#define SPI_IOC_RD_LSB_FIRST		_IOR(SPI_IOC_MAGIC, 2, __u8)
++#define SPI_IOC_WR_LSB_FIRST		_IOW(SPI_IOC_MAGIC, 2, __u8)
++
++/* Read / Write SPI device word length (1..N) */
++#define SPI_IOC_RD_BITS_PER_WORD	_IOR(SPI_IOC_MAGIC, 3, __u8)
++#define SPI_IOC_WR_BITS_PER_WORD	_IOW(SPI_IOC_MAGIC, 3, __u8)
++
++/* Read / Write SPI device default max speed hz */
++#define SPI_IOC_RD_MAX_SPEED_HZ		_IOR(SPI_IOC_MAGIC, 4, __u32)
++#define SPI_IOC_WR_MAX_SPEED_HZ		_IOW(SPI_IOC_MAGIC, 4, __u32)
++
++
++
++#endif /* SPIDEV_H */
+Index: linux-2.6.18/mvl_patches/pro50-0593.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0593.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(593);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

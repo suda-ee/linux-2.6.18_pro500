@@ -1,0 +1,1528 @@
+#! /usr/bin/env bash
+# Patch: -ALSA_SH7760_ASoC_support
+# Date: Mon Jul 21 10:29:30 2008
+# MR: 26835
+# Disposition: Backport from 2.6.23-rc1
+# Adjustments:
+# 
+# From aef3b06ac69783d6a6d1e4357c62bab46dd16141 Mon Sep 17 00:00:00 2001
+# From: Manuel Lauss <mano@roarinelk.homelinux.net>
+# Date: Mon, 14 May 2007 18:40:07 +0200
+# Subject: [PATCH] [ALSA] SH7760 ASoC support
+# 
+# ALSA ASoC support for SH7760
+# This patch adds ALSA ASoC drivers for the Audio interfaces
+# of the SH7760 SoC:
+# Add driver for the SH7760 DMA engine (dmabrg)
+# Add AC97 driver for HAC unit(s) found on SH7760/SH7780
+# Add I2S driver for SSI unit(s) found on SH7760/SH7780
+# Add a generic SH7760-AC97 machine driver.
+# Hook it all up with the build system.
+# 
+# Signed-off-by: Manuel Lauss <mano@roarinelk.homelinux.net>
+# Signed-off-by: Takashi Iwai <tiwai@suse.de>
+# Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+
+PATCHNUM=1369
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26835
+Disposition: Backport from 2.6.23-rc1
+Adjustments:
+
+From aef3b06ac69783d6a6d1e4357c62bab46dd16141 Mon Sep 17 00:00:00 2001
+From: Manuel Lauss <mano@roarinelk.homelinux.net>
+Date: Mon, 14 May 2007 18:40:07 +0200
+Subject: [PATCH] [ALSA] SH7760 ASoC support
+
+ALSA ASoC support for SH7760
+This patch adds ALSA ASoC drivers for the Audio interfaces
+of the SH7760 SoC:
+Add driver for the SH7760 DMA engine (dmabrg)
+Add AC97 driver for HAC unit(s) found on SH7760/SH7780
+Add I2S driver for SSI unit(s) found on SH7760/SH7780
+Add a generic SH7760-AC97 machine driver.
+Hook it all up with the build system.
+
+Signed-off-by: Manuel Lauss <mano@roarinelk.homelinux.net>
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+Index: linux-2.6.18/sound/soc/Kconfig
+===================================================================
+--- linux-2.6.18.orig/sound/soc/Kconfig
++++ linux-2.6.18/sound/soc/Kconfig
+@@ -27,6 +27,7 @@ config SND_SOC
+ source "sound/soc/at91/Kconfig"
+ source "sound/soc/pxa/Kconfig"
+ source "sound/soc/s3c24xx/Kconfig"
++source "sound/soc/sh/Kconfig"
+ 
+ # Supported codecs
+ source "sound/soc/codecs/Kconfig"
+Index: linux-2.6.18/sound/soc/Makefile
+===================================================================
+--- linux-2.6.18.orig/sound/soc/Makefile
++++ linux-2.6.18/sound/soc/Makefile
+@@ -1,4 +1,4 @@
+ snd-soc-core-objs := soc-core.o soc-dapm.o
+ 
+ obj-$(CONFIG_SND_SOC)	+= snd-soc-core.o
+-obj-$(CONFIG_SND_SOC)	+= codecs/ at91/ pxa/ s3c24xx/
++obj-$(CONFIG_SND_SOC)	+= codecs/ at91/ pxa/ s3c24xx/ sh/
+Index: linux-2.6.18/sound/soc/sh/Kconfig
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/sh/Kconfig
+@@ -0,0 +1,39 @@
++menu "SoC Audio support for SuperH"
++
++config SND_SOC_PCM_SH7760
++	tristate "SoC Audio support for Renesas SH7760"
++	depends on CPU_SUBTYPE_SH7760 && SND_SOC
++	select SH_DMABRG
++	help
++	  Enable this option for SH7760 AC97/I2S audio support.
++
++
++##
++## Audio unit modules
++##
++
++config SND_SOC_SH4_HAC
++	select AC97_BUS
++	select SND_SOC_AC97_BUS
++	select SND_AC97_CODEC
++	tristate
++
++config SND_SOC_SH4_SSI
++	tristate
++
++
++
++##
++## Boards
++##
++
++config SND_SH7760_AC97
++	tristate "SH7760 AC97 sound support"
++	depends on CPU_SUBTYPE_SH7760 && SND_SOC_PCM_SH7760
++	select SND_SOC_SH4_HAC
++	select SND_SOC_AC97_CODEC
++	help
++	  This option enables generic sound support for the first
++	  AC97 unit of the SH7760.
++
++endmenu
+Index: linux-2.6.18/sound/soc/sh/Makefile
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/sh/Makefile
+@@ -0,0 +1,14 @@
++## DMA engines
++snd-soc-dma-sh7760-objs	:= dma-sh7760.o
++obj-$(CONFIG_SND_SOC_PCM_SH7760)	+= snd-soc-dma-sh7760.o
++
++## audio units found on some SH-4
++snd-soc-hac-objs	:= hac.o
++snd-soc-ssi-objs	:= ssi.o
++obj-$(CONFIG_SND_SOC_SH4_HAC)	+= snd-soc-hac.o
++obj-$(CONFIG_SND_SOC_SH4_SSI)	+= snd-soc-ssi.o
++
++## boards
++snd-soc-sh7760-ac97-objs	:= sh7760-ac97.o
++
++obj-$(CONFIG_SND_SH7760_AC97)	+= snd-soc-sh7760-ac97.o
+Index: linux-2.6.18/sound/soc/sh/dma-sh7760.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/sh/dma-sh7760.c
+@@ -0,0 +1,354 @@
++/*
++ * SH7760 ("camelot") DMABRG audio DMA unit support
++ *
++ * Copyright (C) 2007 Manuel Lauss <mano@roarinelk.homelinux.net>
++ *  licensed under the terms outlined in the file COPYING at the root
++ *  of the linux kernel sources.
++ *
++ * The SH7760 DMABRG provides 4 dma channels (2x rec, 2x play), which
++ * trigger an interrupt when one half of the programmed transfer size
++ * has been xmitted.
++ *
++ * FIXME: little-endian only for now
++ */
++
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/platform_device.h>
++#include <linux/dma-mapping.h>
++#include <sound/driver.h>
++#include <sound/core.h>
++#include <sound/pcm.h>
++#include <sound/pcm_params.h>
++#include <sound/soc.h>
++#include <asm/dmabrg.h>
++
++
++/* registers and bits */
++#define BRGATXSAR	0x00
++#define BRGARXDAR	0x04
++#define BRGATXTCR	0x08
++#define BRGARXTCR	0x0C
++#define BRGACR		0x10
++#define BRGATXTCNT	0x14
++#define BRGARXTCNT	0x18
++
++#define ACR_RAR		(1 << 18)
++#define ACR_RDS		(1 << 17)
++#define ACR_RDE		(1 << 16)
++#define ACR_TAR		(1 << 2)
++#define ACR_TDS		(1 << 1)
++#define ACR_TDE		(1 << 0)
++
++/* receiver/transmitter data alignment */
++#define ACR_RAM_NONE	(0 << 24)
++#define ACR_RAM_4BYTE	(1 << 24)
++#define ACR_RAM_2WORD	(2 << 24)
++#define ACR_TAM_NONE	(0 << 8)
++#define ACR_TAM_4BYTE	(1 << 8)
++#define ACR_TAM_2WORD	(2 << 8)
++
++
++struct camelot_pcm {
++	unsigned long mmio;  /* DMABRG audio channel control reg MMIO */
++	unsigned int txid;    /* ID of first DMABRG IRQ for this unit */
++
++	struct snd_pcm_substream *tx_ss;
++	unsigned long tx_period_size;
++	unsigned int  tx_period;
++
++	struct snd_pcm_substream *rx_ss;
++	unsigned long rx_period_size;
++	unsigned int  rx_period;
++
++} cam_pcm_data[2] = {
++	{
++		.mmio	=	0xFE3C0040,
++		.txid	=	DMABRGIRQ_A0TXF,
++	},
++	{
++		.mmio	=	0xFE3C0060,
++		.txid	=	DMABRGIRQ_A1TXF,
++	},
++};
++
++#define BRGREG(x)	(*(unsigned long *)(cam->mmio + (x)))
++
++/*
++ * set a minimum of 16kb per period, to avoid interrupt-"storm" and
++ * resulting skipping. In general, the bigger the minimum size, the
++ * better for overall system performance. (The SH7760 is a puny CPU
++ * with a slow SDRAM interface and poor internal bus bandwidth,
++ * *especially* when the LCDC is active).  The minimum for the DMAC
++ * is 8 bytes; 16kbytes are enough to get skip-free playback of a
++ * 44kHz/16bit/stereo MP3 on a lightly loaded system, and maintain
++ * reasonable responsiveness in MPlayer.
++ */
++#define DMABRG_PERIOD_MIN		16 * 1024
++#define DMABRG_PERIOD_MAX		0x03fffffc
++#define DMABRG_PREALLOC_BUFFER		32 * 1024
++#define DMABRG_PREALLOC_BUFFER_MAX	32 * 1024
++
++/* support everything the SSI supports */
++#define DMABRG_RATES	\
++	SNDRV_PCM_RATE_8000_192000
++
++#define DMABRG_FMTS	\
++	(SNDRV_PCM_FMTBIT_S8      | SNDRV_PCM_FMTBIT_U8      |	\
++	 SNDRV_PCM_FMTBIT_S16_LE  | SNDRV_PCM_FMTBIT_U16_LE  |	\
++	 SNDRV_PCM_FMTBIT_S20_3LE | SNDRV_PCM_FMTBIT_U20_3LE |	\
++	 SNDRV_PCM_FMTBIT_S24_3LE | SNDRV_PCM_FMTBIT_U24_3LE |	\
++	 SNDRV_PCM_FMTBIT_S32_LE  | SNDRV_PCM_FMTBIT_U32_LE)
++
++static struct snd_pcm_hardware camelot_pcm_hardware = {
++	.info = (SNDRV_PCM_INFO_MMAP |
++		SNDRV_PCM_INFO_INTERLEAVED |
++		SNDRV_PCM_INFO_BLOCK_TRANSFER |
++		SNDRV_PCM_INFO_MMAP_VALID),
++	.formats =	DMABRG_FMTS,
++	.rates =	DMABRG_RATES,
++	.rate_min =		8000,
++	.rate_max =		192000,
++	.channels_min =		2,
++	.channels_max =		8,		/* max of the SSI */
++	.buffer_bytes_max =	DMABRG_PERIOD_MAX,
++	.period_bytes_min =	DMABRG_PERIOD_MIN,
++	.period_bytes_max =	DMABRG_PERIOD_MAX / 2,
++	.periods_min =		2,
++	.periods_max =		2,
++	.fifo_size =		128,
++};
++
++static void camelot_txdma(void *data)
++{
++	struct camelot_pcm *cam = data;
++	cam->tx_period ^= 1;
++	snd_pcm_period_elapsed(cam->tx_ss);
++}
++
++static void camelot_rxdma(void *data)
++{
++	struct camelot_pcm *cam = data;
++	cam->rx_period ^= 1;
++	snd_pcm_period_elapsed(cam->rx_ss);
++}
++
++static int camelot_pcm_open(struct snd_pcm_substream *substream)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct camelot_pcm *cam = &cam_pcm_data[rtd->dai->cpu_dai->id];
++	int recv = substream->stream == SNDRV_PCM_STREAM_PLAYBACK ? 0:1;
++	int ret, dmairq;
++
++	snd_soc_set_runtime_hwparams(substream, &camelot_pcm_hardware);
++
++	/* DMABRG buffer half/full events */
++	dmairq = (recv) ? cam->txid + 2 : cam->txid;
++	if (recv) {
++		cam->rx_ss = substream;
++		ret = dmabrg_request_irq(dmairq, camelot_rxdma, cam);
++		if (unlikely(ret)) {
++			pr_debug("audio unit %d irqs already taken!\n",
++			     rtd->dai->cpu_dai->id);
++			return -EBUSY;
++		}
++		(void)dmabrg_request_irq(dmairq + 1,camelot_rxdma, cam);
++	} else {
++		cam->tx_ss = substream;
++		ret = dmabrg_request_irq(dmairq, camelot_txdma, cam);
++		if (unlikely(ret)) {
++			pr_debug("audio unit %d irqs already taken!\n",
++			     rtd->dai->cpu_dai->id);
++			return -EBUSY;
++		}
++		(void)dmabrg_request_irq(dmairq + 1, camelot_txdma, cam);
++	}
++	return 0;
++}
++
++static int camelot_pcm_close(struct snd_pcm_substream *substream)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct camelot_pcm *cam = &cam_pcm_data[rtd->dai->cpu_dai->id];
++	int recv = substream->stream == SNDRV_PCM_STREAM_PLAYBACK ? 0:1;
++	int dmairq;
++
++	dmairq = (recv) ? cam->txid + 2 : cam->txid;
++
++	if (recv)
++		cam->rx_ss = NULL;
++	else
++		cam->tx_ss = NULL;
++
++	dmabrg_free_irq(dmairq + 1);
++	dmabrg_free_irq(dmairq);
++
++	return 0;
++}
++
++static int camelot_hw_params(struct snd_pcm_substream *substream,
++			     struct snd_pcm_hw_params *hw_params)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct camelot_pcm *cam = &cam_pcm_data[rtd->dai->cpu_dai->id];
++	int recv = substream->stream == SNDRV_PCM_STREAM_PLAYBACK ? 0:1;
++	int ret;
++
++	ret = snd_pcm_lib_malloc_pages(substream,
++				       params_buffer_bytes(hw_params));
++	if (ret < 0)
++		return ret;
++
++	if (recv) {
++		cam->rx_period_size = params_period_bytes(hw_params);
++		cam->rx_period = 0;
++	} else {
++		cam->tx_period_size = params_period_bytes(hw_params);
++		cam->tx_period = 0;
++	}
++	return 0;
++}
++
++static int camelot_hw_free(struct snd_pcm_substream *substream)
++{
++	return snd_pcm_lib_free_pages(substream);
++}
++
++static int camelot_prepare(struct snd_pcm_substream *substream)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct camelot_pcm *cam = &cam_pcm_data[rtd->dai->cpu_dai->id];
++
++	pr_debug("PCM data: addr 0x%08ulx len %d\n",
++		 (u32)runtime->dma_addr, runtime->dma_bytes);
++ 
++	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
++		BRGREG(BRGATXSAR) = (unsigned long)runtime->dma_area;
++		BRGREG(BRGATXTCR) = runtime->dma_bytes;
++	} else {
++		BRGREG(BRGARXDAR) = (unsigned long)runtime->dma_area;
++		BRGREG(BRGARXTCR) = runtime->dma_bytes;
++	}
++
++	return 0;
++}
++
++static inline void dmabrg_play_dma_start(struct camelot_pcm *cam)
++{
++	unsigned long acr = BRGREG(BRGACR) & ~(ACR_TDS | ACR_RDS);
++	/* start DMABRG engine: XFER start, auto-addr-reload */
++	BRGREG(BRGACR) = acr | ACR_TDE | ACR_TAR | ACR_TAM_2WORD;
++}
++
++static inline void dmabrg_play_dma_stop(struct camelot_pcm *cam)
++{
++	unsigned long acr = BRGREG(BRGACR) & ~(ACR_TDS | ACR_RDS);
++	/* forcibly terminate data transmission */
++	BRGREG(BRGACR) = acr | ACR_TDS;
++}
++
++static inline void dmabrg_rec_dma_start(struct camelot_pcm *cam)
++{
++	unsigned long acr = BRGREG(BRGACR) & ~(ACR_TDS | ACR_RDS);
++	/* start DMABRG engine: recv start, auto-reload */
++	BRGREG(BRGACR) = acr | ACR_RDE | ACR_RAR | ACR_RAM_2WORD;
++}
++
++static inline void dmabrg_rec_dma_stop(struct camelot_pcm *cam)
++{
++	unsigned long acr = BRGREG(BRGACR) & ~(ACR_TDS | ACR_RDS);
++	/* forcibly terminate data receiver */
++	BRGREG(BRGACR) = acr | ACR_RDS;
++}
++
++static int camelot_trigger(struct snd_pcm_substream *substream, int cmd)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct camelot_pcm *cam = &cam_pcm_data[rtd->dai->cpu_dai->id];
++	int recv = substream->stream == SNDRV_PCM_STREAM_PLAYBACK ? 0:1;
++
++	switch (cmd) {
++	case SNDRV_PCM_TRIGGER_START:
++		if (recv)
++			dmabrg_rec_dma_start(cam);
++		else
++			dmabrg_play_dma_start(cam);
++		break;
++	case SNDRV_PCM_TRIGGER_STOP:
++		if (recv)
++			dmabrg_rec_dma_stop(cam);
++		else
++			dmabrg_play_dma_stop(cam);
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++static snd_pcm_uframes_t camelot_pos(struct snd_pcm_substream *substream)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct camelot_pcm *cam = &cam_pcm_data[rtd->dai->cpu_dai->id];
++	int recv = substream->stream == SNDRV_PCM_STREAM_PLAYBACK ? 0:1;
++	unsigned long pos;
++
++	/* cannot use the DMABRG pointer register: under load, by the
++	 * time ALSA comes around to read the register, it is already
++	 * far ahead (or worse, already done with the fragment) of the
++	 * position at the time the IRQ was triggered, which results in
++	 * fast-playback sound in my test application (ScummVM)
++	 */
++	if (recv)
++		pos = cam->rx_period ? cam->rx_period_size : 0;
++	else
++		pos = cam->tx_period ? cam->tx_period_size : 0;
++
++	return bytes_to_frames(runtime, pos);
++}
++
++static struct snd_pcm_ops camelot_pcm_ops = {
++	.open		= camelot_pcm_open,
++	.close		= camelot_pcm_close,
++	.ioctl		= snd_pcm_lib_ioctl,
++	.hw_params	= camelot_hw_params,
++	.hw_free	= camelot_hw_free,
++	.prepare	= camelot_prepare,
++	.trigger	= camelot_trigger,
++	.pointer	= camelot_pos,
++};
++
++static void camelot_pcm_free(struct snd_pcm *pcm)
++{
++	snd_pcm_lib_preallocate_free_for_all(pcm);
++}
++
++static int camelot_pcm_new(struct snd_card *card,
++			   struct snd_soc_codec_dai *dai,
++			   struct snd_pcm *pcm)
++{
++	/* dont use SNDRV_DMA_TYPE_DEV, since it will oops the SH kernel
++	 * in MMAP mode (i.e. aplay -M)
++	 */
++	snd_pcm_lib_preallocate_pages_for_all(pcm,
++		SNDRV_DMA_TYPE_CONTINUOUS,
++		snd_dma_continuous_data(GFP_KERNEL),
++		DMABRG_PREALLOC_BUFFER,	DMABRG_PREALLOC_BUFFER_MAX);
++
++	return 0;
++}
++
++struct snd_soc_platform sh7760_soc_platform = {
++	.name		= "sh7760-pcm",
++	.pcm_ops 	= &camelot_pcm_ops,
++	.pcm_new	= camelot_pcm_new,
++	.pcm_free	= camelot_pcm_free,
++};
++EXPORT_SYMBOL_GPL(sh7760_soc_platform);
++
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("SH7760 Audio DMA (DMABRG) driver");
++MODULE_AUTHOR("Manuel Lauss <mano@roarinelk.homelinux.net>");
+Index: linux-2.6.18/sound/soc/sh/hac.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/sh/hac.c
+@@ -0,0 +1,322 @@
++/*
++ * Hitachi Audio Controller (AC97) support for SH7760/SH7780
++ *
++ * Copyright (c) 2007 Manuel Lauss <mano@roarinelk.homelinux.net>
++ *  licensed under the terms outlined in the file COPYING at the root
++ *  of the linux kernel sources.
++ *
++ * dont forget to set IPSEL/OMSEL register bits (in your board code) to
++ * enable HAC output pins!
++ */
++
++/* BIG FAT FIXME: although the SH7760 has 2 independent AC97 units, only
++ * the FIRST can be used since ASoC does not pass any information to the
++ * ac97_read/write() functions regarding WHICH unit to use.  You'll have
++ * to edit the code a bit to use the other AC97 unit.		--mlau
++ */
++
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <linux/interrupt.h>
++#include <linux/wait.h>
++#include <linux/delay.h>
++#include <sound/driver.h>
++#include <sound/core.h>
++#include <sound/pcm.h>
++#include <sound/ac97_codec.h>
++#include <sound/initval.h>
++#include <sound/soc.h>
++
++/* regs and bits */
++#define HACCR		0x08
++#define HACCSAR		0x20
++#define HACCSDR		0x24
++#define HACPCML		0x28
++#define HACPCMR		0x2C
++#define HACTIER		0x50
++#define	HACTSR		0x54
++#define HACRIER		0x58
++#define HACRSR		0x5C
++#define HACACR		0x60
++
++#define CR_CR		(1 << 15)	/* "codec-ready" indicator */
++#define CR_CDRT		(1 << 11)	/* cold reset */
++#define CR_WMRT		(1 << 10)	/* warm reset */
++#define CR_B9		(1 << 9)	/* the mysterious "bit 9" */
++#define CR_ST		(1 << 5)	/* AC97 link start bit */
++
++#define CSAR_RD		(1 << 19)	/* AC97 data read bit */
++#define CSAR_WR		(0)
++
++#define TSR_CMDAMT	(1 << 31)
++#define TSR_CMDDMT	(1 << 30)
++
++#define RSR_STARY	(1 << 22)
++#define RSR_STDRY	(1 << 21)
++
++#define ACR_DMARX16	(1 << 30)
++#define ACR_DMATX16	(1 << 29)
++#define ACR_TX12ATOM	(1 << 26)
++#define ACR_DMARX20	((1 << 24) | (1 << 22))
++#define ACR_DMATX20	((1 << 23) | (1 << 21))
++
++#define CSDR_SHIFT	4
++#define CSDR_MASK	(0xffff << CSDR_SHIFT)
++#define CSAR_SHIFT	12
++#define CSAR_MASK	(0x7f << CSAR_SHIFT)
++
++#define AC97_WRITE_RETRY	1
++#define AC97_READ_RETRY		5
++
++/* manual-suggested AC97 codec access timeouts (us) */
++#define TMO_E1	500	/* 21 < E1 < 1000 */
++#define TMO_E2	13	/* 13 < E2 */
++#define TMO_E3	21	/* 21 < E3 */
++#define TMO_E4	500	/* 21 < E4 < 1000 */
++
++struct hac_priv {
++	unsigned long mmio;	/* HAC base address */
++} hac_cpu_data[] = {
++#if defined(CONFIG_CPU_SUBTYPE_SH7760)
++	{
++		.mmio	= 0xFE240000,
++	},
++	{
++		.mmio	= 0xFE250000,
++	},
++#elif defined(CONFIG_CPU_SUBTYPE_SH7780)
++	{
++		.mmio	= 0xFFE40000,
++	},
++#else
++#error "Unsupported SuperH SoC"
++#endif
++};
++
++#define HACREG(reg)	(*(unsigned long *)(hac->mmio + (reg)))
++
++/*
++ * AC97 read/write flow as outlined in the SH7760 manual (pages 903-906)
++ */
++static int hac_get_codec_data(struct hac_priv *hac, unsigned short r,
++			      unsigned short *v)
++{
++	unsigned int to1, to2, i;
++	unsigned short adr;
++
++	for (i = 0; i < AC97_READ_RETRY; ++i) {
++		*v = 0;
++		/* wait for HAC to receive something from the codec */
++		for (to1 = TMO_E4;
++		     to1 && !(HACREG(HACRSR) & RSR_STARY);
++		     --to1)
++			udelay(1);
++		for (to2 = TMO_E4; 
++		     to2 && !(HACREG(HACRSR) & RSR_STDRY);
++		     --to2)
++			udelay(1);
++
++		if (!to1 && !to2)
++			return 0;	/* codec comm is down */
++
++		adr = ((HACREG(HACCSAR) & CSAR_MASK) >> CSAR_SHIFT);
++		*v  = ((HACREG(HACCSDR) & CSDR_MASK) >> CSDR_SHIFT);
++
++		HACREG(HACRSR) &= ~(RSR_STDRY | RSR_STARY);
++
++		if (r == adr)
++			break;
++
++		/* manual says: wait at least 21 usec before retrying */
++		udelay(21);
++	}
++	HACREG(HACRSR) &= ~(RSR_STDRY | RSR_STARY);
++	return (i < AC97_READ_RETRY);
++}
++
++static unsigned short hac_read_codec_aux(struct hac_priv *hac,
++					 unsigned short reg)
++{
++	unsigned short val;
++	unsigned int i, to;
++
++	for (i = 0; i < AC97_READ_RETRY; i++) {
++		/* send_read_request */
++		local_irq_disable();
++		HACREG(HACTSR) &= ~(TSR_CMDAMT);
++		HACREG(HACCSAR) = (reg << CSAR_SHIFT) | CSAR_RD;
++		local_irq_enable();
++
++		for (to = TMO_E3;
++		     to && !(HACREG(HACTSR) & TSR_CMDAMT);
++		     --to)
++			udelay(1);
++
++		HACREG(HACTSR) &= ~TSR_CMDAMT;
++		val = 0;
++		if (hac_get_codec_data(hac, reg, &val) != 0)
++			break;
++	}
++
++	if (i == AC97_READ_RETRY)
++		return ~0;
++
++	return val;
++}
++
++static void hac_ac97_write(struct snd_ac97 *ac97, unsigned short reg,
++			   unsigned short val)
++{
++	int unit_id = 0 /* ac97->private_data */;
++	struct hac_priv *hac = &hac_cpu_data[unit_id];
++	unsigned int i, to;
++	/* write_codec_aux */
++	for (i = 0; i < AC97_WRITE_RETRY; i++) {
++		/* send_write_request */
++		local_irq_disable();
++		HACREG(HACTSR) &= ~(TSR_CMDDMT | TSR_CMDAMT);
++		HACREG(HACCSDR) = (val << CSDR_SHIFT);
++		HACREG(HACCSAR) = (reg << CSAR_SHIFT) & (~CSAR_RD);
++		local_irq_enable();
++
++		/* poll-wait for CMDAMT and CMDDMT */
++		for (to = TMO_E1;
++		     to && !(HACREG(HACTSR) & (TSR_CMDAMT|TSR_CMDDMT));
++		     --to)
++			udelay(1);
++
++		HACREG(HACTSR) &= ~(TSR_CMDAMT | TSR_CMDDMT);
++		if (to)
++			break;
++		/* timeout, try again */
++	}
++}
++
++static unsigned short hac_ac97_read(struct snd_ac97 *ac97,
++				    unsigned short reg)
++{
++	int unit_id = 0 /* ac97->private_data */;
++	struct hac_priv *hac = &hac_cpu_data[unit_id];
++	return hac_read_codec_aux(hac, reg);
++}
++
++static void hac_ac97_warmrst(struct snd_ac97 *ac97)
++{
++	int unit_id = 0 /* ac97->private_data */;
++	struct hac_priv *hac = &hac_cpu_data[unit_id];
++	unsigned int tmo;
++
++	HACREG(HACCR) = CR_WMRT | CR_ST | CR_B9;
++	msleep(10);
++	HACREG(HACCR) = CR_ST | CR_B9;
++	for (tmo = 1000; (tmo > 0) && !(HACREG(HACCR) & CR_CR); tmo--)
++		udelay(1);
++
++	if (!tmo)
++		printk(KERN_INFO "hac: reset: AC97 link down!\n");
++	/* settings this bit lets us have a conversation with codec */
++	HACREG(HACACR) |= ACR_TX12ATOM;
++}
++
++static void hac_ac97_coldrst(struct snd_ac97 *ac97)
++{
++	int unit_id = 0 /* ac97->private_data */;
++	struct hac_priv *hac;
++	hac = &hac_cpu_data[unit_id];
++
++	HACREG(HACCR) = 0;
++	HACREG(HACCR) = CR_CDRT | CR_ST | CR_B9;
++	msleep(10);
++	hac_ac97_warmrst(ac97);
++}
++
++struct snd_ac97_bus_ops soc_ac97_ops = {
++	.read	= hac_ac97_read,
++	.write	= hac_ac97_write,
++	.reset	= hac_ac97_coldrst,
++	.warm_reset = hac_ac97_warmrst,
++};
++EXPORT_SYMBOL_GPL(soc_ac97_ops);
++
++static int hac_hw_params(struct snd_pcm_substream *substream,
++			 struct snd_pcm_hw_params *params)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct hac_priv *hac = &hac_cpu_data[rtd->dai->cpu_dai->id];
++	int d = substream->stream == SNDRV_PCM_STREAM_PLAYBACK ? 0 : 1;
++
++	switch (params->msbits) {
++	case 16:
++		HACREG(HACACR) |= d ?  ACR_DMARX16 :  ACR_DMATX16;
++		HACREG(HACACR) &= d ? ~ACR_DMARX20 : ~ACR_DMATX20;
++		break;
++	case 20:
++		HACREG(HACACR) &= d ? ~ACR_DMARX16 : ~ACR_DMATX16;
++		HACREG(HACACR) |= d ?  ACR_DMARX20 :  ACR_DMATX20;
++		break;
++	default:
++		pr_debug("hac: invalid depth %d bit\n", params->msbits);
++		return -EINVAL;
++		break;
++	}
++
++	return 0;
++}
++
++#define AC97_RATES	\
++	SNDRV_PCM_RATE_8000_192000
++
++#define AC97_FMTS	\
++	SNDRV_PCM_FMTBIT_S16_LE
++
++struct snd_soc_cpu_dai sh4_hac_dai[] = {
++{
++	.name			= "HAC0",
++	.id			= 0,
++	.type			= SND_SOC_DAI_AC97,
++	.playback = {
++		.rates		= AC97_RATES,
++		.formats	= AC97_FMTS,
++		.channels_min	= 2,
++		.channels_max	= 2,
++	},
++	.capture = {
++		.rates		= AC97_RATES,
++		.formats	= AC97_FMTS,
++		.channels_min	= 2,
++		.channels_max	= 2,
++	},
++	.ops = {
++		.hw_params	= hac_hw_params,
++	},
++},
++#ifdef CONFIG_CPU_SUBTYPE_SH7760
++{
++	.name			= "HAC1",
++	.id			= 1,
++	.type			= SND_SOC_DAI_AC97,
++	.playback = {
++		.rates		= AC97_RATES,
++		.formats	= AC97_FMTS,
++		.channels_min	= 2,
++		.channels_max	= 2,
++	},
++	.capture = {
++		.rates		= AC97_RATES,
++		.formats	= AC97_FMTS,
++		.channels_min	= 2,
++		.channels_max	= 2,
++	},
++	.ops = {
++		.hw_params	= hac_hw_params,
++	},
++
++},
++#endif
++};
++EXPORT_SYMBOL_GPL(sh4_hac_dai);
++
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("SuperH onchip HAC (AC97) audio driver");
++MODULE_AUTHOR("Manuel Lauss <mano@roarinelk.homelinux.net>");
+Index: linux-2.6.18/sound/soc/sh/sh7760-ac97.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/sh/sh7760-ac97.c
+@@ -0,0 +1,92 @@
++/*
++ * Generic AC97 sound support for SH7760
++ *
++ * (c) 2007 Manuel Lauss
++ *
++ * Licensed under the GPLv2.
++ */
++
++#include <linux/module.h>
++#include <linux/moduleparam.h>
++#include <linux/platform_device.h>
++#include <sound/driver.h>
++#include <sound/core.h>
++#include <sound/pcm.h>
++#include <sound/soc.h>
++#include <sound/soc-dapm.h>
++#include <asm/io.h>
++
++#include "../codecs/ac97.h"
++
++#define IPSEL 0xFE400034
++
++/* platform specific structs can be declared here */
++extern struct snd_soc_cpu_dai sh4_hac_dai[2];
++extern struct snd_soc_platform sh7760_soc_platform;
++
++static int machine_init(struct snd_soc_codec *codec)
++{
++	snd_soc_dapm_sync_endpoints(codec);
++	return 0;
++}
++
++static struct snd_soc_dai_link sh7760_ac97_dai = {
++	.name = "AC97",
++	.stream_name = "AC97 HiFi",
++	.cpu_dai = &sh4_hac_dai[0],	/* HAC0 */
++	.codec_dai = &ac97_dai,
++	.init = machine_init,
++	.ops = NULL,
++};
++
++static struct snd_soc_machine sh7760_ac97_soc_machine  = {
++	.name = "SH7760 AC97",
++	.dai_link = &sh7760_ac97_dai,
++	.num_links = 1,
++};
++
++static struct snd_soc_device sh7760_ac97_snd_devdata = {
++	.machine = &sh7760_ac97_soc_machine,
++	.platform = &sh7760_soc_platform,
++	.codec_dev = &soc_codec_dev_ac97,
++};
++
++static struct platform_device *sh7760_ac97_snd_device;
++
++static int __init sh7760_ac97_init(void)
++{
++	int ret;
++	unsigned short ipsel;
++
++	/* enable both AC97 controllers in pinmux reg */
++	ipsel = ctrl_inw(IPSEL);
++	ctrl_outw(ipsel | (3 << 10), IPSEL);
++
++	ret = -ENOMEM;
++	sh7760_ac97_snd_device = platform_device_alloc("soc-audio", -1);
++	if (!sh7760_ac97_snd_device)
++		goto out;
++
++	platform_set_drvdata(sh7760_ac97_snd_device,
++			     &sh7760_ac97_snd_devdata);
++	sh7760_ac97_snd_devdata.dev = &sh7760_ac97_snd_device->dev;
++	ret = platform_device_add(sh7760_ac97_snd_device);
++
++	if (ret)
++		platform_device_put(sh7760_ac97_snd_device);
++
++out:
++	return ret;
++}
++
++static void __exit sh7760_ac97_exit(void)
++{
++	platform_device_unregister(sh7760_ac97_snd_device);
++}
++
++module_init(sh7760_ac97_init);
++module_exit(sh7760_ac97_exit);
++
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("Generic SH7760 AC97 sound machine");
++MODULE_AUTHOR("Manuel Lauss <mano@roarinelk.homelinux.net>");
+Index: linux-2.6.18/sound/soc/sh/ssi.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/sh/ssi.c
+@@ -0,0 +1,400 @@
++/*
++ * Serial Sound Interface (I2S) support for SH7760/SH7780
++ *
++ * Copyright (c) 2007 Manuel Lauss <mano@roarinelk.homelinux.net>
++ *
++ *  licensed under the terms outlined in the file COPYING at the root
++ *  of the linux kernel sources.
++ *
++ * dont forget to set IPSEL/OMSEL register bits (in your board code) to
++ * enable SSI output pins!
++ */
++
++/*
++ * LIMITATIONS:
++ *	The SSI unit has only one physical data line, so full duplex is
++ *	impossible.  This can be remedied  on the  SH7760 by  using the
++ *	other SSI unit for recording; however the SH7780 has only 1 SSI
++ *	unit, and its pins are shared with the AC97 unit,  among others.
++ *
++ * FEATURES:
++ *	The SSI features "compressed mode": in this mode it continuously
++ *	streams PCM data over the I2S lines and uses LRCK as a handshake
++ *	signal.  Can be used to send compressed data (AC3/DTS) to a DSP.
++ *	The number of bits sent over the wire in a frame can be adjusted
++ *	and can be independent from the actual sample bit depth. This is
++ *	useful to support TDM mode codecs like the AD1939 which have a
++ *	fixed TDM slot size, regardless of sample resolution.
++ */
++
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <sound/driver.h>
++#include <sound/core.h>
++#include <sound/pcm.h>
++#include <sound/initval.h>
++#include <sound/soc.h>
++#include <asm/io.h>
++
++#define SSICR	0x00
++#define SSISR	0x04
++
++#define CR_DMAEN	(1 << 28)
++#define CR_CHNL_SHIFT	22
++#define CR_CHNL_MASK	(3 << CR_CHNL_SHIFT)
++#define CR_DWL_SHIFT	19
++#define CR_DWL_MASK	(7 << CR_DWL_SHIFT)
++#define CR_SWL_SHIFT	16
++#define CR_SWL_MASK	(7 << CR_SWL_SHIFT)
++#define CR_SCK_MASTER	(1 << 15)	/* bitclock master bit */
++#define CR_SWS_MASTER	(1 << 14)	/* wordselect master bit */
++#define CR_SCKP		(1 << 13)	/* I2Sclock polarity */
++#define CR_SWSP		(1 << 12)	/* LRCK polarity */
++#define CR_SPDP		(1 << 11)
++#define CR_SDTA		(1 << 10)	/* i2s alignment (msb/lsb) */
++#define CR_PDTA		(1 << 9)	/* fifo data alignment */
++#define CR_DEL		(1 << 8)	/* delay data by 1 i2sclk */
++#define CR_BREN		(1 << 7)	/* clock gating in burst mode */
++#define CR_CKDIV_SHIFT	4
++#define CR_CKDIV_MASK	(7 << CR_CKDIV_SHIFT)	/* bitclock divider */
++#define CR_MUTE		(1 << 3)	/* SSI mute */
++#define CR_CPEN		(1 << 2)	/* compressed mode */
++#define CR_TRMD		(1 << 1)	/* transmit/receive select */
++#define CR_EN		(1 << 0)	/* enable SSI */
++
++#define SSIREG(reg)	(*(unsigned long *)(ssi->mmio + (reg)))
++
++struct ssi_priv {
++	unsigned long mmio;
++	unsigned long sysclk;
++	int inuse;
++} ssi_cpu_data[] = {
++#if defined(CONFIG_CPU_SUBTYPE_SH7760)
++	{
++		.mmio	= 0xFE680000,
++	},
++	{
++		.mmio	= 0xFE690000,
++	},
++#elif defined(CONFIG_CPU_SUBTYPE_SH7780)
++	{
++		.mmio	= 0xFFE70000,
++	},
++#else
++#error "Unsupported SuperH SoC"
++#endif
++};
++
++/*
++ * track usage of the SSI; it is simplex-only so prevent attempts of
++ * concurrent playback + capture. FIXME: any locking required?
++ */
++static int ssi_startup(struct snd_pcm_substream *substream)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct ssi_priv *ssi = &ssi_cpu_data[rtd->dai->cpu_dai->id];
++	if (ssi->inuse) {
++		pr_debug("ssi: already in use!\n");
++		return -EBUSY;
++	} else
++		ssi->inuse = 1;
++	return 0;
++}
++
++static void ssi_shutdown(struct snd_pcm_substream *substream)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct ssi_priv *ssi = &ssi_cpu_data[rtd->dai->cpu_dai->id];
++
++	ssi->inuse = 0;
++}
++
++static int ssi_trigger(struct snd_pcm_substream *substream, int cmd)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct ssi_priv *ssi = &ssi_cpu_data[rtd->dai->cpu_dai->id];
++
++	switch (cmd) {
++	case SNDRV_PCM_TRIGGER_START:
++		SSIREG(SSICR) |= CR_DMAEN | CR_EN;
++		break;
++	case SNDRV_PCM_TRIGGER_STOP:
++		SSIREG(SSICR) &= ~(CR_DMAEN | CR_EN);
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++static int ssi_hw_params(struct snd_pcm_substream *substream,
++			 struct snd_pcm_hw_params *params)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct ssi_priv *ssi = &ssi_cpu_data[rtd->dai->cpu_dai->id];
++	unsigned long ssicr = SSIREG(SSICR);
++	unsigned int bits, channels, swl, recv, i;
++
++	channels = params_channels(params);
++	bits = params->msbits;
++	recv = (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) ? 0 : 1;
++
++	pr_debug("ssi_hw_params() enter\nssicr was    %08lx\n", ssicr);
++	pr_debug("bits: %d channels: %d\n", bits, channels);
++
++	ssicr &= ~(CR_TRMD | CR_CHNL_MASK | CR_DWL_MASK | CR_PDTA |
++		   CR_SWL_MASK);
++
++	/* direction (send/receive) */
++	if (!recv)
++		ssicr |= CR_TRMD;	/* transmit */
++
++	/* channels */
++	if ((channels < 2) || (channels > 8) || (channels & 1)) {
++		pr_debug("ssi: invalid number of channels\n");
++		return -EINVAL;
++	}
++	ssicr |= ((channels >> 1) - 1) << CR_CHNL_SHIFT;
++
++	/* DATA WORD LENGTH (DWL): databits in audio sample */
++	i = 0;
++	switch (bits) {
++	case 32: ++i;
++	case 24: ++i;
++	case 22: ++i;
++	case 20: ++i;
++	case 18: ++i;
++	case 16: ++i;
++		 ssicr |= i << CR_DWL_SHIFT;
++	case 8:	 break;
++	default:
++		pr_debug("ssi: invalid sample width\n");
++		return -EINVAL;
++	}
++
++	/*
++	 * SYSTEM WORD LENGTH: size in bits of half a frame over the I2S
++	 * wires. This is usually bits_per_sample x channels/2;  i.e. in
++	 * Stereo mode  the SWL equals DWL.  SWL can  be bigger than the
++	 * product of (channels_per_slot x samplebits), e.g.  for codecs
++	 * like the AD1939 which  only accept 32bit wide TDM slots.  For
++	 * "standard" I2S operation we set SWL = chans / 2 * DWL here.
++	 * Waiting for ASoC to get TDM support ;-)
++	 */
++	if ((bits > 16) && (bits <= 24)) {
++		bits = 24;	/* these are padded by the SSI */
++		/*ssicr |= CR_PDTA;*/ /* cpu/data endianness ? */
++	}
++	i = 0;
++	swl = (bits * channels) / 2;
++	switch (swl) {
++	case 256: ++i;
++	case 128: ++i;
++	case 64:  ++i;
++	case 48:  ++i;
++	case 32:  ++i;
++	case 16:  ++i;
++		  ssicr |= i << CR_SWL_SHIFT;
++	case 8:   break;
++	default:
++		pr_debug("ssi: invalid system word length computed\n");
++		return -EINVAL;
++	}
++
++	SSIREG(SSICR) = ssicr;
++
++	pr_debug("ssi_hw_params() leave\nssicr is now %08lx\n", ssicr);
++	return 0;
++}
++
++static int ssi_set_sysclk(struct snd_soc_cpu_dai *cpu_dai, int clk_id,
++			  unsigned int freq, int dir)
++{
++	struct ssi_priv *ssi = &ssi_cpu_data[cpu_dai->id];
++
++	ssi->sysclk = freq;
++
++	return 0;
++}
++
++/*
++ * This divider is used to generate the SSI_SCK (I2S bitclock) from the
++ * clock at the HAC_BIT_CLK ("oversampling clock") pin.
++ */
++static int ssi_set_clkdiv(struct snd_soc_cpu_dai *dai, int did, int div)
++{
++	struct ssi_priv *ssi = &ssi_cpu_data[dai->id];
++	unsigned long ssicr;
++	int i;
++
++	i = 0;
++	ssicr = SSIREG(SSICR) & ~CR_CKDIV_MASK;
++	switch (div) {
++	case 16: ++i;
++	case 8:  ++i;
++	case 4:  ++i;
++	case 2:  ++i;
++		 SSIREG(SSICR) = ssicr | (i << CR_CKDIV_SHIFT);
++	case 1:  break;
++	default:
++		pr_debug("ssi: invalid sck divider %d\n", div);
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++static int ssi_set_fmt(struct snd_soc_cpu_dai *dai, unsigned int fmt)
++{
++	struct ssi_priv *ssi = &ssi_cpu_data[dai->id];
++	unsigned long ssicr = SSIREG(SSICR);
++
++	pr_debug("ssi_set_fmt()\nssicr was    0x%08lx\n", ssicr);
++
++	ssicr &= ~(CR_DEL | CR_PDTA | CR_BREN | CR_SWSP | CR_SCKP |
++		   CR_SWS_MASTER | CR_SCK_MASTER);
++
++	switch (fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
++	case SND_SOC_DAIFMT_I2S:
++		break;
++	case SND_SOC_DAIFMT_RIGHT_J:
++		ssicr |= CR_DEL | CR_PDTA;
++		break;
++	case SND_SOC_DAIFMT_LEFT_J:
++		ssicr |= CR_DEL;
++		break;
++	default:
++		pr_debug("ssi: unsupported format\n");
++		return -EINVAL;
++	}
++
++	switch (fmt & SND_SOC_DAIFMT_CLOCK_MASK) {
++	case SND_SOC_DAIFMT_CONT:
++		break;
++	case SND_SOC_DAIFMT_GATED:
++		ssicr |= CR_BREN;
++		break;
++	}
++
++	switch (fmt & SND_SOC_DAIFMT_INV_MASK) {
++	case SND_SOC_DAIFMT_NB_NF:
++		ssicr |= CR_SCKP;	/* sample data at low clkedge */
++		break;
++	case SND_SOC_DAIFMT_NB_IF:
++		ssicr |= CR_SCKP | CR_SWSP;
++		break;
++	case SND_SOC_DAIFMT_IB_NF:
++		break;
++	case SND_SOC_DAIFMT_IB_IF:
++		ssicr |= CR_SWSP;	/* word select starts low */
++		break;
++	default:
++		pr_debug("ssi: invalid inversion\n");
++		return -EINVAL;
++	}
++
++	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
++	case SND_SOC_DAIFMT_CBM_CFM:
++		break;
++	case SND_SOC_DAIFMT_CBS_CFM:
++		ssicr |= CR_SCK_MASTER;
++		break;
++	case SND_SOC_DAIFMT_CBM_CFS:
++		ssicr |= CR_SWS_MASTER;
++		break;
++	case SND_SOC_DAIFMT_CBS_CFS:
++		ssicr |= CR_SWS_MASTER | CR_SCK_MASTER;
++		break;
++	default:
++		pr_debug("ssi: invalid master/slave configuration\n");
++		return -EINVAL;
++	}
++
++	SSIREG(SSICR) = ssicr;
++	pr_debug("ssi_set_fmt() leave\nssicr is now 0x%08lx\n", ssicr);
++
++	return 0;
++}
++
++/* the SSI depends on an external clocksource (at HAC_BIT_CLK) even in
++ * Master mode,  so really this is board specific;  the SSI can do any
++ * rate with the right bitclk and divider settings.
++ */
++#define SSI_RATES	\
++	SNDRV_PCM_RATE_8000_192000
++
++/* the SSI can do 8-32 bit samples, with 8 possible channels */
++#define SSI_FMTS	\
++	(SNDRV_PCM_FMTBIT_S8      | SNDRV_PCM_FMTBIT_U8      |	\
++	 SNDRV_PCM_FMTBIT_S16_LE  | SNDRV_PCM_FMTBIT_U16_LE  |	\
++	 SNDRV_PCM_FMTBIT_S20_3LE | SNDRV_PCM_FMTBIT_U20_3LE |	\
++	 SNDRV_PCM_FMTBIT_S24_3LE | SNDRV_PCM_FMTBIT_U24_3LE |	\
++	 SNDRV_PCM_FMTBIT_S32_LE  | SNDRV_PCM_FMTBIT_U32_LE)
++
++struct snd_soc_cpu_dai sh4_ssi_dai[] = {
++{
++	.name			= "SSI0",
++	.id			= 0,
++	.type			= SND_SOC_DAI_I2S,
++	.playback = {
++		.rates		= SSI_RATES,
++		.formats	= SSI_FMTS,
++		.channels_min	= 2,
++		.channels_max	= 8,
++	},
++	.capture = {
++		.rates		= SSI_RATES,
++		.formats	= SSI_FMTS,
++		.channels_min	= 2,
++		.channels_max	= 8,
++	},
++	.ops = {
++		.startup	= ssi_startup,
++		.shutdown	= ssi_shutdown,
++		.trigger	= ssi_trigger,
++		.hw_params	= ssi_hw_params,
++	},
++	.dai_ops = {
++		.set_sysclk	= ssi_set_sysclk,
++		.set_clkdiv	= ssi_set_clkdiv,
++		.set_fmt	= ssi_set_fmt,
++	},
++},
++#ifdef CONFIG_CPU_SUBTYPE_SH7760
++{
++	.name			= "SSI1",
++	.id			= 1,
++	.type			= SND_SOC_DAI_I2S,
++	.playback = {
++		.rates		= SSI_RATES,
++		.formats	= SSI_FMTS,
++		.channels_min	= 2,
++		.channels_max	= 8,
++	},
++	.capture = {
++		.rates		= SSI_RATES,
++		.formats	= SSI_FMTS,
++		.channels_min	= 2,
++		.channels_max	= 8,
++	},
++	.ops = {
++		.startup	= ssi_startup,
++		.shutdown	= ssi_shutdown,
++		.trigger	= ssi_trigger,
++		.hw_params	= ssi_hw_params,
++	},
++	.dai_ops = {
++		.set_sysclk	= ssi_set_sysclk,
++		.set_clkdiv	= ssi_set_clkdiv,
++		.set_fmt	= ssi_set_fmt,
++	},
++},
++#endif
++};
++EXPORT_SYMBOL_GPL(sh4_ssi_dai);
++
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("SuperH onchip SSI (I2S) audio driver");
++MODULE_AUTHOR("Manuel Lauss <mano@roarinelk.homelinux.net>");
+Index: linux-2.6.18/mvl_patches/pro50-1369.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1369.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1369);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

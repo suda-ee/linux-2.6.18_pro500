@@ -1,0 +1,304 @@
+#! /usr/bin/env bash
+# Patch: -ALSA_soc_Fix_delayed_work_related_changes_on_2.6
+# Date: Mon Jul 21 10:27:25 2008
+# MR: 26835
+# Disposition: Backport from 2.6.21-rc1
+# Adjustments:
+# 
+# From 1321b160fa1cf63fa841d954fe31220366b6647a Mon Sep 17 00:00:00 2001
+# From: Takashi Iwai <tiwai@suse.de>
+# Date: Thu, 21 Dec 2006 11:02:06 +0100
+# Subject: [PATCH] [ALSA] soc - Fix delayed_work related changes on 2.6.20 kernel
+# 
+# Fix the changes realted to delayed_work in soc/codecs/wm8750.c.
+# 
+# Signed-off-by: Takashi Iwai <tiwai@suse.de>
+# Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+
+PATCHNUM=1312
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26835
+Disposition: Backport from 2.6.21-rc1
+Adjustments:
+
+From 1321b160fa1cf63fa841d954fe31220366b6647a Mon Sep 17 00:00:00 2001
+From: Takashi Iwai <tiwai@suse.de>
+Date: Thu, 21 Dec 2006 11:02:06 +0100
+Subject: [PATCH] [ALSA] soc - Fix delayed_work related changes on 2.6.20 kernel
+
+Fix the changes realted to delayed_work in soc/codecs/wm8750.c.
+
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+Index: linux-2.6.18/include/sound/soc.h
+===================================================================
+--- linux-2.6.18.orig/include/sound/soc.h
++++ linux-2.6.18/include/sound/soc.h
+@@ -374,6 +374,7 @@ struct snd_soc_codec {
+ 	struct list_head dapm_paths;
+ 	unsigned int dapm_state;
+ 	unsigned int suspend_dapm_state;
++	struct delayed_work delayed_work;
+ 
+ 	/* codec DAI's */
+ 	struct snd_soc_codec_dai *dai;
+Index: linux-2.6.18/sound/soc/codecs/wm8750.c
+===================================================================
+--- linux-2.6.18.orig/sound/soc/codecs/wm8750.c
++++ linux-2.6.18/sound/soc/codecs/wm8750.c
+@@ -51,8 +51,6 @@
+ #define warn(format, arg...) \
+ 	printk(KERN_WARNING AUDIO_NAME ": " format "\n" , ## arg)
+ 
+-static struct work_struct wm8750_dapm_work;
+-
+ /*
+  * wm8750 register cache
+  * We can't read the WM8750 register space when we
+@@ -1000,9 +998,10 @@ struct snd_soc_codec_dai wm8750_dai = {
+ };
+ EXPORT_SYMBOL_GPL(wm8750_dai);
+ 
+-static void wm8750_work(void *data)
++static void wm8750_work(struct work_struct *work)
+ {
+-	struct snd_soc_codec *codec = (struct snd_soc_codec *)data;
++	struct snd_soc_codec *codec =
++		container_of(work, struct snd_soc_codec, delayed_work.work);
+ 	wm8750_dapm_event(codec, codec->dapm_state);
+ }
+ 
+@@ -1038,7 +1037,7 @@ static int wm8750_resume(struct platform
+ 	if (codec->suspend_dapm_state == SNDRV_CTL_POWER_D0) {
+ 		wm8750_dapm_event(codec, SNDRV_CTL_POWER_D2);
+ 		codec->dapm_state = SNDRV_CTL_POWER_D0;
+-		schedule_delayed_work(&wm8750_dapm_work,
++		schedule_delayed_work(&codec->delayed_work,
+ 			 msecs_to_jiffies(1000));
+ 	}
+ 
+@@ -1083,7 +1082,7 @@ static int wm8750_init(struct snd_soc_de
+ 	/* charge output caps */
+ 	wm8750_dapm_event(codec, SNDRV_CTL_POWER_D2);
+ 	codec->dapm_state = SNDRV_CTL_POWER_D3hot;
+-	schedule_delayed_work(&wm8750_dapm_work, msecs_to_jiffies(1000));
++	schedule_delayed_work(&codec->delayed_work, msecs_to_jiffies(1000));
+ 
+ 	/* set the update bits */
+ 	reg = wm8750_read_reg_cache(codec, WM8750_LDAC);
+@@ -1225,7 +1224,7 @@ static int wm8750_probe(struct platform_
+ 	INIT_LIST_HEAD(&codec->dapm_widgets);
+ 	INIT_LIST_HEAD(&codec->dapm_paths);
+ 	wm8750_socdev = socdev;
+-	INIT_WORK(&wm8750_dapm_work, wm8750_work, codec);
++	INIT_DELAYED_WORK(&codec->delayed_work, wm8750_work);
+ #if defined (CONFIG_I2C) || defined (CONFIG_I2C_MODULE)
+ 	if (setup->i2c_address) {
+ 		normal_i2c[0] = setup->i2c_address;
+Index: linux-2.6.18/mvl_patches/pro50-1312.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1312.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1312);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

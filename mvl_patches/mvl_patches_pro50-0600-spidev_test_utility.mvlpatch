@@ -1,0 +1,459 @@
+#! /usr/bin/env bash
+# Patch: -spidev_test_utility
+# Date: Wed Nov  7 15:18:26 2007
+# Source: Anton Vorontsov <avorontsov@ru.mvista.com>
+# MR: 24646
+# Type: Enhancement
+# Disposition: backport from 2.6.23-rc2 (22b238bdb93ed2fcb1d627ce81d8a2fcbe24de85)
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Signed-off-by: David Brownell <dbrownell@users.sourceforge.net>
+# Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+# Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+# Description:
+# spidev_test utility
+# 
+# This is a simple utility used to test SPI functionality.  It could stand
+# growing options to support using other test data patterns; this initial
+# version only issues full duplex transfers, which rules out 3WIRE or
+# Microwire links.
+# 
+#  Documentation/spi/spidev_test.c |  202 +++++++++++++++++++++++++++++++++++++++
+#  1 files changed, 202 insertions(+), 0 deletions(-)
+# 
+
+PATCHNUM=600
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Anton Vorontsov <avorontsov@ru.mvista.com>
+MR: 24646
+Type: Enhancement
+Disposition: backport from 2.6.23-rc2 (22b238bdb93ed2fcb1d627ce81d8a2fcbe24de85)
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Signed-off-by: David Brownell <dbrownell@users.sourceforge.net>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+Description:
+spidev_test utility
+
+This is a simple utility used to test SPI functionality.  It could stand
+growing options to support using other test data patterns; this initial
+version only issues full duplex transfers, which rules out 3WIRE or
+Microwire links.
+
+ Documentation/spi/spidev_test.c |  202 ++++++++++++++++++++++++++++++++++++++++
+ mvl_patches/pro50-0600.c        |   16 +++
+ 2 files changed, 218 insertions(+)
+
+Index: linux-2.6.18/Documentation/spi/spidev_test.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/Documentation/spi/spidev_test.c
+@@ -0,0 +1,202 @@
++/*
++ * SPI testing utility (using spidev driver)
++ *
++ * Copyright (c) 2007  MontaVista Software, Inc.
++ * Copyright (c) 2007  Anton Vorontsov <avorontsov@ru.mvista.com>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License.
++ *
++ * Cross-compile with cross-gcc -I/path/to/cross-kernel/include
++ */
++
++#include <stdint.h>
++#include <unistd.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <getopt.h>
++#include <fcntl.h>
++#include <sys/ioctl.h>
++#include <linux/types.h>
++#include <linux/spi/spidev.h>
++
++#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
++
++static void pabort(const char *s)
++{
++	perror(s);
++	abort();
++}
++
++static char *device = "/dev/spidev1.1";
++static uint8_t mode;
++static uint8_t bits = 8;
++static uint32_t speed = 500000;
++static uint16_t delay;
++
++static void transfer(int fd)
++{
++	int ret;
++	uint8_t tx[] = {
++		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
++		0x40, 0x00, 0x00, 0x00, 0x00, 0x95,
++		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
++		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
++		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
++		0xDE, 0xAD, 0xBE, 0xEF, 0xBA, 0xAD,
++		0xF0, 0x0D,
++	};
++	uint8_t rx[ARRAY_SIZE(tx)] = {0, };
++	struct spi_ioc_transfer tr = {
++		.tx_buf = (unsigned long)tx,
++		.rx_buf = (unsigned long)rx,
++		.len = ARRAY_SIZE(tx),
++		.delay_usecs = delay,
++		.speed_hz = speed,
++		.bits_per_word = bits,
++	};
++
++	ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr);
++	if (ret == 1)
++		pabort("can't send spi message");
++
++	for (ret = 0; ret < ARRAY_SIZE(tx); ret++) {
++		if (!(ret % 6))
++			puts("");
++		printf("%.2X ", rx[ret]);
++	}
++	puts("");
++}
++
++void print_usage(char *prog)
++{
++	printf("Usage: %s [-DsbdlHOLC3]\n", prog);
++	puts("  -D --device   device to use (default /dev/spidev1.1)\n"
++	     "  -s --speed    max speed (Hz)\n"
++	     "  -d --delay    delay (usec)\n"
++	     "  -b --bpw      bits per word \n"
++	     "  -l --loop     loopback\n"
++	     "  -H --cpha     clock phase\n"
++	     "  -O --cpol     clock polarity\n"
++	     "  -L --lsb      least significant bit first\n"
++	     "  -C --cs-high  chip select active high\n"
++	     "  -3 --3wire    SI/SO signals shared\n");
++	exit(1);
++}
++
++void parse_opts(int argc, char *argv[])
++{
++	while (1) {
++		static struct option lopts[] = {
++			{ "device",  1, 0, 'D' },
++			{ "speed",   1, 0, 's' },
++			{ "delay",   1, 0, 'd' },
++			{ "bpw",     1, 0, 'b' },
++			{ "loop",    0, 0, 'l' },
++			{ "cpha",    0, 0, 'H' },
++			{ "cpol",    0, 0, 'O' },
++			{ "lsb",     0, 0, 'L' },
++			{ "cs-high", 0, 0, 'C' },
++			{ "3wire",   0, 0, '3' },
++			{ NULL, 0, 0, 0 },
++		};
++		int c;
++
++		c = getopt_long(argc, argv, "D:s:d:b:lHOLC3", lopts, NULL);
++
++		if (c == -1)
++			break;
++
++		switch (c) {
++		case 'D':
++			device = optarg;
++			break;
++		case 's':
++			speed = atoi(optarg);
++			break;
++		case 'd':
++			delay = atoi(optarg);
++			break;
++		case 'b':
++			bits = atoi(optarg);
++			break;
++		case 'l':
++			mode |= SPI_LOOP;
++			break;
++		case 'H':
++			mode |= SPI_CPHA;
++			break;
++		case 'O':
++			mode |= SPI_CPOL;
++			break;
++		case 'L':
++			mode |= SPI_LSB_FIRST;
++			break;
++		case 'C':
++			mode |= SPI_CS_HIGH;
++			break;
++		case '3':
++			mode |= SPI_3WIRE;
++			break;
++		default:
++			print_usage(argv[0]);
++			break;
++		}
++	}
++}
++
++int main(int argc, char *argv[])
++{
++	int ret = 0;
++	int fd;
++
++	parse_opts(argc, argv);
++
++	fd = open(device, O_RDWR);
++	if (fd < 0)
++		pabort("can't open device");
++
++	/*
++	 * spi mode
++	 */
++	ret = ioctl(fd, SPI_IOC_WR_MODE, &mode);
++	if (ret == -1)
++		pabort("can't set spi mode");
++
++	ret = ioctl(fd, SPI_IOC_RD_MODE, &mode);
++	if (ret == -1)
++		pabort("can't get spi mode");
++
++	/*
++	 * bits per word
++	 */
++	ret = ioctl(fd, SPI_IOC_WR_BITS_PER_WORD, &bits);
++	if (ret == -1)
++		pabort("can't set bits per word");
++
++	ret = ioctl(fd, SPI_IOC_RD_BITS_PER_WORD, &bits);
++	if (ret == -1)
++		pabort("can't get bits per word");
++
++	/*
++	 * max speed hz
++	 */
++	ret = ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed);
++	if (ret == -1)
++		pabort("can't set max speed hz");
++
++	ret = ioctl(fd, SPI_IOC_RD_MAX_SPEED_HZ, &speed);
++	if (ret == -1)
++		pabort("can't get max speed hz");
++
++	printf("spi mode: %d\n", mode);
++	printf("bits per word: %d\n", bits);
++	printf("max speed: %d Hz (%d KHz)\n", speed, speed/1000);
++
++	transfer(fd);
++
++	close(fd);
++
++	return ret;
++}
+Index: linux-2.6.18/mvl_patches/pro50-0600.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0600.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(600);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

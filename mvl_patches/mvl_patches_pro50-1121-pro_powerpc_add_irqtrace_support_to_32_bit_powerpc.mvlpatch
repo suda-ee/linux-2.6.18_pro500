@@ -1,0 +1,494 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_add_irqtrace_support_to_32_bit_powerpc
+# Date: Wed May 28 17:43:44 2008
+# MR: 26409
+# commit ef564cfcbf9f75b6d29b646df2c516a6d4858a50
+# Author: Dale Farnsworth <dale@farnsworth.org>
+# Date:   Fri Feb 1 09:59:05 2008 -0700
+# 
+#     [POWERPC] Add irqtrace support to 32-bit powerpc
+#     
+#     Add the low level irq tracing hooks for 32-bit powerpc needed
+#     to enable full lockdep functionality.
+#     
+#     Dale Farnsworth <dale@farnsworth.org>
+# 
+
+PATCHNUM=1121
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26409
+commit ef564cfcbf9f75b6d29b646df2c516a6d4858a50
+Author: Dale Farnsworth <dale@farnsworth.org>
+Date:   Fri Feb 1 09:59:05 2008 -0700
+
+    [POWERPC] Add irqtrace support to 32-bit powerpc
+    
+    Add the low level irq tracing hooks for 32-bit powerpc needed
+    to enable full lockdep functionality.
+    
+    Dale Farnsworth <dale@farnsworth.org>
+
+diff --git a/arch/powerpc/Kconfig b/arch/powerpc/Kconfig
+index c313e68..933e98b 100644
+Index: linux-2.6.18/arch/powerpc/kernel/entry_32.S
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/entry_32.S
++++ linux-2.6.18/arch/powerpc/kernel/entry_32.S
+@@ -144,6 +144,51 @@ transfer_to_handler:
+ 	.globl transfer_to_handler_cont
+ transfer_to_handler_cont:
+ 3:
++#ifdef CONFIG_TRACE_IRQFLAGS
++/*
++ * Some tracing functions necessitate re-enabling the MMU in order
++ * to call C code before branching to the eventual handler.
++ */
++	lis	r11,reenable_mmu@h
++	ori	r11,r11,reenable_mmu@l
++	mtspr	SPRN_SRR0,r11
++	mtspr	SPRN_SRR1,r10
++	SYNC
++	RFI
++reenable_mmu:				/* enable mmu so we can call C code */
++	mflr	r9
++	lwz	r11,_MSR(r1)
++	mfmsr	r10
++	xor	r10,r10,r11
++	andi.	r10,r10,MSR_EE		/* Did EE change? */
++	beq	1f
++	stwu	r1,-48(r1)		/* Yes, it must have been cleared */
++	stw	r9,52(r1)
++	stw	r0,16(r1)		/* saving r3-r5 may be sufficient */
++	stw	r3,20(r1)
++	stw	r4,24(r1)
++	stw	r5,28(r1)
++	stw	r6,32(r1)
++	stw	r7,36(r1)
++	stw	r8,40(r1)
++	bl	trace_hardirqs_off
++	lwz	r0,16(r1)
++	lwz	r3,20(r1)
++	lwz	r4,24(r1)
++	lwz	r5,28(r1)
++	lwz	r6,32(r1)
++	lwz	r7,36(r1)
++	lwz	r8,40(r1)
++	lwz	r9,52(r1)
++	addi	r1,r1,48
++1:
++	tovirt(r9,r9)
++	lwz	r11,0(r9)		/* virtual address of handler */
++	lwz	r9,4(r9)		/* where to go when done */
++	mtctr	r11
++	mtlr	r9
++	bctr				/* jump to handler */
++#else /* CONFIG_TRACE_IRQFLAGS */
+ 	mflr	r9
+ 	lwz	r11,0(r9)		/* virtual address of handler */
+ 	lwz	r9,4(r9)		/* where to go when done */
+@@ -152,6 +197,7 @@ transfer_to_handler_cont:
+ 	mtlr	r9
+ 	SYNC
+ 	RFI				/* jump to handler, enable MMU */
++#endif /* CONFIG_TRACE_IRQFLAGS */
+ 
+ #ifdef CONFIG_6xx
+ 4:	rlwinm	r12,r12,0,~_TLF_NAPPING
+@@ -221,12 +267,20 @@ ret_from_syscall:
+ #ifdef SHOW_SYSCALLS
+ 	bl	do_show_syscall_exit
+ #endif
+-	mr	r6,r3
+-	rlwinm	r12,r1,0,0,(31-THREAD_SHIFT)	/* current_thread_info() */
+ 	/* disable interrupts so current_thread_info()->flags can't change */
+ 	LOAD_MSR_KERNEL(r10,MSR_KERNEL)	/* doesn't include MSR_EE */
+ 	SYNC
+ 	MTMSRD(r10)
++#ifdef CONFIG_TRACE_IRQFLAGS
++	stwu	r1,-16(r1)
++	stw	r3,12(r1)
++	bl	trace_hardirqs_off
++	lwz	r3,12(r1)
++	addi	r1,r1,16
++	LOAD_MSR_KERNEL(r10,MSR_KERNEL)
++#endif
++	mr	r6,r3
++	rlwinm	r12,r1,0,0,(31-THREAD_SHIFT)	/* current_thread_info() */
+ 	lwz	r9,TI_FLAGS(r12)
+ 	li	r8,-_LAST_ERRNO
+ 	andi.	r0,r9,(_TIF_SYSCALL_T_OR_A|_TIF_SINGLESTEP|_TIF_USER_WORK_MASK|_TIF_PERSYSCALL_MASK)
+@@ -238,6 +292,13 @@ ret_from_syscall:
+ 	oris	r11,r11,0x1000	/* Set SO bit in CR */
+ 	stw	r11,_CCR(r1)
+ syscall_exit_cont:
++#ifdef CONFIG_TRACE_IRQFLAGS
++	stwu	r1,-16(r1)
++	stw	r3,12(r1)
++	bl	trace_hardirqs_on
++	lwz	r3,12(r1)
++	addi	r1,r1,16
++#endif
+ #if defined(CONFIG_4xx) || defined(CONFIG_BOOKE)
+ 	/* If the process has its own DBCR0 value, load it up.  The single
+ 	   step bit tells us that dbcr0 should be loaded. */
+@@ -335,7 +396,10 @@ syscall_exit_work:
+ 4:	/* Anything which requires enabling interrupts? */
+ 	andi.	r0,r9,(_TIF_SYSCALL_T_OR_A|_TIF_SINGLESTEP)
+ 	beq	ret_from_except
+-
++#ifdef CONFIG_TRACE_IRQFLAGS
++	bl	trace_hardirqs_on
++	LOAD_MSR_KERNEL(r10,MSR_KERNEL)
++#endif
+ 	/* Re-enable interrupts */
+ 	ori	r10,r10,MSR_EE
+ 	SYNC
+@@ -636,13 +700,22 @@ ret_from_except_full:
+ 
+ 	.globl	ret_from_except
+ ret_from_except:
++#ifdef CONFIG_TRACE_IRQFLAGS
++	mfmsr	r3
++#endif
+ 	/* Hard-disable interrupts so that current_thread_info()->flags
+ 	 * can't change between when we test it and when we return
+ 	 * from the interrupt. */
+ 	LOAD_MSR_KERNEL(r10,MSR_KERNEL)
+ 	SYNC			/* Some chip revs have problems here... */
+ 	MTMSRD(r10)		/* disable interrupts */
+-
++#ifdef CONFIG_TRACE_IRQFLAGS
++	andi.	r3,r3,MSR_EE
++	beq	1f
++	bl	trace_hardirqs_off
++	LOAD_MSR_KERNEL(r10,MSR_KERNEL)
++1:
++#endif
+ 	lwz	r3,_MSR(r1)	/* Returning to user mode? */
+ 	andi.	r0,r3,MSR_PR
+ 	beq	resume_kernel
+@@ -699,6 +772,9 @@ restore:
+ 	stw	r6,icache_44x_need_flush@l(r4)
+ 1:
+ #endif  /* CONFIG_44x */
++#ifdef CONFIG_TRACE_IRQFLAGS
++	bl	trace_hardirqs_on
++#endif
+ 	lwz	r0,GPR0(r1)
+ 	lwz	r2,GPR2(r1)
+ 	REST_4GPRS(3, r1)
+@@ -883,6 +959,10 @@ do_work:			/* r10 contains MSR_KERNEL he
+ 	beq	do_user_signal
+ 
+ do_resched:			/* r10 contains MSR_KERNEL here */
++#ifdef CONFIG_TRACE_IRQFLAGS
++	bl	trace_hardirqs_on
++	LOAD_MSR_KERNEL(r10,MSR_KERNEL)
++#endif
+ 	ori	r10,r10,MSR_EE
+ 	SYNC
+ 	MTMSRD(r10)		/* hard-enable interrupts */
+@@ -891,6 +971,10 @@ recheck:
+ 	LOAD_MSR_KERNEL(r10,MSR_KERNEL)
+ 	SYNC
+ 	MTMSRD(r10)		/* disable interrupts */
++#ifdef CONFIG_TRACE_IRQFLAGS
++	bl	trace_hardirqs_off
++	LOAD_MSR_KERNEL(r10,MSR_KERNEL)
++#endif
+ 	rlwinm	r9,r1,0,0,(31-THREAD_SHIFT)
+ 	lwz	r9,TI_FLAGS(r9)
+ 	andi.	r0,r9,(_TIF_NEED_RESCHED|_TIF_NEED_RESCHED_DELAYED)
+@@ -898,6 +982,10 @@ recheck:
+ 	andi.	r0,r9,_TIF_SIGPENDING|_TIF_RESTORE_SIGMASK
+ 	beq	restore_user
+ do_user_signal:			/* r10 contains MSR_KERNEL here */
++#ifdef CONFIG_TRACE_IRQFLAGS
++	bl	trace_hardirqs_on
++	LOAD_MSR_KERNEL(r10,MSR_KERNEL)
++#endif
+ 	ori	r10,r10,MSR_EE
+ 	SYNC
+ 	MTMSRD(r10)		/* hard-enable interrupts */
+Index: linux-2.6.18/arch/powerpc/kernel/irq.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/irq.c
++++ linux-2.6.18/arch/powerpc/kernel/irq.c
+@@ -189,7 +189,6 @@ void do_IRQ(struct pt_regs *regs)
+ 	struct thread_info *curtp, *irqtp;
+ #endif
+ 
+-	trace_hardirqs_off();
+         irq_enter();
+ 
+ #ifdef CONFIG_DEBUG_STACKOVERFLOW
+@@ -240,7 +239,6 @@ void do_IRQ(struct pt_regs *regs)
+ 		ppc_spurious_interrupts++;
+ 
+         irq_exit();
+-	trace_hardirqs_on();
+ 
+ #ifdef CONFIG_PPC_ISERIES
+ 	if (get_lppaca()->int_dword.fields.decr_int) {
+Index: linux-2.6.18/arch/powerpc/kernel/tau_6xx.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/tau_6xx.c
++++ linux-2.6.18/arch/powerpc/kernel/tau_6xx.c
+@@ -124,14 +124,12 @@ void TAUException(struct pt_regs * regs)
+ {
+ 	int cpu = smp_processor_id();
+ 
+-	trace_hardirqs_off();
+ 	irq_enter();
+ 	tau[cpu].interrupts++;
+ 
+ 	TAUupdate(cpu);
+ 
+ 	irq_exit();
+-	trace_hardirqs_on();
+ }
+ #endif /* CONFIG_TAU_INT */
+ 
+Index: linux-2.6.18/arch/powerpc/kernel/time.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/time.c
++++ linux-2.6.18/arch/powerpc/kernel/time.c
+@@ -545,7 +545,6 @@ void timer_interrupt(struct pt_regs * re
+ 		do_IRQ(regs);
+ #endif
+ 
+- 	trace_hardirqs_off();
+ 	irq_enter();
+ 
+ #ifdef CONFIG_GENERIC_CLOCKEVENTS
+@@ -639,7 +638,6 @@ void timer_interrupt(struct pt_regs * re
+ #endif
+ 
+ 	irq_exit();
+-	trace_hardirqs_on();
+  	MARK(kernel_trap_exit, MARK_NOARGS);
+ }
+ 
+Index: linux-2.6.18/arch/powerpc/kernel/traps.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/traps.c
++++ linux-2.6.18/arch/powerpc/kernel/traps.c
+@@ -956,11 +956,9 @@ void altivec_unavailable_exception(struc
+ 
+ void performance_monitor_exception(struct pt_regs *regs)
+ {
+-	trace_hardirqs_off();
+ 	MARK(kernel_trap_entry, "%ld struct pt_regs %p", regs->trap, regs);
+ 	perf_irq(regs);
+ 	MARK(kernel_trap_exit, MARK_NOARGS);
+-	trace_hardirqs_on();
+ }
+ 
+ #ifdef CONFIG_8xx
+Index: linux-2.6.18/mvl_patches/pro50-1121.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1121.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1121);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

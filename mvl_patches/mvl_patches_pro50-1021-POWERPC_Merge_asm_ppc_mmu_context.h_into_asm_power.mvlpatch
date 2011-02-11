@@ -1,0 +1,460 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Merge_asm_ppc_mmu_context.h_into_asm_power
+# Date: Wed Apr  9 10:01:11 2008
+# Source: kernel.org
+# MR: 27422
+# Type: Enhancement
+# Disposition: backported from kernel.org
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# From 80a7cc6cf1126bc09beee3dded2820bfa18ce347 Mon Sep 17 00:00:00 2001
+# From: Kumar Gala <galak@kernel.crashing.org>
+# Date: Tue, 3 Jul 2007 03:22:05 -0500
+# Subject: [PATCH] [POWERPC] Merge asm-ppc/mmu_context.h into asm-power/mmu_context.h
+# 
+# Just did a directly merge from asm-ppc into asm-powerpc.  This is the last
+# header that we directly include from asm-powerpc.
+# 
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+
+PATCHNUM=1021
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: kernel.org
+MR: 27422
+Type: Enhancement
+Disposition: backported from kernel.org
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+From 80a7cc6cf1126bc09beee3dded2820bfa18ce347 Mon Sep 17 00:00:00 2001
+From: Kumar Gala <galak@kernel.crashing.org>
+Date: Tue, 3 Jul 2007 03:22:05 -0500
+Subject: [PATCH] [POWERPC] Merge asm-ppc/mmu_context.h into asm-power/mmu_context.h
+
+Just did a directly merge from asm-ppc into asm-powerpc.  This is the last
+header that we directly include from asm-powerpc.
+
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+Index: linux-2.6.18/include/asm-powerpc/mmu_context.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/mmu_context.h
++++ linux-2.6.18/include/asm-powerpc/mmu_context.h
+@@ -2,14 +2,207 @@
+ #define __ASM_POWERPC_MMU_CONTEXT_H
+ #ifdef __KERNEL__
+ 
++#include <asm/mmu.h>
++#include <asm/cputable.h>
++
+ #ifndef CONFIG_PPC64
+-#include <asm-ppc/mmu_context.h>
++#include <asm/atomic.h>
++#include <asm/bitops.h>
++
++/*
++ * On 32-bit PowerPC 6xx/7xx/7xxx CPUs, we use a set of 16 VSIDs
++ * (virtual segment identifiers) for each context.  Although the
++ * hardware supports 24-bit VSIDs, and thus >1 million contexts,
++ * we only use 32,768 of them.  That is ample, since there can be
++ * at most around 30,000 tasks in the system anyway, and it means
++ * that we can use a bitmap to indicate which contexts are in use.
++ * Using a bitmap means that we entirely avoid all of the problems
++ * that we used to have when the context number overflowed,
++ * particularly on SMP systems.
++ *  -- paulus.
++ */
++
++/*
++ * This function defines the mapping from contexts to VSIDs (virtual
++ * segment IDs).  We use a skew on both the context and the high 4 bits
++ * of the 32-bit virtual address (the "effective segment ID") in order
++ * to spread out the entries in the MMU hash table.  Note, if this
++ * function is changed then arch/ppc/mm/hashtable.S will have to be
++ * changed to correspond.
++ */
++#define CTX_TO_VSID(ctx, va)	(((ctx) * (897 * 16) + ((va) >> 28) * 0x111) \
++				 & 0xffffff)
++
++/*
++   The MPC8xx has only 16 contexts.  We rotate through them on each
++   task switch.  A better way would be to keep track of tasks that
++   own contexts, and implement an LRU usage.  That way very active
++   tasks don't always have to pay the TLB reload overhead.  The
++   kernel pages are mapped shared, so the kernel can run on behalf
++   of any task that makes a kernel entry.  Shared does not mean they
++   are not protected, just that the ASID comparison is not performed.
++        -- Dan
++
++   The IBM4xx has 256 contexts, so we can just rotate through these
++   as a way of "switching" contexts.  If the TID of the TLB is zero,
++   the PID/TID comparison is disabled, so we can use a TID of zero
++   to represent all kernel pages as shared among all contexts.
++   	-- Dan
++ */
++
++static inline void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
++{
++}
++
++#ifdef CONFIG_8xx
++#define NO_CONTEXT      	16
++#define LAST_CONTEXT    	15
++#define FIRST_CONTEXT    	0
++
++#elif defined(CONFIG_4xx)
++#define NO_CONTEXT      	256
++#define LAST_CONTEXT    	255
++#define FIRST_CONTEXT    	1
++
++#elif defined(CONFIG_E200) || defined(CONFIG_E500)
++#define NO_CONTEXT      	256
++#define LAST_CONTEXT    	255
++#define FIRST_CONTEXT    	1
++
++#else
++
++/* PPC 6xx, 7xx CPUs */
++#define NO_CONTEXT      	((unsigned long) -1)
++#define LAST_CONTEXT    	32767
++#define FIRST_CONTEXT    	1
++#endif
++
++/*
++ * Set the current MMU context.
++ * On 32-bit PowerPCs (other than the 8xx embedded chips), this is done by
++ * loading up the segment registers for the user part of the address space.
++ *
++ * Since the PGD is immediately available, it is much faster to simply
++ * pass this along as a second parameter, which is required for 8xx and
++ * can be used for debugging on all processors (if you happen to have
++ * an Abatron).
++ */
++extern void set_context(unsigned long contextid, pgd_t *pgd);
++
++/*
++ * Bitmap of contexts in use.
++ * The size of this bitmap is LAST_CONTEXT + 1 bits.
++ */
++extern unsigned long context_map[];
++
++/*
++ * This caches the next context number that we expect to be free.
++ * Its use is an optimization only, we can't rely on this context
++ * number to be free, but it usually will be.
++ */
++extern unsigned long next_mmu_context;
++
++/*
++ * If we don't have sufficient contexts to give one to every task
++ * that could be in the system, we need to be able to steal contexts.
++ * These variables support that.
++ */
++#if LAST_CONTEXT < 30000
++#define FEW_CONTEXTS	1
++extern atomic_t nr_free_contexts;
++extern struct mm_struct *context_mm[LAST_CONTEXT+1];
++extern void steal_context(void);
++#endif
++
++/*
++ * Get a new mmu context for the address space described by `mm'.
++ */
++static inline void get_mmu_context(struct mm_struct *mm)
++{
++	unsigned long ctx;
++
++	if (mm->context.id != NO_CONTEXT)
++		return;
++#ifdef FEW_CONTEXTS
++	while (atomic_dec_if_positive(&nr_free_contexts) < 0)
++		steal_context();
++#endif
++	ctx = next_mmu_context;
++	while (test_and_set_bit(ctx, context_map)) {
++		ctx = find_next_zero_bit(context_map, LAST_CONTEXT+1, ctx);
++		if (ctx > LAST_CONTEXT)
++			ctx = 0;
++	}
++	next_mmu_context = (ctx + 1) & LAST_CONTEXT;
++	mm->context.id = ctx;
++#ifdef FEW_CONTEXTS
++	context_mm[ctx] = mm;
++#endif
++}
++
++/*
++ * Set up the context for a new address space.
++ */
++static inline int init_new_context(struct task_struct *t, struct mm_struct *mm)
++{
++	mm->context.id = NO_CONTEXT;
++	mm->context.vdso_base = 0;
++	return 0;
++}
++
++/*
++ * We're finished using the context for an address space.
++ */
++static inline void destroy_context(struct mm_struct *mm)
++{
++	preempt_disable();
++	if (mm->context.id != NO_CONTEXT) {
++		clear_bit(mm->context.id, context_map);
++		mm->context.id = NO_CONTEXT;
++#ifdef FEW_CONTEXTS
++		atomic_inc(&nr_free_contexts);
++#endif
++	}
++	preempt_enable();
++}
++
++static inline void switch_mm(struct mm_struct *prev, struct mm_struct *next,
++			     struct task_struct *tsk)
++{
++#ifdef CONFIG_ALTIVEC
++	if (cpu_has_feature(CPU_FTR_ALTIVEC))
++	asm volatile ("dssall;\n"
++#ifndef CONFIG_POWER4
++	 "sync;\n" /* G4 needs a sync here, G5 apparently not */
++#endif
++	 : : );
++#endif /* CONFIG_ALTIVEC */
++
++	tsk->thread.pgdir = next->pgd;
++
++	/* No need to flush userspace segments if the mm doesnt change */
++	if (prev == next)
++		return;
++
++	/* Setup new userspace context */
++	get_mmu_context(next);
++	set_context(next->context.id, next->pgd);
++}
++
++#define deactivate_mm(tsk,mm)	do { } while (0)
++
++/*
++ * After we have set current->mm to a new value, this activates
++ * the context for the new mm so we see the new mappings.
++ */
++#define activate_mm(active_mm, mm)   switch_mm(active_mm, mm, current)
++
++extern void mmu_context_init(void);
++
+ #else
+ 
+ #include <linux/kernel.h>	
+ #include <linux/mm.h>	
+-#include <asm/mmu.h>	
+-#include <asm/cputable.h>
+ 
+ /*
+  * Copyright (C) 2001 PPC 64 Team, IBM Corp
+Index: linux-2.6.18/mvl_patches/pro50-1021.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1021.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1021);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

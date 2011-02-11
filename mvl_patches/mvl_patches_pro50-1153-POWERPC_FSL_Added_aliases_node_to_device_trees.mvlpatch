@@ -1,0 +1,1142 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_FSL_Added_aliases_node_to_device_trees
+# Date: Wed Jun 11 14:48:18 2008
+# Source: kernel.org
+# MR: 27349
+# Type: Enhancement
+# Disposition: backported from kernel.org
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# 
+# NOTE: The original version of this patch contained changes for DTS files
+# not in our internal tree. It also contained changes to DTS files that
+# post-date the versions in our tree. In those cases, the changes were
+# made to the equivalent file in our tree. The original patch also
+# contained deletions of the mac-address fields in the DTS files. These
+# deletions are not implemented by this patch due to the various ages of
+# the U-Boot images used by the boards in our tree.
+# 
+# From ea082fa94eab6c2d8ad81c8a46b680cf4c2a3bb3 Mon Sep 17 00:00:00 2001
+# From: Kumar Gala <galak@kernel.crashing.org>
+# Date: Wed, 12 Dec 2007 01:46:12 -0600
+# Subject: [PATCH] [POWERPC] FSL: Added aliases node to device trees
+# 
+# Added aliases nodes for kurobox, 83xx, 85xx, and 86xx platforms.
+# This included added labels and cell-index properties for serial and
+# pci nodes.
+# 
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+
+PATCHNUM=1153
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: kernel.org
+MR: 27349
+Type: Enhancement
+Disposition: backported from kernel.org
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+
+NOTE: The original version of this patch contained changes for DTS files
+not in our internal tree. It also contained changes to DTS files that
+post-date the versions in our tree. In those cases, the changes were
+made to the equivalent file in our tree. The original patch also
+contained deletions of the mac-address fields in the DTS files. These
+deletions are not implemented by this patch due to the various ages of
+the U-Boot images used by the boards in our tree.
+
+From ea082fa94eab6c2d8ad81c8a46b680cf4c2a3bb3 Mon Sep 17 00:00:00 2001
+From: Kumar Gala <galak@kernel.crashing.org>
+Date: Wed, 12 Dec 2007 01:46:12 -0600
+Subject: [PATCH] [POWERPC] FSL: Added aliases node to device trees
+
+Added aliases nodes for kurobox, 83xx, 85xx, and 86xx platforms.
+This included added labels and cell-index properties for serial and
+pci nodes.
+
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+Index: linux-2.6.18/arch/powerpc/boot/dts/kuroboxHG.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/kuroboxHG.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/kuroboxHG.dts
+@@ -27,6 +27,12 @@ build with: "dtc -f -I dts -O dtb -o kur
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+ 
++ 	aliases {
++		serial0 = &serial0;
++		serial1 = &serial1;
++		pci0 = &pci0;
++	};
++
+ 	cpus {
+ 		linux,phandle = <2000>;
+ 		#address-cells = <1>;
+@@ -78,7 +84,8 @@ build with: "dtc -f -I dts -O dtb -o kur
+ 			interrupt-parent = <4400>;
+ 		};
+ 
+-		serial@80004500 {
++		serial0: serial@80004500 {
++			cell-index = <0>;
+ 			linux,phandle = <4511>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+@@ -89,7 +96,8 @@ build with: "dtc -f -I dts -O dtb -o kur
+ 			interrupt-parent = <4400>;
+ 		};
+ 
+-		serial@80004600 {
++		serial1: serial@80004600 {
++			cell-index = <1>;
+ 			linux,phandle = <4512>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+@@ -111,7 +119,7 @@ build with: "dtc -f -I dts -O dtb -o kur
+ 			built-in;
+ 		};
+ 
+-		pci@fec00000 {
++		pci0: pci@fec00000 {
+ 			linux,phandle = <4500>;
+ 			#address-cells = <3>;
+ 			#size-cells = <2>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8313erdb.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8313erdb.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8313erdb.dts
+@@ -15,6 +15,14 @@
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+ 
++	aliases {
++		ethernet0 = &enet0;
++		ethernet1 = &enet1;
++		serial0 = &serial0;
++		serial1 = &serial1;
++		pci0 = &pci0;
++	};
++
+ 	cpus {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+@@ -44,7 +52,7 @@
+ 		reg = <e2800000 2000>;
+ 	};
+ 
+-	pci@8500 {
++	pci0: pci@e0008500 {
+ 		interrupt-map-mask = <f800 0 0 7>;
+ 		interrupt-map = <
+ 
+@@ -166,7 +174,8 @@
+ 			phy-handle = < &phy4 >;
+ 		};
+ 
+-		serial@4500 {
++		serial0: serial@4500 {
++			cell-index = <0>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4500 100>;
+@@ -175,7 +184,8 @@
+ 			interrupt-parent = < &ipic >;
+ 		};
+ 
+-		serial@4600 {
++		serial1: serial@4600 {
++			cell-index = <1>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4600 100>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc832x_rdb.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc832x_rdb.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc832x_rdb.dts
+@@ -15,6 +15,14 @@
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+ 
++	aliases {
++		ethernet0 = &enet0;
++		ethernet1 = &enet1;
++		serial0 = &serial0;
++		serial1 = &serial1;
++		pci0 = &pci0;
++	};
++
+ 	cpus {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+@@ -98,7 +106,8 @@
+ 			dfsrr;
+ 		};
+ 
+-		serial@4500 {
++		serial0: serial@4500 {
++			cell-index = <0>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4500 100>;
+@@ -107,7 +116,8 @@
+ 			interrupt-parent = <&pic>;
+ 		};
+ 
+-		serial@4600 {
++		serial1: serial@4600 {
++			cell-index = <1>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4600 100>;
+@@ -303,7 +313,8 @@
+ 		};
+ 	};
+ 
+-	pci@e0008500 {
++	pci0: pci@e0008500 {
++		cell-index = <1>;
+ 		interrupt-map-mask = <f800 0 0 7>;
+ 		interrupt-map = <
+ 				/* IDSEL 0x10 AD16 (USB) */
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8349emitx.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8349emitx.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8349emitx.dts
+@@ -14,6 +14,15 @@
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+ 
++	aliases {
++		ethernet0 = &enet0;
++		ethernet1 = &enet1;
++		serial0 = &serial0;
++		serial1 = &serial1;
++		pci0 = &pci0;
++		pci1 = &pci1;
++	};
++
+ 	cpus {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+@@ -206,7 +215,8 @@
+ 			phy-handle = <245201f>;
+ 		};
+ 
+-		serial@4500 {
++		serial0: serial@4500 {
++			cell-index = <0>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4500 100>;
+@@ -215,7 +225,8 @@
+ 			interrupt-parent = <700>;
+ 		};
+ 
+-		serial@4600 {
++		serial1: serial@4600 {
++			cell-index = <1>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4600 100>;
+@@ -248,7 +259,8 @@
+ 		};
+ 	};
+ 
+-	pci@e0008500 {
++	pci0: pci@e0008500 {
++		cell-index = <1>;
+ 		interrupt-map-mask = <f800 0 0 7>;
+ 		interrupt-map = <
+ 				/* IDSEL 0x10 - SATA */
+@@ -269,7 +281,8 @@
+ 		device_type = "pci";
+ 	};
+ 
+-	pci@e0008600 {
++	pci1: pci@e0008600 {
++		cell-index = <2>;
+ 		interrupt-map-mask = <f800 0 0 7>;
+ 		interrupt-map = <
+ 				/* IDSEL 0x0E - MiniPCI Slot */
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8540ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8540ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8540ads.dts
+@@ -16,6 +16,15 @@
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+ 
++	aliases {
++		ethernet0 = &enet0;
++		ethernet1 = &enet1;
++		ethernet2 = &enet2;
++		serial0 = &serial0;
++		serial1 = &serial1;
++		pci0 = &pci0;
++	};
++
+ 	cpus {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+@@ -153,7 +162,8 @@
+ 			phy-handle = <&phy3>;
+ 		};
+ 
+-		serial@4500 {
++		serial0: serial@4500 {
++			cell-index = <0>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4500 100>; 	// reg base, size
+@@ -162,7 +172,8 @@
+ 			interrupt-parent = <&mpic>;
+ 		};
+ 
+-		serial@4600 {
++		serial1: serial@4600 {
++			cell-index = <1>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4600 100>;	// reg base, size
+@@ -184,7 +195,8 @@
+ 		};
+ 	};
+ 
+-	pci@e0008000 {
++	pci0: pci@e0008000 {
++		cell-index = <0>;
+ 		interrupt-map-mask = <f800 0 0 7>;
+ 		interrupt-map = <
+ 
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8541cds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8541cds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8541cds.dts
+@@ -16,6 +16,15 @@
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+ 
++	aliases {
++		ethernet0 = &enet0;
++		ethernet1 = &enet1;
++		serial0 = &serial0;
++		serial1 = &serial1;
++		pci0 = &pci0;
++		pci1 = &pci1;
++	};
++
+ 	cpus {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+@@ -117,7 +126,8 @@
+ 			phy-handle = <&phy1>;
+ 		};
+ 
+-		serial@4500 {
++		serial0: serial@4500 {
++			cell-index = <0>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4500 100>; 	// reg base, size
+@@ -126,7 +136,8 @@
+ 			interrupt-parent = <&mpic>;
+ 		};
+ 
+-		serial@4600 {
++		serial1: serial@4600 {
++			cell-index = <1>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4600 100>;	// reg base, size
+@@ -148,7 +159,8 @@
+ 		};
+ 	};
+ 
+-	pci1: pci@e0008000 {
++	pci0: pci@e0008000 {
++		cell-index = <0>;
+ 		interrupt-map-mask = <1f800 0 0 7>;
+ 		interrupt-map = <
+ 
+@@ -215,11 +227,12 @@
+ 			#interrupt-cells = <2>;
+ 			compatible = "chrp,iic";
+ 			interrupts = <1>;
+-			interrupt-parent = <&pci1>;
++			interrupt-parent = <&pci0>;
+ 		};
+ 	};
+ 
+-	pci@e0009000 {
++	pci1: pci@e0009000 {
++		cell-index = <1>;
+ 		interrupt-map-mask = <f800 0 0 7>;
+ 		interrupt-map = <
+ 
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8544ds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8544ds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8544ds.dts
+@@ -15,6 +15,17 @@
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+ 
++	aliases {
++		ethernet0 = &enet0;
++		ethernet1 = &enet1;
++		serial0 = &serial0;
++		serial1 = &serial1;
++		pci0 = &pci0;
++		pci1 = &pci1;
++		pci2 = &pci2;
++		pci3 = &pci3;
++	};
++
+ 	cpus {
+ 		#cpus = <1>;
+ 		#address-cells = <1>;
+@@ -118,7 +129,8 @@
+ 			phy-handle = <&phy1>;
+ 		};
+ 
+-		serial@4500 {
++		serial0: serial@4500 {
++			cell-index = <0>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4500 100>;
+@@ -127,7 +139,8 @@
+ 			interrupt-parent = <&mpic>;
+ 		};
+ 
+-		serial@4600 {
++		serial1: serial@4600 {
++			cell-index = <1>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4600 100>;
+@@ -154,7 +167,8 @@
+ 		};
+ 	};
+ 
+-	pci@e0008000 {
++	pci0: pci@e0008000 {
++		cell-index = <0>;
+ 		compatible = "fsl,mpc8540-pci";
+ 		device_type = "pci";
+ 		interrupt-map-mask = <f800 0 0 7>;
+@@ -185,7 +199,8 @@
+ 		reg = <e0008000 1000>;
+ 	};
+ 
+-	pcie@e0009000 {
++	pci1: pcie@e0009000 {
++		cell-index = <1>;
+ 		compatible = "fsl,mpc8548-pcie";
+ 		device_type = "pci";
+ 		#interrupt-cells = <1>;
+@@ -221,7 +236,8 @@
+ 		};
+ 	};
+ 
+-	pcie@e000a000 {
++	pci2: pcie@e000a000 {
++		cell-index = <2>;
+ 		compatible = "fsl,mpc8548-pcie";
+ 		device_type = "pci";
+ 		#interrupt-cells = <1>;
+@@ -257,7 +273,8 @@
+ 		};
+ 	};
+ 
+-	pcie@e000b000 {
++	pci3: pcie@e000b000 {
++		cell-index = <3>;
+ 		compatible = "fsl,mpc8548-pcie";
+ 		device_type = "pci";
+ 		#interrupt-cells = <1>;
+@@ -382,7 +399,6 @@
+ 			};
+ 
+ 		};
+-
+ 	};
+ 
+ 	flash@ff800000 {
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8548cds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8548cds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8548cds.dts
+@@ -16,6 +16,20 @@
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+ 
++	aliases {
++		ethernet0 = &enet0;
++		ethernet1 = &enet1;
++/*
++		ethernet2 = &enet2;
++		ethernet3 = &enet3;
++*/
++		serial0 = &serial0;
++		serial1 = &serial1;
++		pci0 = &pci0;
++		pci1 = &pci1;
++		pci2 = &pci2;
++	};
++
+ 	cpus {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+@@ -185,7 +199,8 @@
+ 		};
+  */
+ 
+-		serial@4500 {
++		serial0: serial@4500 {
++			cell-index = <0>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4500 100>;	// reg base, size
+@@ -194,7 +209,8 @@
+ 			interrupt-parent = <&mpic>;
+ 		};
+ 
+-		serial@4600 {
++		serial1: serial@4600 {
++			cell-index = <1>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4600 100>;	// reg base, size
+@@ -222,7 +238,8 @@
+ 		};
+ 	};
+ 
+-	pci@e0008000 {
++	pci0: pci@e0008000 {
++		cell-index = <0>;
+ 		interrupt-map-mask = <f800 0 0 7>;
+ 		interrupt-map = <
+ 			/* IDSEL 0x4 (PCIX Slot 2) */
+@@ -371,7 +388,8 @@
+ 		};
+ 	};
+ 
+-	pci@e0009000 {
++	pci1: pci@e0009000 {
++		cell-index = <1>;
+ 		interrupt-map-mask = <f800 0 0 7>;
+ 		interrupt-map = <
+ 
+@@ -395,7 +413,8 @@
+ 		device_type = "pci";
+ 	};
+ 
+-	pcie@e000a000 {
++	pci2: pcie@e000a000 {
++		cell-index = <2>;
+ 		interrupt-map-mask = <f800 0 0 7>;
+ 		interrupt-map = <
+ 
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8555cds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8555cds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8555cds.dts
+@@ -16,6 +16,15 @@
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+ 
++	aliases {
++		ethernet0 = &enet0;
++		ethernet1 = &enet1;
++		serial0 = &serial0;
++		serial1 = &serial1;
++		pci0 = &pci0;
++		pci1 = &pci1;
++	};
++
+ 	cpus {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+@@ -117,7 +126,8 @@
+ 			phy-handle = <&phy1>;
+ 		};
+ 
+-		serial@4500 {
++		serial0: serial@4500 {
++			cell-index = <0>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4500 100>; 	// reg base, size
+@@ -126,7 +136,8 @@
+ 			interrupt-parent = <&mpic>;
+ 		};
+ 
+-		serial@4600 {
++		serial1: serial@4600 {
++			cell-index = <1>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4600 100>;	// reg base, size
+@@ -148,7 +159,8 @@
+ 		};
+ 	};
+ 
+-	pci1: pci@e0008000 {
++	pci0: pci@e0008000 {
++		cell-index = <0>;
+ 		interrupt-map-mask = <1f800 0 0 7>;
+ 		interrupt-map = <
+ 
+@@ -215,11 +227,12 @@
+ 			#interrupt-cells = <2>;
+ 			compatible = "chrp,iic";
+ 			interrupts = <1>;
+-			interrupt-parent = <&pci1>;
++			interrupt-parent = <&pci0>;
+ 		};
+ 	};
+ 
+-	pci@e0009000 {
++	pci1: pci@e0009000 {
++		cell-index = <1>;
+ 		interrupt-map-mask = <f800 0 0 7>;
+ 		interrupt-map = <
+ 
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8560ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8560ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8560ads.dts
+@@ -16,6 +16,16 @@
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+ 
++	aliases {
++		ethernet0 = &enet0;
++		ethernet1 = &enet1;
++		ethernet2 = &enet2;
++		ethernet3 = &enet3;
++		serial0 = &serial0;
++		serial1 = &serial1;
++		pci0 = &pci0;
++	};
++
+ 	cpus {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+@@ -164,7 +174,7 @@
+ 				compatible = "fsl,pq2-pic";
+ 			};
+ 
+-			scc@91a00 {
++			serial0: scc@91a00 {
+ 				device_type = "serial";
+ 				compatible = "cpm_uart";
+ 				model = "SCC";
+@@ -178,7 +188,7 @@
+ 				interrupt-parent = <&cpmpic>;
+ 			};
+ 
+-			scc@91a20 {
++			serial1: scc@91a20 {
+ 				device_type = "serial";
+ 				compatible = "cpm_uart";
+ 				model = "SCC";
+@@ -236,7 +246,8 @@
+ 		};
+ 	};
+ 
+-	pci@e0008000 {
++	pci0: pci@e0008000 {
++		cell-index = <0>;
+ 		#interrupt-cells = <1>;
+ 		#size-cells = <2>;
+ 		#address-cells = <3>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8568mds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8568mds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8568mds.dts
+@@ -20,6 +20,17 @@
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+ 
++	aliases {
++		ethernet0 = &enet0;
++		ethernet1 = &enet1;
++		ethernet2 = &enet2;
++		ethernet3 = &enet3;
++		serial0 = &serial0;
++		serial1 = &serial1;
++		pci0 = &pci0;
++		pci1 = &pci1;
++	};
++
+ 	cpus {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+@@ -176,7 +187,8 @@
+ 			phy-handle = <&phy3>;
+ 		};
+ 
+-		serial@4500 {
++		serial0: serial@4500 {
++			cell-index = <0>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4500 100>;
+@@ -191,7 +203,8 @@
+ 			fsl,has-rstcr;
+ 		};
+ 
+-		serial@4600 {
++		serial1: serial@4600 {
++			cell-index = <1>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4600 100>;
+@@ -421,7 +434,8 @@
+ 
+ 	};
+ 
+-	pci@e0008000 {
++	pci0: pci@e0008000 {
++		cell-index = <0>;
+ 		interrupt-map-mask = <f800 0 0 7>;
+ 		interrupt-map = <
+ 			/* IDSEL 0x12 AD18 */
+@@ -451,7 +465,8 @@
+ 	};
+ 
+ 	/* PCI Express */
+-	pcie@e000a000 {
++	pci1: pcie@e000a000 {
++		cell-index = <2>;
+ 		interrupt-map-mask = <f800 0 0 7>;
+ 		interrupt-map = <
+ 
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8572ds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8572ds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8572ds.dts
+@@ -15,6 +15,18 @@
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+ 
++	aliases {
++		ethernet0 = &enet0;
++		ethernet1 = &enet1;
++		ethernet2 = &enet2;
++		ethernet3 = &enet3;
++		serial0 = &serial0;
++		serial1 = &serial1;
++		pci0 = &pci0;
++		pci1 = &pci1;
++		pci2 = &pci2;
++	};
++
+ 	cpus {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+@@ -235,7 +247,8 @@
+ 			phy-connection-type = "rgmii-id";
+ 		};
+ 
+-		serial@4500 {
++		serial0: serial@4500 {
++			cell-index = <0>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4500 100>;
+@@ -244,7 +257,8 @@
+ 			interrupt-parent = <&mpic>;
+ 		};
+ 
+-		serial@4600 {
++		serial1: serial@4600 {
++			cell-index = <1>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4600 100>;
+@@ -271,7 +285,8 @@
+ 		};
+ 	};
+ 
+-	pcie@ffe08000 {
++	pci0: pcie@ffe08000 {
++		cell-index = <0>;
+ 		compatible = "fsl,mpc8548-pcie";
+ 		device_type = "pci";
+ 		#interrupt-cells = <1>;
+@@ -479,7 +494,8 @@
+ 
+ 	};
+ 
+-	pcie@ffe09000 {
++	pci1: pcie@ffe09000 {
++		cell-index = <1>;
+ 		compatible = "fsl,mpc8548-pcie";
+ 		device_type = "pci";
+ 		#interrupt-cells = <1>;
+@@ -515,7 +531,8 @@
+ 		};
+ 	};
+ 
+-	pcie@ffe0a000 {
++	pci2: pcie@ffe0a000 {
++		cell-index = <2>;
+ 		compatible = "fsl,mpc8548-pcie";
+ 		device_type = "pci";
+ 		#interrupt-cells = <1>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8641_hpcn.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8641_hpcn.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8641_hpcn.dts
+@@ -195,6 +195,7 @@
+ 		};
+ 
+ 		serial0: serial@4500 {
++			cell-index = <0>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4500 100>;
+@@ -204,6 +205,7 @@
+ 		};
+ 
+ 		serial1: serial@4600 {
++			cell-index = <1>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4600 100>;
+@@ -225,6 +227,7 @@
+ 	};
+ 
+ 	pci0: pcie@f8008000 {
++		cell-index = <0>;
+ 		compatible = "fsl,mpc8641-pcie";
+ 		device_type = "pci";
+ 		#interrupt-cells = <1>;
+@@ -456,6 +459,7 @@
+ 	};
+ 
+ 	pci1: pcie@f8009000 {
++		cell-index = <1>;
+ 		compatible = "fsl,mpc8641-pcie";
+ 		device_type = "pci";
+ 		#interrupt-cells = <1>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8349emds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8349emds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8349emds.dts
+@@ -15,6 +15,15 @@
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+ 
++	aliases {
++		ethernet0 = &enet0;
++		ethernet1 = &enet1;
++		serial0 = &serial0;
++		serial1 = &serial1;
++		pci0 = &pci0;
++		pci1 = &pci1;
++	};
++
+ 	cpus {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+@@ -154,7 +163,8 @@
+ 			phy-handle = <2452001>;
+ 		};
+ 
+-		serial@4500 {
++		serial0: serial@4500 {
++			cell-index = <0>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4500 100>;
+@@ -163,7 +173,8 @@
+ 			interrupt-parent = <700>;
+ 		};
+ 
+-		serial@4600 {
++		serial1: serial@4600 {
++			cell-index = <1>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4600 100>;
+@@ -172,7 +183,8 @@
+ 			interrupt-parent = <700>;
+ 		};
+ 
+-		pci@8500 {
++		pci0: pci@8500 {
++			cell-index = <1>;
+ 			interrupt-map-mask = <f800 0 0 7>;
+ 			interrupt-map = <
+ 
+@@ -232,7 +244,8 @@
+ 			device_type = "pci";
+ 		};
+ 
+-		pci@8600 {
++		pci1: pci@8600 {
++			cell-index = <2>;
+ 			interrupt-map-mask = <f800 0 0 7>;
+ 			interrupt-map = <
+ 
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8360emds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8360emds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8360emds.dts
+@@ -21,6 +21,14 @@
+ 	#size-cells = <1>;
+ 	linux,phandle = <100>;
+ 
++	aliases {
++		ethernet0 = &enet0;
++		ethernet1 = &enet1;
++		serial0 = &serial0;
++		serial1 = &serial1;
++		pci0 = &pci0;
++	};
++
+ 	cpus {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+@@ -86,7 +94,8 @@
+ 			dfsrr;
+ 		};
+ 
+-		serial@4500 {
++		serial0: serial@4500 {
++			cell-index = <0>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4500 100>;
+@@ -95,7 +104,8 @@
+ 			interrupt-parent = <700>;
+ 		};
+ 
+-		serial@4600 {
++		serial1: serial@4600 {
++			cell-index = <1>;
+ 			device_type = "serial";
+ 			compatible = "ns16550";
+ 			reg = <4600 100>;
+@@ -118,7 +128,8 @@
+ 			descriptor-types-mask = <01010ebf>;
+ 		};
+ 
+-		pci@8500 {
++		pci0: pci@8500 {
++			cell-index = <1>;
+ 			linux,phandle = <8500>;
+ 			interrupt-map-mask = <f800 0 0 7>;
+ 			interrupt-map = <
+Index: linux-2.6.18/mvl_patches/pro50-1153.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1153.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1153);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

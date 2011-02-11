@@ -1,0 +1,535 @@
+#! /usr/bin/env bash
+# Patch: -pro_MVL_POWERPC_pci32_Add_flags_modifying_the_PCI_code_be
+# Date: Wed Mar  5 11:43:15 2008
+# MR: 26747
+# Disposition: backport from
+# git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# Adjustments:
+#     Removed unsupported platforms from the patch
+#     and made minor changes to apply with no fuzz.
+# 
+# From fc3fb71c3e1850a6a1099dd1cb7bcd7e69ac7b73 Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Thu, 20 Dec 2007 14:54:46 +1100
+# Subject: [PATCH] [POWERPC] pci32: Add flags modifying the PCI code behaviour
+# 
+# This adds to the 32 bits PCI code some flags, replacing the old
+# pci_assign_all_busses global, that allow us to control various
+# aspects of the PCI probing, such as whether to re-assign all
+# resources or not, or to not try to assign anything at all.
+# 
+# This also adds the flag x86 already has to avoid ISA alignment
+# on bridges that don't have ISA forwarding enabled (no legacy
+# devices on the top level bus) and sets it for PowerMacs.
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=851
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26747
+Disposition: backport from
+git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+Adjustments:
+    Removed unsupported platforms from the patch
+    and made minor changes to apply with no fuzz.
+
+From fc3fb71c3e1850a6a1099dd1cb7bcd7e69ac7b73 Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Thu, 20 Dec 2007 14:54:46 +1100
+Subject: [PATCH] [POWERPC] pci32: Add flags modifying the PCI code behaviour
+
+This adds to the 32 bits PCI code some flags, replacing the old
+pci_assign_all_busses global, that allow us to control various
+aspects of the PCI probing, such as whether to re-assign all
+resources or not, or to not try to assign anything at all.
+
+This also adds the flag x86 already has to avoid ISA alignment
+on bridges that don't have ISA forwarding enabled (no legacy
+devices on the top level bus) and sets it for PowerMacs.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/kernel/pci_32.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_32.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_32.c
+@@ -35,6 +35,9 @@ unsigned long isa_io_base     = 0;
+ unsigned long pci_dram_offset = 0;
+ int pcibios_assign_bus_offset = 1;
+ 
++/* Default PCI flags is 0 */
++unsigned int ppc_pci_flags;
++
+ void pcibios_make_OF_bus_map(void);
+ 
+ static void pcibios_fixup_resources(struct pci_dev* dev);
+@@ -48,7 +51,7 @@ static u8* pci_to_OF_bus_map;
+ /* By default, we don't re-assign bus numbers. We do this only on
+  * some pmacs
+  */
+-int pci_assign_all_buses;
++static int pci_assign_all_buses;
+ 
+ LIST_HEAD(hose_list);
+ 
+@@ -194,6 +197,14 @@ void pcibios_bus_to_resource(struct pci_
+ }
+ EXPORT_SYMBOL(pcibios_bus_to_resource);
+ 
++static int skip_isa_ioresource_align(struct pci_dev *dev)
++{
++	if ((ppc_pci_flags & PPC_PCI_CAN_SKIP_ISA_ALIGN) &&
++	    !(dev->bus->bridge_ctl & PCI_BRIDGE_CTL_ISA))
++		return 1;
++	return 0;
++}
++
+ /*
+  * We need to avoid collisions with `mirrored' VGA ports
+  * and other strange ISA hardware, so we always want the
+@@ -215,6 +226,8 @@ void pcibios_align_resource(void *data, 
+ 	if (res->flags & IORESOURCE_IO) {
+ 		resource_size_t start = res->start;
+ 
++		if (skip_isa_ioresource_align(dev))
++			return;
+ 		if (start & 0x300) {
+ 			start = (start + 0x3ff) & ~0x3ff;
+ 			res->start = start;
+@@ -271,8 +284,13 @@ pcibios_allocate_bus_resources(struct li
+ 				continue;
+ 			if (bus->parent == NULL)
+ 				pr = (res->flags & IORESOURCE_IO)?
+-					&ioport_resource: &iomem_resource;
++					&ioport_resource : &iomem_resource;
+ 			else {
++				/* Don't bother with non-root busses when
++				 * re-assigning all resources.
++				 */
++				if (ppc_pci_flags & PPC_PCI_REASSIGN_ALL_RSRC)
++					continue;
+ 				pr = pci_find_parent_resource(bus->self, res);
+ 				if (pr == res) {
+ 					/* this happens when the generic PCI
+@@ -731,6 +749,9 @@ pcibios_init(void)
+ 
+ 	printk(KERN_INFO "PCI: Probing PCI hardware\n");
+ 
++	if (ppc_pci_flags & PPC_PCI_REASSIGN_ALL_BUS)
++		pci_assign_all_buses = 1;
++
+ 	/* Scan all of the recorded PCI controllers.  */
+ 	list_for_each_entry_safe(hose, tmp, &hose_list, list_node) {
+ 		if (pci_assign_all_buses)
+@@ -757,13 +778,18 @@ pcibios_init(void)
+ 	if (ppc_md.pcibios_fixup)
+ 		ppc_md.pcibios_fixup();
+ 
+-	/* Allocate and assign resources */
++	/* Allocate and assign resources. If we re-assign everything, then
++	 * we skip the allocate phase
++	 */
+ 	pcibios_allocate_bus_resources(&pci_root_buses);
+-	pcibios_allocate_resources(0);
+-	pcibios_allocate_resources(1);
+-
+-	DBG("PCI: Assigning unassigned resouces...\n");
+-	pci_assign_unassigned_resources();
++	if (!(ppc_pci_flags & PPC_PCI_REASSIGN_ALL_RSRC)) {
++		pcibios_allocate_resources(0);
++		pcibios_allocate_resources(1);
++	}
++	if (!(ppc_pci_flags & PPC_PCI_PROBE_ONLY)) {
++		DBG("PCI: Assigning unassigned resouces...\n");
++		pci_assign_unassigned_resources();
++	}
+ 
+ 	/* Call machine dependent post-init code */
+ 	if (ppc_md.pcibios_after_init)
+Index: linux-2.6.18/arch/powerpc/kernel/pci_64.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_64.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_64.c
+@@ -40,7 +40,6 @@
+ #endif
+ 
+ unsigned long pci_probe_only = 1;
+-int pci_assign_all_buses = 0;
+ 
+ static void fixup_resource(struct resource *res, struct pci_dev *dev);
+ static void do_bus_setup(struct pci_bus *bus);
+Index: linux-2.6.18/arch/powerpc/kernel/rtas_pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/rtas_pci.c
++++ linux-2.6.18/arch/powerpc/kernel/rtas_pci.c
+@@ -311,10 +311,12 @@ void __init find_and_init_phbs(void)
+ 		if (prop)
+ 			pci_probe_only = *prop;
+ 
++#ifdef CONFIG_PPC32 /* Will be made generic soon */
+ 		prop = of_get_property(of_chosen,
+ 				"linux,pci-assign-all-buses", NULL);
+-		if (prop)
+-			pci_assign_all_buses = *prop;
++		if (prop && *prop)
++			ppc_pci_flags |= PPC_PCI_REASSIGN_ALL_BUS;
++#endif /* CONFIG_PPC32 */
+ 	}
+ }
+ 
+Index: linux-2.6.18/arch/powerpc/platforms/82xx/pq2.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/82xx/pq2.c
++++ linux-2.6.18/arch/powerpc/platforms/82xx/pq2.c
+@@ -64,7 +64,7 @@ static void __init pq2_pci_add_bridge(st
+ 		return;
+ 	}
+ 
+-	pci_assign_all_buses = 1;
++	ppc_pci_flags |= PPC_PCI_REASSIGN_ALL_BUS;
+ 
+ 	hose = pcibios_alloc_controller(np);
+ 	if (!hose)
+Index: linux-2.6.18/arch/powerpc/platforms/83xx/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/83xx/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/83xx/pci.c
+@@ -61,7 +61,7 @@ int __init mpc83xx_add_bridge(struct dev
+ 		       " bus 0\n", dev->full_name);
+ 	}
+ 
+-	pci_assign_all_buses = 1;
++	ppc_pci_flags |= PPC_PCI_REASSIGN_ALL_BUS;
+ 	hose = pcibios_alloc_controller(dev);
+ 	if (!hose)
+ 		return -ENOMEM;
+Index: linux-2.6.18/arch/powerpc/platforms/chrp/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/chrp/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/chrp/pci.c
+@@ -198,7 +198,7 @@ static void __init setup_peg2(struct pci
+ 		printk ("RTAS supporting Pegasos OF not found, please upgrade"
+ 			" your firmware\n");
+ 	}
+-	pci_assign_all_buses = 1;
++	ppc_pci_flags |= PPC_PCI_REASSIGN_ALL_BUS;
+ }
+ 
+ void __init
+Index: linux-2.6.18/arch/powerpc/platforms/powermac/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/powermac/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/powermac/pci.c
+@@ -722,7 +722,7 @@ static void __init setup_bandit(struct p
+ static int __init setup_uninorth(struct pci_controller *hose,
+ 				 struct resource *addr)
+ {
+-	pci_assign_all_buses = 1;
++	ppc_pci_flags |= PPC_PCI_REASSIGN_ALL_BUS;
+ 	has_uninorth = 1;
+ 	hose->ops = &macrisc_pci_ops;
+ 	hose->cfg_addr = ioremap(addr->start + 0x800000, 0x1000);
+@@ -991,6 +991,9 @@ void __init pmac_pci_init(void)
+ 	struct device_node *np, *root;
+ 	struct device_node *ht = NULL;
+ 
++#ifdef CONFIG_PPC32
++	ppc_pci_flags = PPC_PCI_CAN_SKIP_ISA_ALIGN;
++#endif
+ 	root = of_find_node_by_path("/");
+ 	if (root == NULL) {
+ 		printk(KERN_CRIT "pmac_pci_init: can't find root "
+@@ -1048,7 +1051,7 @@ void __init pmac_pci_init(void)
+ 	 * some offset between bus number and domains for now when we
+ 	 * assign all busses should help for now
+ 	 */
+-	if (pci_assign_all_buses)
++	if (ppc_pci_flags & PPC_PCI_REASSIGN_ALL_BUS)
+ 		pcibios_assign_bus_offset = 0x10;
+ #endif
+ }
+Index: linux-2.6.18/arch/powerpc/sysdev/fsl_pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/fsl_pci.c
++++ linux-2.6.18/arch/powerpc/sysdev/fsl_pci.c
+@@ -202,7 +202,7 @@ int __init fsl_add_bridge(struct device_
+ 		printk(KERN_WARNING "Can't get bus-range for %s, assume"
+ 			" bus 0\n", dev->full_name);
+ 
+-	pci_assign_all_buses = 1;
++	ppc_pci_flags |= PPC_PCI_REASSIGN_ALL_BUS;
+ 	hose = pcibios_alloc_controller(dev);
+ 	if (!hose)
+ 		return -ENOMEM;
+Index: linux-2.6.18/arch/powerpc/sysdev/grackle.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/grackle.c
++++ linux-2.6.18/arch/powerpc/sysdev/grackle.c
+@@ -57,7 +57,7 @@ void __init setup_grackle(struct pci_con
+ {
+ 	setup_indirect_pci(hose, 0xfec00000, 0xfee00000, 0);
+ 	if (machine_is_compatible("PowerMac1,1"))
+-		pci_assign_all_buses = 1;
++		ppc_pci_flags |= PPC_PCI_REASSIGN_ALL_BUS;
+ 	if (machine_is_compatible("AAPL,PowerBook1998"))
+ 		grackle_set_loop_snoop(hose, 1);
+ #if 0	/* Disabled for now, HW problems ??? */
+Index: linux-2.6.18/include/asm-powerpc/pci-bridge.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pci-bridge.h
++++ linux-2.6.18/include/asm-powerpc/pci-bridge.h
+@@ -13,6 +13,26 @@
+ 
+ struct device_node;
+ 
++extern unsigned int ppc_pci_flags;
++enum {
++	/* Force re-assigning all resources (ignore firmware
++	 * setup completely)
++	 */
++	PPC_PCI_REASSIGN_ALL_RSRC	= 0x00000001,
++
++	/* Re-assign all bus numbers */
++	PPC_PCI_REASSIGN_ALL_BUS	= 0x00000002,
++
++	/* Do not try to assign, just use existing setup */
++	PPC_PCI_PROBE_ONLY		= 0x00000004,
++
++	/* Don't bother with ISA alignment unless the bridge has
++	 * ISA forwarding enabled
++	 */
++	PPC_PCI_CAN_SKIP_ISA_ALIGN	= 0x00000008,
++};
++
++
+ /*
+  * Structure of a PCI controller (host bridge)
+  */
+Index: linux-2.6.18/include/asm-powerpc/pci.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pci.h
++++ linux-2.6.18/include/asm-powerpc/pci.h
+@@ -38,9 +38,12 @@ struct pci_dev;
+  * Set this to 1 if you want the kernel to re-assign all PCI
+  * bus numbers
+  */
+-extern int pci_assign_all_buses;
+-#define pcibios_assign_all_busses()	(pci_assign_all_buses)
+-
++#ifdef CONFIG_PPC64
++#define pcibios_assign_all_busses()	0
++#else
++#define pcibios_assign_all_busses()    	(ppc_pci_flags & \
++					 PPC_PCI_REASSIGN_ALL_BUS)
++#endif
+ #define pcibios_scan_all_fns(a, b)	0
+ 
+ static inline void pcibios_set_master(struct pci_dev *dev)
+Index: linux-2.6.18/mvl_patches/pro50-0851.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0851.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(851);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

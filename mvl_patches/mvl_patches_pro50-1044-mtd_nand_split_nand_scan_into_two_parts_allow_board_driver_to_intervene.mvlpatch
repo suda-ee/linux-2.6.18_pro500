@@ -1,0 +1,399 @@
+#! /usr/bin/env bash
+# Patch: -mtd_nand_split_nand_scan_into_two_parts_allow_board_driver_to_intervene
+# Date: Fri Apr 25 11:52:22 2008
+# Source: kernel.org
+# MR: 27333
+# Type: Enhancement
+# Disposition: backport from 2.6.19-rc1 (3b85c3211ebde263a86c8cd3c7277fdd2e440310)
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# 
+# commit 3b85c3211ebde263a86c8cd3c7277fdd2e440310
+# Author: David Woodhouse <dwmw2@infradead.org>
+# Date:   Mon Sep 25 17:06:53 2006 +0100
+# 
+#     [MTD NAND] Split nand_scan() into two parts; allow board driver to intervene
+#     
+#     Signed-off-by: David Woodhouse <dwmw2@infradead.org>
+# 
+#  drivers/mtd/nand/nand_base.c |   90 ++++++++++++++++++++++++++++++------------
+#  include/linux/mtd/nand.h     |    5 ++
+#  2 files changed, 70 insertions(+), 25 deletions(-)
+# 
+
+PATCHNUM=1044
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: kernel.org
+MR: 27333
+Type: Enhancement
+Disposition: backport from 2.6.19-rc1 (3b85c3211ebde263a86c8cd3c7277fdd2e440310)
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+
+commit 3b85c3211ebde263a86c8cd3c7277fdd2e440310
+Author: David Woodhouse <dwmw2@infradead.org>
+Date:   Mon Sep 25 17:06:53 2006 +0100
+
+    [MTD NAND] Split nand_scan() into two parts; allow board driver to intervene
+    
+    Signed-off-by: David Woodhouse <dwmw2@infradead.org>
+
+ drivers/mtd/nand/nand_base.c |   90 +++++++++++++++++++++++++++++++------------
+ include/linux/mtd/nand.h     |    5 ++
+ mvl_patches/pro50-1044.c     |   16 +++++++
+ 3 files changed, 86 insertions(+), 25 deletions(-)
+
+Index: linux-2.6.18/drivers/mtd/nand/nand_base.c
+===================================================================
+--- linux-2.6.18.orig/drivers/mtd/nand/nand_base.c
++++ linux-2.6.18/drivers/mtd/nand/nand_base.c
+@@ -2287,40 +2287,22 @@ static struct nand_flash_dev *nand_get_f
+ 	return type;
+ }
+ 
+-/* module_text_address() isn't exported, and it's mostly a pointless
+-   test if this is a module _anyway_ -- they'd have to try _really_ hard
+-   to call us from in-kernel code if the core NAND support is modular. */
+-#ifdef MODULE
+-#define caller_is_module() (1)
+-#else
+-#define caller_is_module() \
+-	module_text_address((unsigned long)__builtin_return_address(0))
+-#endif
+-
+ /**
+- * nand_scan - [NAND Interface] Scan for the NAND device
+- * @mtd:	MTD device structure
+- * @maxchips:	Number of chips to scan for
++ * nand_scan_ident - [NAND Interface] Scan for the NAND device
++ * @mtd:	     MTD device structure
++ * @maxchips:	     Number of chips to scan for
+  *
+- * This fills out all the uninitialized function pointers
+- * with the defaults.
+- * The flash ID is read and the mtd/chip structures are
+- * filled with the appropriate values.
+- * The mtd->owner field must be set to the module of the caller
++ * This is the first phase of the normal nand_scan() function. It
++ * reads the flash ID and sets up MTD fields accordingly.
+  *
++ * The mtd->owner field must be set to the module of the caller.
+  */
+-int nand_scan(struct mtd_info *mtd, int maxchips)
++int nand_scan_ident(struct mtd_info *mtd, int maxchips)
+ {
+ 	int i, busw, nand_maf_id;
+ 	struct nand_chip *chip = mtd->priv;
+ 	struct nand_flash_dev *type;
+ 
+-	/* Many callers got this wrong, so check for it for a while... */
+-	if (!mtd->owner && caller_is_module()) {
+-		printk(KERN_CRIT "nand_scan() called with NULL mtd->owner!\n");
+-		BUG();
+-	}
+-
+ 	/* Get buswidth to select the correct functions */
+ 	busw = chip->options & NAND_BUSWIDTH_16;
+ 	/* Set the default functions */
+@@ -2352,6 +2334,24 @@ int nand_scan(struct mtd_info *mtd, int 
+ 	chip->numchips = i;
+ 	mtd->size = i * chip->chipsize;
+ 
++	return 0;
++}
++
++
++/**
++ * nand_scan_tail - [NAND Interface] Scan for the NAND device
++ * @mtd:	    MTD device structure
++ * @maxchips:	    Number of chips to scan for
++ *
++ * This is the second phase of the normal nand_scan() function. It
++ * fills out all the uninitialized function pointers with the defaults
++ * and scans for a bad block table if appropriate.
++ */
++int nand_scan_tail(struct mtd_info *mtd)
++{
++	int i;
++	struct nand_chip *chip = mtd->priv;
++
+ 	/* Preset the internal oob write buffer */
+ 	memset(chip->buffers.oobwbuf, 0xff, mtd->oobsize);
+ 
+@@ -2502,6 +2502,44 @@ int nand_scan(struct mtd_info *mtd, int 
+ 	return chip->scan_bbt(mtd);
+ }
+ 
++/* module_text_address() isn't exported, and it's mostly a pointless
++   test if this is a module _anyway_ -- they'd have to try _really_ hard
++   to call us from in-kernel code if the core NAND support is modular. */
++#ifdef MODULE
++#define caller_is_module() (1)
++#else
++#define caller_is_module() \
++	module_text_address((unsigned long)__builtin_return_address(0))
++#endif
++
++/**
++ * nand_scan - [NAND Interface] Scan for the NAND device
++ * @mtd:	MTD device structure
++ * @maxchips:	Number of chips to scan for
++ *
++ * This fills out all the uninitialized function pointers
++ * with the defaults.
++ * The flash ID is read and the mtd/chip structures are
++ * filled with the appropriate values.
++ * The mtd->owner field must be set to the module of the caller
++ *
++ */
++int nand_scan(struct mtd_info *mtd, int maxchips)
++{
++	int ret;
++
++	/* Many callers got this wrong, so check for it for a while... */
++	if (!mtd->owner && caller_is_module()) {
++		printk(KERN_CRIT "nand_scan() called with NULL mtd->owner!\n");
++		BUG();
++	}
++
++	ret = nand_scan_ident(mtd, maxchips);
++	if (!ret)
++		ret = nand_scan_tail(mtd);
++	return ret;
++}
++
+ /**
+  * nand_release - [NAND Interface] Free resources held by the NAND device
+  * @mtd:	MTD device structure
+@@ -2522,6 +2560,8 @@ void nand_release(struct mtd_info *mtd)
+ }
+ 
+ EXPORT_SYMBOL_GPL(nand_scan);
++EXPORT_SYMBOL_GPL(nand_scan_ident);
++EXPORT_SYMBOL_GPL(nand_scan_tail);
+ EXPORT_SYMBOL_GPL(nand_release);
+ 
+ static int __init nand_base_init(void)
+Index: linux-2.6.18/include/linux/mtd/nand.h
+===================================================================
+--- linux-2.6.18.orig/include/linux/mtd/nand.h
++++ linux-2.6.18/include/linux/mtd/nand.h
+@@ -27,6 +27,11 @@
+ struct mtd_info;
+ /* Scan and identify a NAND device */
+ extern int nand_scan (struct mtd_info *mtd, int max_chips);
++/* Separate phases of nand_scan(), allowing board driver to intervene
++ * and override command or ECC setup according to flash type */
++extern int nand_scan_ident(struct mtd_info *mtd, int max_chips);
++extern int nand_scan_tail(struct mtd_info *mtd);
++
+ /* Free resources held by the NAND device */
+ extern void nand_release (struct mtd_info *mtd);
+ 
+Index: linux-2.6.18/mvl_patches/pro50-1044.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1044.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1044);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

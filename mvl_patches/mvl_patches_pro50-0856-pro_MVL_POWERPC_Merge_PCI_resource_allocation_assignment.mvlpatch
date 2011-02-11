@@ -1,0 +1,1077 @@
+#! /usr/bin/env bash
+# Patch: -pro_MVL_POWERPC_Merge_PCI_resource_allocation_assignment
+# Date: Wed Mar  5 11:43:30 2008
+# MR: 26747
+# Disposition: backport from
+# git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# Adjustmnets:
+#     Minor changes to make it apply with no fuzz.
+# 
+# From 3fd94c6b1a1158d3e0e505b0a00c3a707b5fcd40 Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Thu, 20 Dec 2007 14:54:53 +1100
+# Subject: [PATCH] [POWERPC] Merge PCI resource allocation & assignment
+# 
+# The 32 bits PCI code now uses the generic code for assigning unassigned
+# resources and an algorithm similar to x86 for claiming existing ones.
+# 
+# This works far better than the 64 bits code which basically can only
+# claim existing ones (pci_probe_only=1) or would fall apart completely.
+# 
+# This merges them so that the new 32 bits implementation is used for both.
+# 
+# 64 bits now gets the new PCI flags for controlling the behaviour, though
+# the old pci_probe_only global is still there for now to be cleared if you
+# want to.
+# 
+# I kept a pcibios_claim_one_bus() function mostly based on the old 64
+# bits code for use by the DLPAR hotplug. This will have to be cleaned
+# up, thought I hope it will work in the meantime.
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=856
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26747
+Disposition: backport from
+git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+Adjustmnets:
+    Minor changes to make it apply with no fuzz.
+
+From 3fd94c6b1a1158d3e0e505b0a00c3a707b5fcd40 Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Thu, 20 Dec 2007 14:54:53 +1100
+Subject: [PATCH] [POWERPC] Merge PCI resource allocation & assignment
+
+The 32 bits PCI code now uses the generic code for assigning unassigned
+resources and an algorithm similar to x86 for claiming existing ones.
+
+This works far better than the 64 bits code which basically can only
+claim existing ones (pci_probe_only=1) or would fall apart completely.
+
+This merges them so that the new 32 bits implementation is used for both.
+
+64 bits now gets the new PCI flags for controlling the behaviour, though
+the old pci_probe_only global is still there for now to be cleared if you
+want to.
+
+I kept a pcibios_claim_one_bus() function mostly based on the old 64
+bits code for use by the DLPAR hotplug. This will have to be cleaned
+up, thought I hope it will work in the meantime.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/kernel/pci-common.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci-common.c
++++ linux-2.6.18/arch/powerpc/kernel/pci-common.c
+@@ -53,6 +53,8 @@ static int global_phb_number;		/* Global
+ /* ISA Memory physical address */
+ resource_size_t isa_mem_base;
+ 
++/* Default PCI flags is 0 */
++unsigned int ppc_pci_flags;
+ 
+ struct pci_controller *pcibios_alloc_controller(struct device_node *dev)
+ {
+@@ -823,3 +825,293 @@ void __devinit pcibios_fixup_of_probed_b
+ {
+ 	__pcibios_fixup_bus(bus);
+ }
++
++static int skip_isa_ioresource_align(struct pci_dev *dev)
++{
++	if ((ppc_pci_flags & PPC_PCI_CAN_SKIP_ISA_ALIGN) &&
++	    !(dev->bus->bridge_ctl & PCI_BRIDGE_CTL_ISA))
++		return 1;
++	return 0;
++}
++
++/*
++ * We need to avoid collisions with `mirrored' VGA ports
++ * and other strange ISA hardware, so we always want the
++ * addresses to be allocated in the 0x000-0x0ff region
++ * modulo 0x400.
++ *
++ * Why? Because some silly external IO cards only decode
++ * the low 10 bits of the IO address. The 0x00-0xff region
++ * is reserved for motherboard devices that decode all 16
++ * bits, so it's ok to allocate at, say, 0x2800-0x28ff,
++ * but we want to try to avoid allocating at 0x2900-0x2bff
++ * which might have be mirrored at 0x0100-0x03ff..
++ */
++void pcibios_align_resource(void *data, struct resource *res,
++				resource_size_t size, resource_size_t align)
++{
++	struct pci_dev *dev = data;
++
++	if (res->flags & IORESOURCE_IO) {
++		resource_size_t start = res->start;
++
++		if (skip_isa_ioresource_align(dev))
++			return;
++		if (start & 0x300) {
++			start = (start + 0x3ff) & ~0x3ff;
++			res->start = start;
++		}
++	}
++}
++EXPORT_SYMBOL(pcibios_align_resource);
++
++/*
++ * Reparent resource children of pr that conflict with res
++ * under res, and make res replace those children.
++ */
++static int __init reparent_resources(struct resource *parent,
++				     struct resource *res)
++{
++	struct resource *p, **pp;
++	struct resource **firstpp = NULL;
++
++	for (pp = &parent->child; (p = *pp) != NULL; pp = &p->sibling) {
++		if (p->end < res->start)
++			continue;
++		if (res->end < p->start)
++			break;
++		if (p->start < res->start || p->end > res->end)
++			return -1;	/* not completely contained */
++		if (firstpp == NULL)
++			firstpp = pp;
++	}
++	if (firstpp == NULL)
++		return -1;	/* didn't find any conflicting entries? */
++	res->parent = parent;
++	res->child = *firstpp;
++	res->sibling = *pp;
++	*firstpp = res;
++	*pp = NULL;
++	for (p = res->child; p != NULL; p = p->sibling) {
++		p->parent = res;
++		DBG(KERN_INFO "PCI: reparented %s [%llx..%llx] under %s\n",
++		    p->name,
++		    (unsigned long long)p->start,
++		    (unsigned long long)p->end, res->name);
++	}
++	return 0;
++}
++
++/*
++ *  Handle resources of PCI devices.  If the world were perfect, we could
++ *  just allocate all the resource regions and do nothing more.  It isn't.
++ *  On the other hand, we cannot just re-allocate all devices, as it would
++ *  require us to know lots of host bridge internals.  So we attempt to
++ *  keep as much of the original configuration as possible, but tweak it
++ *  when it's found to be wrong.
++ *
++ *  Known BIOS problems we have to work around:
++ *	- I/O or memory regions not configured
++ *	- regions configured, but not enabled in the command register
++ *	- bogus I/O addresses above 64K used
++ *	- expansion ROMs left enabled (this may sound harmless, but given
++ *	  the fact the PCI specs explicitly allow address decoders to be
++ *	  shared between expansion ROMs and other resource regions, it's
++ *	  at least dangerous)
++ *
++ *  Our solution:
++ *	(1) Allocate resources for all buses behind PCI-to-PCI bridges.
++ *	    This gives us fixed barriers on where we can allocate.
++ *	(2) Allocate resources for all enabled devices.  If there is
++ *	    a collision, just mark the resource as unallocated. Also
++ *	    disable expansion ROMs during this step.
++ *	(3) Try to allocate resources for disabled devices.  If the
++ *	    resources were assigned correctly, everything goes well,
++ *	    if they weren't, they won't disturb allocation of other
++ *	    resources.
++ *	(4) Assign new addresses to resources which were either
++ *	    not configured at all or misconfigured.  If explicitly
++ *	    requested by the user, configure expansion ROM address
++ *	    as well.
++ */
++
++static void __init pcibios_allocate_bus_resources(struct list_head *bus_list)
++{
++	struct pci_bus *bus;
++	int i;
++	struct resource *res, *pr;
++
++	/* Depth-First Search on bus tree */
++	list_for_each_entry(bus, bus_list, node) {
++		for (i = 0; i < PCI_BUS_NUM_RESOURCES; ++i) {
++			if ((res = bus->resource[i]) == NULL || !res->flags
++			    || res->start > res->end)
++				continue;
++			if (bus->parent == NULL)
++				pr = (res->flags & IORESOURCE_IO)?
++					&ioport_resource : &iomem_resource;
++			else {
++				/* Don't bother with non-root busses when
++				 * re-assigning all resources. We clear the
++				 * resource flags as if they were colliding
++				 * and as such ensure proper re-allocation
++				 * later.
++				 */
++				if (ppc_pci_flags & PPC_PCI_REASSIGN_ALL_RSRC)
++					goto clear_resource;
++				pr = pci_find_parent_resource(bus->self, res);
++				if (pr == res) {
++					/* this happens when the generic PCI
++					 * code (wrongly) decides that this
++					 * bridge is transparent  -- paulus
++					 */
++					continue;
++				}
++			}
++
++			DBG("PCI: %s (bus %d) bridge rsrc %d: %016llx-%016llx "
++			    "[0x%x], parent %p (%s)\n",
++			    bus->self ? pci_name(bus->self) : "PHB",
++			    bus->number, i,
++			    (unsigned long long)res->start,
++			    (unsigned long long)res->end,
++			    (unsigned int)res->flags,
++			    pr, (pr && pr->name) ? pr->name : "nil");
++
++			if (pr && !(pr->flags & IORESOURCE_UNSET)) {
++				if (request_resource(pr, res) == 0)
++					continue;
++				/*
++				 * Must be a conflict with an existing entry.
++				 * Move that entry (or entries) under the
++				 * bridge resource and try again.
++				 */
++				if (reparent_resources(pr, res) == 0)
++					continue;
++			}
++			printk(KERN_WARNING
++			       "PCI: Cannot allocate resource region "
++			       "%d of PCI bridge %d, will remap\n",
++			       i, bus->number);
++clear_resource:
++			res->flags = 0;
++		}
++		pcibios_allocate_bus_resources(&bus->children);
++	}
++}
++
++static inline void __devinit alloc_resource(struct pci_dev *dev, int idx)
++{
++	struct resource *pr, *r = &dev->resource[idx];
++
++	DBG("PCI: Allocating %s: Resource %d: %016llx..%016llx [%x]\n",
++	    pci_name(dev), idx,
++	    (unsigned long long)r->start,
++	    (unsigned long long)r->end,
++	    (unsigned int)r->flags);
++
++	pr = pci_find_parent_resource(dev, r);
++	if (!pr || (pr->flags & IORESOURCE_UNSET) ||
++	    request_resource(pr, r) < 0) {
++		printk(KERN_WARNING "PCI: Cannot allocate resource region %d"
++		       " of device %s, will remap\n", idx, pci_name(dev));
++		if (pr)
++			DBG("PCI:  parent is %p: %016llx-%016llx [%x]\n", pr,
++			    (unsigned long long)pr->start,
++			    (unsigned long long)pr->end,
++			    (unsigned int)pr->flags);
++		/* We'll assign a new address later */
++		r->flags |= IORESOURCE_UNSET;
++		r->end -= r->start;
++		r->start = 0;
++	}
++}
++
++static void __init pcibios_allocate_resources(int pass)
++{
++	struct pci_dev *dev = NULL;
++	int idx, disabled;
++	u16 command;
++	struct resource *r;
++
++	for_each_pci_dev(dev) {
++		pci_read_config_word(dev, PCI_COMMAND, &command);
++		for (idx = 0; idx < 6; idx++) {
++			r = &dev->resource[idx];
++			if (r->parent)		/* Already allocated */
++				continue;
++			if (!r->flags || (r->flags & IORESOURCE_UNSET))
++				continue;	/* Not assigned at all */
++			if (r->flags & IORESOURCE_IO)
++				disabled = !(command & PCI_COMMAND_IO);
++			else
++				disabled = !(command & PCI_COMMAND_MEMORY);
++			if (pass == disabled)
++				alloc_resource(dev, idx);
++		}
++		if (pass)
++			continue;
++		r = &dev->resource[PCI_ROM_RESOURCE];
++		if (r->flags & IORESOURCE_ROM_ENABLE) {
++			/* Turn the ROM off, leave the resource region,
++			 * but keep it unregistered.
++			 */
++			u32 reg;
++			DBG("PCI: Switching off ROM of %s\n", pci_name(dev));
++			r->flags &= ~IORESOURCE_ROM_ENABLE;
++			pci_read_config_dword(dev, dev->rom_base_reg, &reg);
++			pci_write_config_dword(dev, dev->rom_base_reg,
++					       reg & ~PCI_ROM_ADDRESS_ENABLE);
++		}
++	}
++}
++
++void __init pcibios_resource_survey(void)
++{
++	/* Allocate and assign resources. If we re-assign everything, then
++	 * we skip the allocate phase
++	 */
++	pcibios_allocate_bus_resources(&pci_root_buses);
++
++	if (!(ppc_pci_flags & PPC_PCI_REASSIGN_ALL_RSRC)) {
++		pcibios_allocate_resources(0);
++		pcibios_allocate_resources(1);
++	}
++
++	if (!(ppc_pci_flags & PPC_PCI_PROBE_ONLY)) {
++		DBG("PCI: Assigning unassigned resouces...\n");
++		pci_assign_unassigned_resources();
++	}
++
++	/* Call machine dependent fixup */
++	if (ppc_md.pcibios_fixup)
++		ppc_md.pcibios_fixup();
++}
++
++#ifdef CONFIG_HOTPLUG
++/* This is used by the pSeries hotplug driver to allocate resource
++ * of newly plugged busses. We can try to consolidate with the
++ * rest of the code later, for now, keep it as-is
++ */
++void __devinit pcibios_claim_one_bus(struct pci_bus *bus)
++{
++	struct pci_dev *dev;
++	struct pci_bus *child_bus;
++
++	list_for_each_entry(dev, &bus->devices, bus_list) {
++		int i;
++
++		for (i = 0; i < PCI_NUM_RESOURCES; i++) {
++			struct resource *r = &dev->resource[i];
++
++			if (r->parent || !r->start || !r->flags)
++				continue;
++			pci_claim_resource(dev, i);
++		}
++	}
++
++	list_for_each_entry(child_bus, &bus->children, node)
++		pcibios_claim_one_bus(child_bus);
++}
++EXPORT_SYMBOL_GPL(pcibios_claim_one_bus);
++#endif /* CONFIG_HOTPLUG */
+Index: linux-2.6.18/arch/powerpc/kernel/pci_32.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_32.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_32.c
+@@ -35,13 +35,9 @@ unsigned long isa_io_base     = 0;
+ unsigned long pci_dram_offset = 0;
+ int pcibios_assign_bus_offset = 1;
+ 
+-/* Default PCI flags is 0 */
+-unsigned int ppc_pci_flags;
+-
+ void pcibios_make_OF_bus_map(void);
+ 
+ static void fixup_broken_pcnet32(struct pci_dev* dev);
+-static int reparent_resources(struct resource *parent, struct resource *res);
+ static void fixup_cpc710_pci64(struct pci_dev* dev);
+ #ifdef CONFIG_PPC_OF
+ static u8* pci_to_OF_bus_map;
+@@ -117,170 +113,6 @@ static void __devinit early_fsl_pcie(str
+ DECLARE_PCI_FIXUP_EARLY(0x1957, 0x0012, early_fsl_pcie);
+ DECLARE_PCI_FIXUP_EARLY(0x1957, 0x0013, early_fsl_pcie);
+ 
+-static int skip_isa_ioresource_align(struct pci_dev *dev)
+-{
+-	if ((ppc_pci_flags & PPC_PCI_CAN_SKIP_ISA_ALIGN) &&
+-	    !(dev->bus->bridge_ctl & PCI_BRIDGE_CTL_ISA))
+-		return 1;
+-	return 0;
+-}
+-
+-/*
+- * We need to avoid collisions with `mirrored' VGA ports
+- * and other strange ISA hardware, so we always want the
+- * addresses to be allocated in the 0x000-0x0ff region
+- * modulo 0x400.
+- *
+- * Why? Because some silly external IO cards only decode
+- * the low 10 bits of the IO address. The 0x00-0xff region
+- * is reserved for motherboard devices that decode all 16
+- * bits, so it's ok to allocate at, say, 0x2800-0x28ff,
+- * but we want to try to avoid allocating at 0x2900-0x2bff
+- * which might have be mirrored at 0x0100-0x03ff..
+- */
+-void pcibios_align_resource(void *data, struct resource *res,
+-				resource_size_t size, resource_size_t align)
+-{
+-	struct pci_dev *dev = data;
+-
+-	if (res->flags & IORESOURCE_IO) {
+-		resource_size_t start = res->start;
+-
+-		if (skip_isa_ioresource_align(dev))
+-			return;
+-		if (start & 0x300) {
+-			start = (start + 0x3ff) & ~0x3ff;
+-			res->start = start;
+-		}
+-	}
+-}
+-EXPORT_SYMBOL(pcibios_align_resource);
+-
+-/*
+- *  Handle resources of PCI devices.  If the world were perfect, we could
+- *  just allocate all the resource regions and do nothing more.  It isn't.
+- *  On the other hand, we cannot just re-allocate all devices, as it would
+- *  require us to know lots of host bridge internals.  So we attempt to
+- *  keep as much of the original configuration as possible, but tweak it
+- *  when it's found to be wrong.
+- *
+- *  Known BIOS problems we have to work around:
+- *	- I/O or memory regions not configured
+- *	- regions configured, but not enabled in the command register
+- *	- bogus I/O addresses above 64K used
+- *	- expansion ROMs left enabled (this may sound harmless, but given
+- *	  the fact the PCI specs explicitly allow address decoders to be
+- *	  shared between expansion ROMs and other resource regions, it's
+- *	  at least dangerous)
+- *
+- *  Our solution:
+- *	(1) Allocate resources for all buses behind PCI-to-PCI bridges.
+- *	    This gives us fixed barriers on where we can allocate.
+- *	(2) Allocate resources for all enabled devices.  If there is
+- *	    a collision, just mark the resource as unallocated. Also
+- *	    disable expansion ROMs during this step.
+- *	(3) Try to allocate resources for disabled devices.  If the
+- *	    resources were assigned correctly, everything goes well,
+- *	    if they weren't, they won't disturb allocation of other
+- *	    resources.
+- *	(4) Assign new addresses to resources which were either
+- *	    not configured at all or misconfigured.  If explicitly
+- *	    requested by the user, configure expansion ROM address
+- *	    as well.
+- */
+-
+-static void __init
+-pcibios_allocate_bus_resources(struct list_head *bus_list)
+-{
+-	struct pci_bus *bus;
+-	int i;
+-	struct resource *res, *pr;
+-
+-	/* Depth-First Search on bus tree */
+-	list_for_each_entry(bus, bus_list, node) {
+-		for (i = 0; i < 4; ++i) {
+-			if ((res = bus->resource[i]) == NULL || !res->flags
+-			    || res->start > res->end)
+-				continue;
+-			if (bus->parent == NULL)
+-				pr = (res->flags & IORESOURCE_IO)?
+-					&ioport_resource : &iomem_resource;
+-			else {
+-				/* Don't bother with non-root busses when
+-				 * re-assigning all resources.
+-				 */
+-				if (ppc_pci_flags & PPC_PCI_REASSIGN_ALL_RSRC)
+-					continue;
+-				pr = pci_find_parent_resource(bus->self, res);
+-				if (pr == res) {
+-					/* this happens when the generic PCI
+-					 * code (wrongly) decides that this
+-					 * bridge is transparent  -- paulus
+-					 */
+-					continue;
+-				}
+-			}
+-
+-			DBG("PCI: dev %s (bus 0x%02x) bridge rsrc %d: %016llx..%016llx "
+-			    "(f:0x%08lx), parent %p\n",
+-			    bus->self ? pci_name(bus->self) : "PHB", bus->number, i,
+-			    (u64)res->start, (u64)res->end, res->flags, pr);
+-
+-			if (pr && !(pr->flags & IORESOURCE_UNSET)) {
+-				if (request_resource(pr, res) == 0)
+-					continue;
+-				/*
+-				 * Must be a conflict with an existing entry.
+-				 * Move that entry (or entries) under the
+-				 * bridge resource and try again.
+-				 */
+-				if (reparent_resources(pr, res) == 0)
+-					continue;
+-			}
+-			printk(KERN_WARNING
+-			       "PCI: Cannot allocate resource region "
+-			       "%d of PCI bridge %d, will remap\n",
+-			       i, bus->number);
+-			res->flags |= IORESOURCE_UNSET;
+-		}
+-		pcibios_allocate_bus_resources(&bus->children);
+-	}
+-}
+-
+-/*
+- * Reparent resource children of pr that conflict with res
+- * under res, and make res replace those children.
+- */
+-static int __init
+-reparent_resources(struct resource *parent, struct resource *res)
+-{
+-	struct resource *p, **pp;
+-	struct resource **firstpp = NULL;
+-
+-	for (pp = &parent->child; (p = *pp) != NULL; pp = &p->sibling) {
+-		if (p->end < res->start)
+-			continue;
+-		if (res->end < p->start)
+-			break;
+-		if (p->start < res->start || p->end > res->end)
+-			return -1;	/* not completely contained */
+-		if (firstpp == NULL)
+-			firstpp = pp;
+-	}
+-	if (firstpp == NULL)
+-		return -1;	/* didn't find any conflicting entries? */
+-	res->parent = parent;
+-	res->child = *firstpp;
+-	res->sibling = *pp;
+-	*firstpp = res;
+-	*pp = NULL;
+-	for (p = res->child; p != NULL; p = p->sibling) {
+-		p->parent = res;
+-		DBG(KERN_INFO "PCI: reparented %s [%llx..%llx] under %s\n",
+-		    p->name, (u64)p->start, (u64)p->end, res->name);
+-	}
+-	return 0;
+-}
+ 
+ void __init
+ update_bridge_resource(struct pci_dev *dev, struct resource *res)
+@@ -338,63 +170,6 @@ update_bridge_resource(struct pci_dev *d
+ 	pci_write_config_word(dev, PCI_COMMAND, cmd);
+ }
+ 
+-static inline void alloc_resource(struct pci_dev *dev, int idx)
+-{
+-	struct resource *pr, *r = &dev->resource[idx];
+-
+-	DBG("PCI: Allocating %s: Resource %d: %016llx..%016llx (f=%lx)\n",
+-	    pci_name(dev), idx, (u64)r->start, (u64)r->end, r->flags);
+-	pr = pci_find_parent_resource(dev, r);
+-	if (!pr || (pr->flags & IORESOURCE_UNSET) ||  request_resource(pr, r) < 0) {
+-		printk(KERN_WARNING "PCI: Cannot allocate resource region %d"
+-		       " of device %s, will remap\n", idx, pci_name(dev));
+-		if (pr)
+-			DBG("PCI:  parent is %p: %016llx-%016llx (f=%lx)\n",
+-			    pr, (u64)pr->start, (u64)pr->end, pr->flags);
+-		/* We'll assign a new address later */
+-		r->flags |= IORESOURCE_UNSET;
+-		r->end -= r->start;
+-		r->start = 0;
+-	}
+-}
+-
+-static void __init
+-pcibios_allocate_resources(int pass)
+-{
+-	struct pci_dev *dev = NULL;
+-	int idx, disabled;
+-	u16 command;
+-	struct resource *r;
+-
+-	for_each_pci_dev(dev) {
+-		pci_read_config_word(dev, PCI_COMMAND, &command);
+-		for (idx = 0; idx < 6; idx++) {
+-			r = &dev->resource[idx];
+-			if (r->parent)		/* Already allocated */
+-				continue;
+-			if (!r->flags || (r->flags & IORESOURCE_UNSET))
+-				continue;	/* Not assigned at all */
+-			if (r->flags & IORESOURCE_IO)
+-				disabled = !(command & PCI_COMMAND_IO);
+-			else
+-				disabled = !(command & PCI_COMMAND_MEMORY);
+-			if (pass == disabled)
+-				alloc_resource(dev, idx);
+-		}
+-		if (pass)
+-			continue;
+-		r = &dev->resource[PCI_ROM_RESOURCE];
+-		if (r->flags & IORESOURCE_ROM_ENABLE) {
+-			/* Turn the ROM off, leave the resource region, but keep it unregistered. */
+-			u32 reg;
+-			DBG("PCI: Switching off ROM of %s\n", pci_name(dev));
+-			r->flags &= ~IORESOURCE_ROM_ENABLE;
+-			pci_read_config_dword(dev, dev->rom_base_reg, &reg);
+-			pci_write_config_dword(dev, dev->rom_base_reg,
+-					       reg & ~PCI_ROM_ADDRESS_ENABLE);
+-		}
+-	}
+-}
+ 
+ #ifdef CONFIG_PPC_OF
+ /*
+@@ -660,8 +435,7 @@ void pcibios_make_OF_bus_map(void)
+ }
+ #endif /* CONFIG_PPC_OF */
+ 
+-static int __init
+-pcibios_init(void)
++static int __init pcibios_init(void)
+ {
+ 	struct pci_controller *hose, *tmp;
+ 	struct pci_bus *bus;
+@@ -694,22 +468,8 @@ pcibios_init(void)
+ 	if (pci_assign_all_buses && have_of)
+ 		pcibios_make_OF_bus_map();
+ 
+-	/* Call machine dependent fixup */
+-	if (ppc_md.pcibios_fixup)
+-		ppc_md.pcibios_fixup();
+-
+-	/* Allocate and assign resources. If we re-assign everything, then
+-	 * we skip the allocate phase
+-	 */
+-	pcibios_allocate_bus_resources(&pci_root_buses);
+-	if (!(ppc_pci_flags & PPC_PCI_REASSIGN_ALL_RSRC)) {
+-		pcibios_allocate_resources(0);
+-		pcibios_allocate_resources(1);
+-	}
+-	if (!(ppc_pci_flags & PPC_PCI_PROBE_ONLY)) {
+-		DBG("PCI: Assigning unassigned resouces...\n");
+-		pci_assign_unassigned_resources();
+-	}
++	/* Call common code to handle resource allocation */
++	pcibios_resource_survey();
+ 
+ 	/* Call machine dependent post-init code */
+ 	if (ppc_md.pcibios_after_init)
+Index: linux-2.6.18/arch/powerpc/kernel/pci_64.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_64.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_64.c
+@@ -65,85 +65,6 @@ static void fixup_broken_pcnet32(struct 
+ DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_TRIDENT, PCI_ANY_ID, fixup_broken_pcnet32);
+ 
+ 
+-/*
+- * We need to avoid collisions with `mirrored' VGA ports
+- * and other strange ISA hardware, so we always want the
+- * addresses to be allocated in the 0x000-0x0ff region
+- * modulo 0x400.
+- *
+- * Why? Because some silly external IO cards only decode
+- * the low 10 bits of the IO address. The 0x00-0xff region
+- * is reserved for motherboard devices that decode all 16
+- * bits, so it's ok to allocate at, say, 0x2800-0x28ff,
+- * but we want to try to avoid allocating at 0x2900-0x2bff
+- * which might have be mirrored at 0x0100-0x03ff..
+- */
+-void pcibios_align_resource(void *data, struct resource *res,
+-			    resource_size_t size, resource_size_t align)
+-{
+-	struct pci_dev *dev = data;
+-	struct pci_controller *hose = pci_bus_to_host(dev->bus);
+-	resource_size_t start = res->start;
+-	unsigned long alignto;
+-
+-	if (res->flags & IORESOURCE_IO) {
+-	        unsigned long offset = (unsigned long)hose->io_base_virt -
+-					_IO_BASE;
+-		/* Make sure we start at our min on all hoses */
+-		if (start - offset < PCIBIOS_MIN_IO)
+-			start = PCIBIOS_MIN_IO + offset;
+-
+-		/*
+-		 * Put everything into 0x00-0xff region modulo 0x400
+-		 */
+-		if (start & 0x300)
+-			start = (start + 0x3ff) & ~0x3ff;
+-
+-	} else if (res->flags & IORESOURCE_MEM) {
+-		/* Make sure we start at our min on all hoses */
+-		if (start - hose->pci_mem_offset < PCIBIOS_MIN_MEM)
+-			start = PCIBIOS_MIN_MEM + hose->pci_mem_offset;
+-
+-		/* Align to multiple of size of minimum base.  */
+-		alignto = max(0x1000UL, align);
+-		start = ALIGN(start, alignto);
+-	}
+-
+-	res->start = start;
+-}
+-
+-void __devinit pcibios_claim_one_bus(struct pci_bus *b)
+-{
+-	struct pci_dev *dev;
+-	struct pci_bus *child_bus;
+-
+-	list_for_each_entry(dev, &b->devices, bus_list) {
+-		int i;
+-
+-		for (i = 0; i < PCI_NUM_RESOURCES; i++) {
+-			struct resource *r = &dev->resource[i];
+-
+-			if (r->parent || !r->start || !r->flags)
+-				continue;
+-			pci_claim_resource(dev, i);
+-		}
+-	}
+-
+-	list_for_each_entry(child_bus, &b->children, node)
+-		pcibios_claim_one_bus(child_bus);
+-}
+-#ifdef CONFIG_HOTPLUG
+-EXPORT_SYMBOL_GPL(pcibios_claim_one_bus);
+-#endif
+-
+-static void __init pcibios_claim_of_setup(void)
+-{
+-	struct pci_bus *b;
+-
+-	list_for_each_entry(b, &pci_root_buses, node)
+-		pcibios_claim_one_bus(b);
+-}
+-
+ static u32 get_int_prop(struct device_node *np, const char *name, u32 def)
+ {
+ 	const u32 *prop;
+@@ -413,6 +334,7 @@ void __devinit scan_phb(struct pci_contr
+ 
+ 	DBG("Scanning PHB %s\n", node ? node->full_name : "<NO NAME>");
+ 
++	/* Create an empty bus for the toplevel */
+ 	bus = pci_create_bus(hose->parent, hose->first_busno, hose->ops, node);
+ 	if (bus == NULL) {
+ 		printk(KERN_ERR "Failed to create bus for PCI domain %04x\n",
+@@ -422,26 +344,16 @@ void __devinit scan_phb(struct pci_contr
+ 	bus->secondary = hose->first_busno;
+ 	hose->bus = bus;
+ 
++	/* Get some IO space for the new PHB */
+ 	pcibios_map_io_space(bus);
+ 
++	/* Wire up PHB bus resources */
+ 	bus->resource[0] = res = &hose->io_resource;
+-	if (res->flags && request_resource(&ioport_resource, res)) {
+-		printk(KERN_ERR "Failed to request PCI IO region "
+-		       "on PCI domain %04x\n", hose->global_number);
+-		DBG("res->start = 0x%016lx, res->end = 0x%016lx\n",
+-		    res->start, res->end);
+-	}
+-
+-	for (i = 0; i < 3; ++i) {
+-		res = &hose->mem_resources[i];
+-		bus->resource[i+1] = res;
+-		if (res->flags && request_resource(&iomem_resource, res))
+-			printk(KERN_ERR "Failed to request PCI memory region "
+-			       "on PCI domain %04x\n", hose->global_number);
+-	}
++	for (i = 0; i < 3; ++i)
++		bus->resource[i+1] = &hose->mem_resources[i];
+ 
++	/* Get probe mode and perform scan */
+ 	mode = PCI_PROBE_NORMAL;
+-
+ 	if (node && ppc_md.pci_probe_mode)
+ 		mode = ppc_md.pci_probe_mode(bus);
+ 	DBG("    probe mode: %d\n", mode);
+@@ -458,12 +370,15 @@ static int __init pcibios_init(void)
+ {
+ 	struct pci_controller *hose, *tmp;
+ 
++	printk(KERN_INFO "PCI: Probing PCI hardware\n");
++
+ 	/* For now, override phys_mem_access_prot. If we need it,
+ 	 * later, we may move that initialization to each ppc_md
+ 	 */
+ 	ppc_md.phys_mem_access_prot = pci_phys_mem_access_prot;
+ 
+-	printk(KERN_DEBUG "PCI: Probing PCI hardware\n");
++	if (pci_probe_only)
++		ppc_pci_flags |= PPC_PCI_PROBE_ONLY;
+ 
+ 	/* Scan all of the recorded PCI controllers.  */
+ 	list_for_each_entry_safe(hose, tmp, &hose_list, list_node) {
+@@ -471,17 +386,8 @@ static int __init pcibios_init(void)
+ 		pci_bus_add_devices(hose->bus);
+ 	}
+ 
+-	if (pci_probe_only)
+-		pcibios_claim_of_setup();
+-	else
+-		/* FIXME: `else' will be removed when
+-		   pci_assign_unassigned_resources() is able to work
+-		   correctly with [partially] allocated PCI tree. */
+-		pci_assign_unassigned_resources();
+-
+-	/* Call machine dependent final fixup */
+-	if (ppc_md.pcibios_fixup)
+-		ppc_md.pcibios_fixup();
++	/* Call common code to handle resource allocation */
++	pcibios_resource_survey();
+ 
+ 	printk(KERN_DEBUG "PCI: Probing PCI hardware done\n");
+ 
+Index: linux-2.6.18/arch/powerpc/platforms/powermac/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/powermac/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/powermac/pci.c
+@@ -991,9 +991,8 @@ void __init pmac_pci_init(void)
+ 	struct device_node *np, *root;
+ 	struct device_node *ht = NULL;
+ 
+-#ifdef CONFIG_PPC32
+ 	ppc_pci_flags = PPC_PCI_CAN_SKIP_ISA_ALIGN;
+-#endif
++
+ 	root = of_find_node_by_path("/");
+ 	if (root == NULL) {
+ 		printk(KERN_CRIT "pmac_pci_init: can't find root "
+Index: linux-2.6.18/include/asm-powerpc/pci.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pci.h
++++ linux-2.6.18/include/asm-powerpc/pci.h
+@@ -36,14 +36,10 @@ struct pci_dev;
+ 
+ /*
+  * Set this to 1 if you want the kernel to re-assign all PCI
+- * bus numbers
++ * bus numbers (don't do that on ppc64 yet !)
+  */
+-#ifdef CONFIG_PPC64
+-#define pcibios_assign_all_busses()	0
+-#else
+ #define pcibios_assign_all_busses()    	(ppc_pci_flags & \
+ 					 PPC_PCI_REASSIGN_ALL_BUS)
+-#endif
+ #define pcibios_scan_all_fns(a, b)	0
+ 
+ static inline void pcibios_set_master(struct pci_dev *dev)
+@@ -216,6 +212,8 @@ static inline struct resource *pcibios_s
+ 
+ extern void pcibios_claim_one_bus(struct pci_bus *b);
+ 
++extern void pcibios_resource_survey(void);
++
+ extern struct pci_controller *init_phb_dynamic(struct device_node *dn);
+ 
+ extern struct pci_dev *of_create_pci_dev(struct device_node *node,
+Index: linux-2.6.18/mvl_patches/pro50-0856.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0856.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(856);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

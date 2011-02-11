@@ -1,0 +1,682 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Pass_the_pci_controller_into_pci_exclude_device
+# Date: Thu Sep  6 08:26:36 2007
+# MR:23289
+# Disposition: backport from
+# git://git.kernel.org/pub/scm/linux/kernel/git/galak/powerpc.git
+# 
+# [POWERPC] Pass the pci_controller into pci_exclude_device
+# 
+# There are times that we need to know which controller we are on to decide
+# how to exclude devices properly.  We now pass the pci_controller that we
+# are going to use down to the pci_exclude_device function. This will
+# greatly simplify being able to exclude the PHBs in multiple controller
+# setups.
+# 
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+# commit dc3a201198aab41ec8432d8d3fd545c576c6fd95
+# tree 18903c4c2296b975655834443c955d2c7c888756
+# parent e467e8ab992a63b9065d9fe7265bf8dc8a6694dd
+# author Kumar Gala <galak@kernel.crashing.org> Fri, 22 Jun 2007 00:23:57 -0500
+# committer Kumar Gala <galak@kernel.crashing.org> Wed, 27 Jun 2007 01:38:38 -0500
+# 
+#  arch/powerpc/platforms/82xx/mpc82xx_ads.c         |    3 
+#  arch/powerpc/platforms/83xx/mpc83xx.h             |    4 
+#  arch/powerpc/platforms/83xx/pci.c                 |    2 
+#  arch/powerpc/platforms/85xx/mpc85xx_ads.c         |    3 
+#  arch/powerpc/platforms/85xx/mpc85xx_cds.c         |    3 
+#  arch/powerpc/platforms/86xx/mpc86xx.h             |    3 
+#  arch/powerpc/platforms/86xx/pci.c                 |    2 
+#  arch/powerpc/platforms/embedded6xx/mpc7448_hpc2.c |    3 
+#  arch/powerpc/sysdev/Makefile                      |    2 
+#  arch/powerpc/sysdev/fsl_pcie.c                    |    4 
+#  arch/powerpc/sysdev/indirect_pci.c                |    8 -
+#  arch/powerpc/sysdev/tsi108_pci.c                  |    6 
+#  arch/ppc/syslib/Makefile                          |    1 
+#  arch/ppc/syslib/indirect_pci.c                    |  134 ++++++++++++++++++++++
+#  include/asm-powerpc/machdep.h                     |    2 
+#  15 files changed, 162 insertions(+), 18 deletions(-)
+# 
+
+PATCHNUM=145
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR:23289
+Disposition: backport from
+git://git.kernel.org/pub/scm/linux/kernel/git/galak/powerpc.git
+
+[POWERPC] Pass the pci_controller into pci_exclude_device
+
+There are times that we need to know which controller we are on to decide
+how to exclude devices properly.  We now pass the pci_controller that we
+are going to use down to the pci_exclude_device function. This will
+greatly simplify being able to exclude the PHBs in multiple controller
+setups.
+
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+commit dc3a201198aab41ec8432d8d3fd545c576c6fd95
+tree 18903c4c2296b975655834443c955d2c7c888756
+parent e467e8ab992a63b9065d9fe7265bf8dc8a6694dd
+author Kumar Gala <galak@kernel.crashing.org> Fri, 22 Jun 2007 00:23:57 -0500
+committer Kumar Gala <galak@kernel.crashing.org> Wed, 27 Jun 2007 01:38:38 -0500
+
+ arch/powerpc/platforms/82xx/mpc82xx_ads.c         |    3 
+ arch/powerpc/platforms/83xx/mpc83xx.h             |    4 
+ arch/powerpc/platforms/83xx/pci.c                 |    2 
+ arch/powerpc/platforms/85xx/mpc85xx_ads.c         |    3 
+ arch/powerpc/platforms/85xx/mpc85xx_cds.c         |    3 
+ arch/powerpc/platforms/86xx/mpc86xx.h             |    3 
+ arch/powerpc/platforms/86xx/pci.c                 |    2 
+ arch/powerpc/platforms/embedded6xx/mpc7448_hpc2.c |    3 
+ arch/powerpc/sysdev/Makefile                      |    2 
+ arch/powerpc/sysdev/fsl_pcie.c                    |    4 
+ arch/powerpc/sysdev/indirect_pci.c                |    8 -
+ arch/powerpc/sysdev/tsi108_pci.c                  |    6 
+ arch/ppc/syslib/Makefile                          |    1 
+ arch/ppc/syslib/indirect_pci.c                    |  134 ++++++++++++++++++++++
+ include/asm-powerpc/machdep.h                     |    2 
+ mvl_patches/pro50-0145.c                          |   16 ++
+ 16 files changed, 178 insertions(+), 18 deletions(-)
+
+diff --git a/arch/powerpc/platforms/52xx/mpc52xx_pci.c b/arch/powerpc/platforms/52xx/mpc52xx_pci.c
+index 57ca2fe..69a0421 100644
+
+Index: linux-2.6.18/arch/powerpc/platforms/82xx/mpc82xx_ads.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/82xx/mpc82xx_ads.c
++++ linux-2.6.18/arch/powerpc/platforms/82xx/mpc82xx_ads.c
+@@ -510,7 +510,8 @@ void m82xx_pci_init_irq(void)
+ 	return;
+ }
+ 
+-static int m82xx_pci_exclude_device(u_char bus, u_char devfn)
++static int m82xx_pci_exclude_device(struct pci_controller *hose,
++				    u_char bus, u_char devfn)
+ {
+ 	if (bus == 0 && PCI_SLOT(devfn) == 0)
+ 		return PCIBIOS_DEVICE_NOT_FOUND;
+Index: linux-2.6.18/arch/powerpc/platforms/83xx/mpc83xx.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/83xx/mpc83xx.h
++++ linux-2.6.18/arch/powerpc/platforms/83xx/mpc83xx.h
+@@ -3,6 +3,7 @@
+ 
+ #include <linux/init.h>
+ #include <linux/device.h>
++#include <asm/pci-bridge.h>
+ 
+ /*
+  * Declaration for the various functions exported by the
+@@ -10,7 +11,8 @@
+  */
+ 
+ extern int add_bridge(struct device_node *dev);
+-extern int mpc83xx_exclude_device(u_char bus, u_char devfn);
++extern int mpc83xx_exclude_device(struct pci_controller *hose,
++				  u_char bus, u_char devfn);
+ extern void mpc83xx_restart(char *cmd);
+ extern long mpc83xx_time_init(void);
+ 
+Index: linux-2.6.18/arch/powerpc/platforms/83xx/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/83xx/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/83xx/pci.c
+@@ -35,7 +35,7 @@
+ 
+ int mpc83xx_pci2_busno;
+ 
+-int mpc83xx_exclude_device(u_char bus, u_char devfn)
++int mpc83xx_exclude_device(struct pci_controller *hose, u_char bus, u_char devfn)
+ {
+ 	if (bus == 0 && PCI_SLOT(devfn) == 0)
+ 		return PCIBIOS_DEVICE_NOT_FOUND;
+Index: linux-2.6.18/arch/powerpc/platforms/85xx/mpc85xx_ads.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/85xx/mpc85xx_ads.c
++++ linux-2.6.18/arch/powerpc/platforms/85xx/mpc85xx_ads.c
+@@ -44,7 +44,8 @@ unsigned long isa_mem_base = 0;
+ #endif
+ 
+ #ifdef CONFIG_PCI
+-static int mpc85xx_exclude_device(u_char bus, u_char devfn)
++static int mpc85xx_exclude_device(struct pci_controller *hose,
++				   u_char bus, u_char devfn)
+ {
+ 	if (bus == 0 && PCI_SLOT(devfn) == 0)
+ 		return PCIBIOS_DEVICE_NOT_FOUND;
+Index: linux-2.6.18/arch/powerpc/platforms/85xx/mpc85xx_cds.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/85xx/mpc85xx_cds.c
++++ linux-2.6.18/arch/powerpc/platforms/85xx/mpc85xx_cds.c
+@@ -83,7 +83,8 @@ static void mpc85xx_cds_restart(char *cm
+ 	mpc85xx_restart(NULL);
+ }
+ 
+-static int mpc85xx_exclude_device(u_char bus, u_char devfn)
++static int mpc85xx_exclude_device(struct pci_controller *hose,
++				  u_char bus, u_char devfn)
+ {
+ 	return PCIBIOS_SUCCESSFUL;
+ }
+Index: linux-2.6.18/arch/powerpc/platforms/86xx/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/86xx/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/86xx/pci.c
+@@ -140,7 +140,7 @@ mpc86xx_setup_pcie(struct pci_controller
+ 	early_write_config_dword(hose, 0, 0, PCI_PRIMARY_BUS, temps);
+ }
+ 
+-int mpc86xx_exclude_device(u_char bus, u_char devfn)
++int mpc86xx_exclude_device(struct pci_controller *hose, u_char bus, u_char devfn)
+ {
+ 	if (bus == 0 && PCI_SLOT(devfn) == 0)
+ 		return PCIBIOS_DEVICE_NOT_FOUND;
+Index: linux-2.6.18/arch/powerpc/platforms/embedded6xx/mpc7448_hpc2.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/embedded6xx/mpc7448_hpc2.c
++++ linux-2.6.18/arch/powerpc/platforms/embedded6xx/mpc7448_hpc2.c
+@@ -65,7 +65,8 @@ extern void tsi108_pci_int_init(void);
+ extern void tsi108_irq_cascade(unsigned int irq, struct irq_desc *desc,
+ 			    struct pt_regs *regs);
+ 
+-int mpc7448_hpc2_exclude_device(u_char bus, u_char devfn)
++int mpc7448_hpc2_exclude_device(struct pci_controller *hose,
++				u_char bus, u_char devfn)
+ {
+ 	if (bus == 0 && PCI_SLOT(devfn) == 0)
+ 		return PCIBIOS_DEVICE_NOT_FOUND;
+Index: linux-2.6.18/arch/powerpc/sysdev/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/Makefile
++++ linux-2.6.18/arch/powerpc/sysdev/Makefile
+@@ -3,7 +3,6 @@ EXTRA_CFLAGS			+= -mno-minimal-toc
+ endif
+ 
+ obj-$(CONFIG_MPIC)		+= mpic.o
+-obj-$(CONFIG_PPC_INDIRECT_PCI)	+= indirect_pci.o
+ obj-$(CONFIG_PPC_MPC106)	+= grackle.o
+ obj-$(CONFIG_PPC_DCR)		+= dcr.o
+ obj-$(CONFIG_PPC_DCR_NATIVE)	+= dcr-low.o
+@@ -16,6 +15,7 @@ obj-$(CONFIG_QUICC_ENGINE)	+= qe_lib/
+ obj-$(CONFIG_MTD)		+= rom.o
+ 
+ ifeq ($(CONFIG_PPC_MERGE),y)
++obj-$(CONFIG_PPC_INDIRECT_PCI)	+= indirect_pci.o
+ obj-$(CONFIG_PPC_I8259)		+= i8259.o
+ obj-$(CONFIG_PPC_83xx)		+= ipic.o
+ endif
+Index: linux-2.6.18/arch/powerpc/sysdev/fsl_pcie.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/fsl_pcie.c
++++ linux-2.6.18/arch/powerpc/sysdev/fsl_pcie.c
+@@ -42,7 +42,7 @@ indirect_read_config_pcie(struct pci_bus
+ 	u32 link_training_stat;
+ 
+ 	if (ppc_md.pci_exclude_device)
+-		if (ppc_md.pci_exclude_device(bus->number, devfn))
++		if (ppc_md.pci_exclude_device(hose, bus->number, devfn))
+ 			return PCIBIOS_DEVICE_NOT_FOUND;
+ 
+ 	/* Possible artifact of CDCpp50937 needs further investigation */
+@@ -93,7 +93,7 @@ indirect_write_config_pcie(struct pci_bu
+ 	u32 link_training_stat;
+ 
+ 	if (ppc_md.pci_exclude_device)
+-		if (ppc_md.pci_exclude_device(bus->number, devfn))
++		if (ppc_md.pci_exclude_device(hose, bus->number, devfn))
+ 			return PCIBIOS_DEVICE_NOT_FOUND;
+ 
+ 	/* Possible artifact of CDCpp50937 needs further investigation */
+Index: linux-2.6.18/arch/powerpc/sysdev/indirect_pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/indirect_pci.c
++++ linux-2.6.18/arch/powerpc/sysdev/indirect_pci.c
+@@ -35,14 +35,14 @@ indirect_read_config(struct pci_bus *bus
+ 	u8 cfg_type = 0;
+ 
+ 	if (ppc_md.pci_exclude_device)
+-		if (ppc_md.pci_exclude_device(bus->number, devfn))
++		if (ppc_md.pci_exclude_device(hose, bus->number, devfn))
+ 			return PCIBIOS_DEVICE_NOT_FOUND;
+ 	
+ 	if (hose->set_cfg_type)
+ 		if (bus->number != hose->first_busno)
+ 			cfg_type = 1;
+ 
+-	PCI_CFG_OUT(hose->cfg_addr, 					 
++	PCI_CFG_OUT(hose->cfg_addr,
+ 		 (0x80000000 | ((bus->number - hose->bus_offset) << 16)
+ 		  | (devfn << 8) | ((offset & 0xfc) | cfg_type)));
+ 
+@@ -74,14 +74,14 @@ indirect_write_config(struct pci_bus *bu
+ 	u8 cfg_type = 0;
+ 
+ 	if (ppc_md.pci_exclude_device)
+-		if (ppc_md.pci_exclude_device(bus->number, devfn))
++		if (ppc_md.pci_exclude_device(hose, bus->number, devfn))
+ 			return PCIBIOS_DEVICE_NOT_FOUND;
+ 
+ 	if (hose->set_cfg_type)
+ 		if (bus->number != hose->first_busno)
+ 			cfg_type = 1;
+ 
+-	PCI_CFG_OUT(hose->cfg_addr, 					 
++	PCI_CFG_OUT(hose->cfg_addr,
+ 		 (0x80000000 | ((bus->number - hose->bus_offset) << 16)
+ 		  | (devfn << 8) | ((offset & 0xfc) | cfg_type)));
+ 
+Index: linux-2.6.18/arch/powerpc/sysdev/tsi108_pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/tsi108_pci.c
++++ linux-2.6.18/arch/powerpc/sysdev/tsi108_pci.c
+@@ -58,9 +58,10 @@ tsi108_direct_write_config(struct pci_bu
+ 			   int offset, int len, u32 val)
+ {
+ 	volatile unsigned char *cfg_addr;
++	struct pci_controller *hose = bus->sysdata;
+ 
+ 	if (ppc_md.pci_exclude_device)
+-		if (ppc_md.pci_exclude_device(bus->number, devfunc))
++		if (ppc_md.pci_exclude_device(hose, bus->number, devfunc))
+ 			return PCIBIOS_DEVICE_NOT_FOUND;
+ 
+ 	cfg_addr = (unsigned char *)(tsi_mk_config_addr(bus->number,
+@@ -143,10 +144,11 @@ tsi108_direct_read_config(struct pci_bus
+ 			  int len, u32 * val)
+ {
+ 	volatile unsigned char *cfg_addr;
++	struct pci_controller *hose = bus->sysdata;
+ 	u32 temp;
+ 
+ 	if (ppc_md.pci_exclude_device)
+-		if (ppc_md.pci_exclude_device(bus->number, devfn))
++		if (ppc_md.pci_exclude_device(hose, bus->number, devfn))
+ 			return PCIBIOS_DEVICE_NOT_FOUND;
+ 
+ 	cfg_addr = (unsigned char *)(tsi_mk_config_addr(bus->number,
+Index: linux-2.6.18/arch/ppc/syslib/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/ppc/syslib/Makefile
++++ linux-2.6.18/arch/ppc/syslib/Makefile
+@@ -7,6 +7,7 @@ CFLAGS_btext.o          += -fPIC
+ 
+ wdt-mpc8xx-$(CONFIG_8xx_WDT)	+= m8xx_wdt.o
+ 
++obj-$(CONFIG_PPC_INDIRECT_PCI)	+= indirect_pci.o
+ obj-$(CONFIG_PPCBUG_NVRAM)	+= prep_nvram.o
+ obj-$(CONFIG_PPC_OCP)		+= ocp.o
+ obj-$(CONFIG_IBM_OCP)		+= ibm_ocp.o
+Index: linux-2.6.18/arch/ppc/syslib/indirect_pci.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/ppc/syslib/indirect_pci.c
+@@ -0,0 +1,134 @@
++/*
++ * Support for indirect PCI bridges.
++ *
++ * Copyright (C) 1998 Gabriel Paubert.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */
++
++#include <linux/kernel.h>
++#include <linux/pci.h>
++#include <linux/delay.h>
++#include <linux/string.h>
++#include <linux/init.h>
++
++#include <asm/io.h>
++#include <asm/prom.h>
++#include <asm/pci-bridge.h>
++#include <asm/machdep.h>
++
++#ifdef CONFIG_PPC_INDIRECT_PCI_BE
++#define PCI_CFG_OUT out_be32
++#else
++#define PCI_CFG_OUT out_le32
++#endif
++
++static int
++indirect_read_config(struct pci_bus *bus, unsigned int devfn, int offset,
++		     int len, u32 *val)
++{
++	struct pci_controller *hose = bus->sysdata;
++	volatile void __iomem *cfg_data;
++	u8 cfg_type = 0;
++
++	if (ppc_md.pci_exclude_device)
++		if (ppc_md.pci_exclude_device(bus->number, devfn))
++			return PCIBIOS_DEVICE_NOT_FOUND;
++	
++	if (hose->set_cfg_type)
++		if (bus->number != hose->first_busno)
++			cfg_type = 1;
++
++	PCI_CFG_OUT(hose->cfg_addr,
++		 (0x80000000 | ((bus->number - hose->bus_offset) << 16)
++		  | (devfn << 8) | ((offset & 0xfc) | cfg_type)));
++
++	/*
++	 * Note: the caller has already checked that offset is
++	 * suitably aligned and that len is 1, 2 or 4.
++	 */
++	cfg_data = hose->cfg_data + (offset & 3);
++	switch (len) {
++	case 1:
++		*val = in_8(cfg_data);
++		break;
++	case 2:
++		*val = in_le16(cfg_data);
++		break;
++	default:
++		*val = in_le32(cfg_data);
++		break;
++	}
++	return PCIBIOS_SUCCESSFUL;
++}
++
++static int
++indirect_write_config(struct pci_bus *bus, unsigned int devfn, int offset,
++		      int len, u32 val)
++{
++	struct pci_controller *hose = bus->sysdata;
++	volatile void __iomem *cfg_data;
++	u8 cfg_type = 0;
++
++	if (ppc_md.pci_exclude_device)
++		if (ppc_md.pci_exclude_device(bus->number, devfn))
++			return PCIBIOS_DEVICE_NOT_FOUND;
++
++	if (hose->set_cfg_type)
++		if (bus->number != hose->first_busno)
++			cfg_type = 1;
++
++	PCI_CFG_OUT(hose->cfg_addr,
++		 (0x80000000 | ((bus->number - hose->bus_offset) << 16)
++		  | (devfn << 8) | ((offset & 0xfc) | cfg_type)));
++
++	/*
++	 * Note: the caller has already checked that offset is
++	 * suitably aligned and that len is 1, 2 or 4.
++	 */
++	cfg_data = hose->cfg_data + (offset & 3);
++	switch (len) {
++	case 1:
++		out_8(cfg_data, val);
++		break;
++	case 2:
++		out_le16(cfg_data, val);
++		break;
++	default:
++		out_le32(cfg_data, val);
++		break;
++	}
++	return PCIBIOS_SUCCESSFUL;
++}
++
++static struct pci_ops indirect_pci_ops =
++{
++	indirect_read_config,
++	indirect_write_config
++};
++
++void __init
++setup_indirect_pci_nomap(struct pci_controller* hose, void __iomem * cfg_addr,
++	void __iomem * cfg_data)
++{
++	hose->cfg_addr = cfg_addr;
++	hose->cfg_data = cfg_data;
++	hose->ops = &indirect_pci_ops;
++}
++
++void __init
++setup_indirect_pci(struct pci_controller* hose, u32 cfg_addr, u32 cfg_data)
++{
++	unsigned long base = cfg_addr & PAGE_MASK;
++	void __iomem *mbase, *addr, *data;
++
++	mbase = ioremap(base, PAGE_SIZE);
++	addr = mbase + (cfg_addr & ~PAGE_MASK);
++	if ((cfg_data & PAGE_MASK) != base)
++		mbase = ioremap(cfg_data & PAGE_MASK, PAGE_SIZE);
++	data = mbase + (cfg_data & ~PAGE_MASK);
++	setup_indirect_pci_nomap(hose, addr, data);
++}
+Index: linux-2.6.18/include/asm-powerpc/machdep.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/machdep.h
++++ linux-2.6.18/include/asm-powerpc/machdep.h
+@@ -208,7 +208,7 @@ struct machdep_calls {
+ 	int (*pci_map_irq)(struct pci_dev *, unsigned char, unsigned char);
+ 
+ 	/* Called in indirect_* to avoid touching devices */
+-	int (*pci_exclude_device)(unsigned char, unsigned char);
++	int (*pci_exclude_device)(struct pci_controller *, unsigned char, unsigned char);
+ 
+ 	/* Called at then very end of pcibios_init() */
+ 	void (*pcibios_after_init)(void);
+Index: linux-2.6.18/arch/powerpc/platforms/86xx/mpc86xx.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/86xx/mpc86xx.h
++++ linux-2.6.18/arch/powerpc/platforms/86xx/mpc86xx.h
+@@ -17,7 +17,8 @@
+ 
+ extern int add_bridge(struct device_node *dev);
+ 
+-extern int mpc86xx_exclude_device(u_char bus, u_char devfn);
++extern int mpc86xx_exclude_device(struct pci_controller *hose,
++				  u_char bus, u_char devfn);
+ 
+ extern void setup_indirect_pcie(struct pci_controller *hose,
+ 				       u32 cfg_addr, u32 cfg_data);
+Index: linux-2.6.18/mvl_patches/pro50-0145.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0145.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(145);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

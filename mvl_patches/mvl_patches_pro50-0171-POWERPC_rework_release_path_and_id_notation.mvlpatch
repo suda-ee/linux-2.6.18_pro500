@@ -1,0 +1,847 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_rework_release_path_and_id_notation
+# Date: Thu Sep  6 08:27:46 2007
+# Source: MontaVista Software, Inc.
+# MR: 23896
+# Type: Defect Fix
+# Disposition: submitted to linuxppc-dev@ozlabs.org, linux-kernel@vger.kernel.org, netdev@vger.kernel.org
+# Signed-off-by: Vitaly Bordug <vitb@kernel.crashing.org>
+# Description:
+# 	device_bind_driver() error code returning has been fixed.  
+# release() function has been written, so that to free resources 
+# in correct way; the release path is now clean. 
+#  
+# Before the rework, it used to cause 
+#  Device 'fixed@100:1' does not have a release() function, it is broken 
+#  and must be fixed. 
+#  BUG: at drivers/base/core.c:104 device_release() 
+#   
+#  Call Trace:   
+#   [<ffffffff802ec380>] kobject_cleanup+0x53/0x7e 
+#   [<ffffffff802ec3ab>] kobject_release+0x0/0x9 
+#   [<ffffffff802ecf3f>] kref_put+0x74/0x81 
+#   [<ffffffff8035493b>] fixed_mdio_register_device+0x230/0x265 
+#   [<ffffffff80564d31>] fixed_init+0x1f/0x35 
+#   [<ffffffff802071a4>] init+0x147/0x2fb 
+#   [<ffffffff80223b6e>] schedule_tail+0x36/0x92 
+#   [<ffffffff8020a678>] child_rip+0xa/0x12 
+#   [<ffffffff80311714>] acpi_ds_init_one_object+0x0/0x83 
+#   [<ffffffff8020705d>] init+0x0/0x2fb 
+#   [<ffffffff8020a66e>] child_rip+0x0/0x12   
+#  
+#  
+# Also changed the notation of the fixed phy definition on 
+# mdio bus to the form of <speed>+<duplex> to make it able to be used by 
+# gianfar and ucc_geth that define phy_id strictly as "%d:%d" and cleaned up 
+# the whitespace issues.
+# 
+
+PATCHNUM=171
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: MontaVista Software, Inc.
+MR: 23896
+Type: Defect Fix
+Disposition: submitted to linuxppc-dev@ozlabs.org, linux-kernel@vger.kernel.org, netdev@vger.kernel.org
+Signed-off-by: Vitaly Bordug <vitb@kernel.crashing.org>
+Description:
+	device_bind_driver() error code returning has been fixed.  
+release() function has been written, so that to free resources 
+in correct way; the release path is now clean. 
+ 
+Before the rework, it used to cause 
+ Device 'fixed@100:1' does not have a release() function, it is broken 
+ and must be fixed. 
+ BUG: at drivers/base/core.c:104 device_release() 
+  
+ Call Trace:   
+  [<ffffffff802ec380>] kobject_cleanup+0x53/0x7e 
+  [<ffffffff802ec3ab>] kobject_release+0x0/0x9 
+  [<ffffffff802ecf3f>] kref_put+0x74/0x81 
+  [<ffffffff8035493b>] fixed_mdio_register_device+0x230/0x265 
+  [<ffffffff80564d31>] fixed_init+0x1f/0x35 
+  [<ffffffff802071a4>] init+0x147/0x2fb 
+  [<ffffffff80223b6e>] schedule_tail+0x36/0x92 
+  [<ffffffff8020a678>] child_rip+0xa/0x12 
+  [<ffffffff80311714>] acpi_ds_init_one_object+0x0/0x83 
+  [<ffffffff8020705d>] init+0x0/0x2fb 
+  [<ffffffff8020a66e>] child_rip+0x0/0x12   
+ 
+ 
+Also changed the notation of the fixed phy definition on 
+mdio bus to the form of <speed>+<duplex> to make it able to be used by 
+gianfar and ucc_geth that define phy_id strictly as "%d:%d" and cleaned up 
+the whitespace issues.
+
+Index: linux-2.6.18/drivers/net/phy/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/net/phy/Kconfig
++++ linux-2.6.18/drivers/net/phy/Kconfig
+@@ -73,5 +73,19 @@ config FIXED_MII_100_FDX
+ 	bool "Emulation for 100M Fdx fixed PHY behavior"
+ 	depends on FIXED_PHY
+ 
++config FIXED_MII_1000_FDX
++	bool "Emulation for 1000M Fdx fixed PHY behavior"
++	depends on FIXED_PHY
++
++config FIXED_MII_AMNT
++	int "Number of emulated PHYs to allocate "
++	depends on FIXED_PHY
++	default "1"
++	---help---
++	  Sometimes it is required to have several independent emulated
++	  PHYs on the bus (in case of multi-eth but phy-less HW for instance).
++	  This control will have specified number allocated for each fixed
++	  PHY type enabled.
++
+ endmenu
+ 
+Index: linux-2.6.18/drivers/net/phy/fixed.c
+===================================================================
+--- linux-2.6.18.orig/drivers/net/phy/fixed.c
++++ linux-2.6.18/drivers/net/phy/fixed.c
+@@ -32,53 +32,31 @@
+ #include <linux/mii.h>
+ #include <linux/ethtool.h>
+ #include <linux/phy.h>
++#include <linux/phy_fixed.h>
+ 
+ #include <asm/io.h>
+ #include <asm/irq.h>
+ #include <asm/uaccess.h>
+ 
+-#define MII_REGS_NUM	7
+-
+-/*
+-    The idea is to emulate normal phy behavior by responding with
+-    pre-defined values to mii BMCR read, so that read_status hook could
+-    take all the needed info.
+-*/
+-
+-struct fixed_phy_status {
+-	u8 	link;
+-	u16	speed;
+-	u8 	duplex;
+-};
+-
+-/*-----------------------------------------------------------------------------
+- *  Private information hoder for mii_bus
+- *-----------------------------------------------------------------------------*/
+-struct fixed_info {
+-	u16 *regs;
+-	u8 regs_num;
+-	struct fixed_phy_status phy_status;
+-	struct phy_device *phydev; /* pointer to the container */
+-	/* link & speed cb */
+-	int(*link_update)(struct net_device*, struct fixed_phy_status*);
+-
+-};
++/* we need to track the allocated pointers in order to free them on exit */
++static struct fixed_info *fixed_phy_ptrs[CONFIG_FIXED_MII_AMNT*MAX_PHY_AMNT];
+ 
+ /*-----------------------------------------------------------------------------
+  *  If something weird is required to be done with link/speed,
+  * network driver is able to assign a function to implement this.
+  * May be useful for PHY's that need to be software-driven.
+  *-----------------------------------------------------------------------------*/
+-int fixed_mdio_set_link_update(struct phy_device* phydev,
+-		int(*link_update)(struct net_device*, struct fixed_phy_status*))
++int fixed_mdio_set_link_update(struct phy_device *phydev,
++			      int (*link_update) (struct net_device *,
++			      struct fixed_phy_status *))
+ {
+ 	struct fixed_info *fixed;
+ 
+-	if(link_update == NULL)
++	if (link_update == NULL)
+ 		return -EINVAL;
+ 
+-	if(phydev) {
+-		if(phydev->bus)	{
++	if (phydev) {
++		if (phydev->bus) {
+ 			fixed = phydev->bus->priv;
+ 			fixed->link_update = link_update;
+ 			return 0;
+@@ -88,75 +66,88 @@ int fixed_mdio_set_link_update(struct ph
+ }
+ EXPORT_SYMBOL(fixed_mdio_set_link_update);
+ 
++struct fixed_info *fixed_mdio_get_phydev (int phydev_ind)
++{
++	if (phydev_ind >= MAX_PHY_AMNT)
++		return NULL;
++	return fixed_phy_ptrs[phydev_ind];
++}
++
++EXPORT_SYMBOL(fixed_mdio_get_phydev);
++
+ /*-----------------------------------------------------------------------------
+  *  This is used for updating internal mii regs from the status
+  *-----------------------------------------------------------------------------*/
++#if defined(CONFIG_FIXED_MII_100_FDX) || defined(CONFIG_FIXED_MII_10_FDX) || \
++	defined(CONFIG_FIXED_MII_1000_FDX)
+ static int fixed_mdio_update_regs(struct fixed_info *fixed)
+ {
+ 	u16 *regs = fixed->regs;
+ 	u16 bmsr = 0;
+ 	u16 bmcr = 0;
+ 
+-	if(!regs) {
++	if (!regs) {
+ 		printk(KERN_ERR "%s: regs not set up", __FUNCTION__);
+ 		return -EINVAL;
+ 	}
+ 
+-	if(fixed->phy_status.link)
++	if (fixed->phy_status.link)
+ 		bmsr |= BMSR_LSTATUS;
+ 
+-	if(fixed->phy_status.duplex) {
++	if (fixed->phy_status.duplex) {
+ 		bmcr |= BMCR_FULLDPLX;
+ 
+-		switch ( fixed->phy_status.speed ) {
++		switch (fixed->phy_status.speed) {
+ 		case 100:
+ 			bmsr |= BMSR_100FULL;
+ 			bmcr |= BMCR_SPEED100;
+-		break;
++			break;
+ 
+ 		case 10:
+ 			bmsr |= BMSR_10FULL;
+-		break;
++			break;
+ 		}
+ 	} else {
+-		switch ( fixed->phy_status.speed ) {
++		switch (fixed->phy_status.speed) {
+ 		case 100:
+ 			bmsr |= BMSR_100HALF;
+ 			bmcr |= BMCR_SPEED100;
+-		break;
++			break;
+ 
+ 		case 10:
+ 			bmsr |= BMSR_100HALF;
+-		break;
++			break;
+ 		}
+ 	}
+ 
+-	regs[MII_BMCR] =  bmcr;
+-	regs[MII_BMSR] =  bmsr | 0x800; /*we are always capable of 10 hdx*/
++	regs[MII_BMCR] = bmcr;
++	regs[MII_BMSR] = bmsr | 0x800;  /*we are always capable of 10 hdx */
+ 
+ 	return 0;
+ }
++#endif
+ 
+ static int fixed_mii_read(struct mii_bus *bus, int phy_id, int location)
+ {
+ 	struct fixed_info *fixed = bus->priv;
+ 
+ 	/* if user has registered link update callback, use it */
+-	if(fixed->phydev)
+-		if(fixed->phydev->attached_dev) {
+-			if(fixed->link_update) {
++	if (fixed->phydev)
++		if (fixed->phydev->attached_dev) {
++			if (fixed->link_update) {
+ 				fixed->link_update(fixed->phydev->attached_dev,
+-						&fixed->phy_status);
++						   &fixed->phy_status);
+ 				fixed_mdio_update_regs(fixed);
+ 			}
+-	}
++		}
+ 
+ 	if ((unsigned int)location >= fixed->regs_num)
+ 		return -1;
+ 	return fixed->regs[location];
+ }
+ 
+-static int fixed_mii_write(struct mii_bus *bus, int phy_id, int location, u16 val)
++static int fixed_mii_write(struct mii_bus *bus, int phy_id, int location,
++			   u16 val)
+ {
+ 	/* do nothing for now*/
+ 	return 0;
+@@ -164,15 +155,15 @@ static int fixed_mii_write(struct mii_bu
+ 
+ static int fixed_mii_reset(struct mii_bus *bus)
+ {
+-	/*nothing here - no way/need to reset it*/
++	/* nothing here - no way/need to reset it */
+ 	return 0;
+ }
+ 
+ static int fixed_config_aneg(struct phy_device *phydev)
+ {
+ 	/* :TODO:03/13/2006 09:45:37 PM::
+-	 The full autoneg funcionality can be emulated,
+-	 but no need to have anything here for now
++	   The full autoneg funcionality can be emulated,
++	   but no need to have anything here for now
+ 	 */
+ 	return 0;
+ }
+@@ -182,58 +173,80 @@ static int fixed_config_aneg(struct phy_
+  * match will never return true...
+  *-----------------------------------------------------------------------------*/
+ static struct phy_driver fixed_mdio_driver = {
+-	.name		= "Fixed PHY",
+-	.features	= PHY_BASIC_FEATURES,
+-	.config_aneg	= fixed_config_aneg,
+-	.read_status	= genphy_read_status,
+-	.driver 	= { .owner = THIS_MODULE,},
++	.name = "Fixed PHY",
++#ifdef CONFIG_FIXED_MII_1000_FDX
++	.features = PHY_GBIT_FEATURES,
++#else
++	.features = PHY_BASIC_FEATURES,
++#endif
++	.config_aneg = fixed_config_aneg,
++	.read_status = genphy_read_status,
++	.driver = { .owner = THIS_MODULE,},
+ };
+ 
++static void fixed_mdio_release(struct device *dev)
++{
++	struct phy_device *phydev = container_of(dev, struct phy_device, dev);
++	struct mii_bus *bus = phydev->bus;
++	struct fixed_info *fixed = bus->priv;
++
++	kfree(phydev);
++	kfree(bus->dev);
++	kfree(bus);
++	kfree(fixed->regs);
++	kfree(fixed);
++}
++
+ /*-----------------------------------------------------------------------------
+  *  This func is used to create all the necessary stuff, bind
+  * the fixed phy driver and register all it on the mdio_bus_type.
+- * speed is either 10 or 100, duplex is boolean.
++ * speed is either 10 or 100 or 1000, duplex is boolean.
+  * number is used to create multiple fixed PHYs, so that several devices can
+  * utilize them simultaneously.
++ *
++ * The device on mdio bus will look like [bus_id]:[phy_id],
++ * bus_id = number
++ * phy_id = speed+duplex.
+  *-----------------------------------------------------------------------------*/
+-static int fixed_mdio_register_device(int number, int speed, int duplex)
++#if defined(CONFIG_FIXED_MII_100_FDX) || defined(CONFIG_FIXED_MII_10_FDX) \
++	|| defined(CONFIG_FIXED_MII_1000_FDX)
++struct fixed_info *fixed_mdio_register_device(
++	int bus_id, int speed, int duplex, u8 phy_id)
+ {
+ 	struct mii_bus *new_bus;
+ 	struct fixed_info *fixed;
+ 	struct phy_device *phydev;
+-	int err = 0;
++	int err;
+ 
+-	struct device* dev = kzalloc(sizeof(struct device), GFP_KERNEL);
++	struct device *dev = kzalloc(sizeof(struct device), GFP_KERNEL);
+ 
+-	if (NULL == dev)
+-		return -ENOMEM;
++	if (dev == NULL)
++		goto err_dev_alloc;
+ 
+ 	new_bus = kzalloc(sizeof(struct mii_bus), GFP_KERNEL);
+ 
+-	if (NULL == new_bus) {
+-		kfree(dev);
+-		return -ENOMEM;
+-	}
++	if (new_bus == NULL)
++		goto err_bus_alloc;
++
+ 	fixed = kzalloc(sizeof(struct fixed_info), GFP_KERNEL);
+ 
+-	if (NULL == fixed) {
+-		kfree(dev);
+-		kfree(new_bus);
+-		return -ENOMEM;
+-	}
++	if (fixed == NULL)
++		goto err_fixed_alloc;
++
++	fixed->regs = kzalloc(MII_REGS_NUM * sizeof(int), GFP_KERNEL);
++	if (NULL == fixed->regs)
++		goto err_fixed_regs_alloc;
+ 
+-	fixed->regs = kzalloc(MII_REGS_NUM*sizeof(int), GFP_KERNEL);
+ 	fixed->regs_num = MII_REGS_NUM;
+ 	fixed->phy_status.speed = speed;
+ 	fixed->phy_status.duplex = duplex;
+ 	fixed->phy_status.link = 1;
+ 
+-	new_bus->name = "Fixed MII Bus",
+-	new_bus->read = &fixed_mii_read,
+-	new_bus->write = &fixed_mii_write,
+-	new_bus->reset = &fixed_mii_reset,
+-
+-	/*set up workspace*/
++	new_bus->name = "Fixed MII Bus";
++	new_bus->read = &fixed_mii_read;
++	new_bus->write = &fixed_mii_write;
++	new_bus->reset = &fixed_mii_reset;
++	/*set up workspace */
+ 	fixed_mdio_update_regs(fixed);
+ 	new_bus->priv = fixed;
+ 
+@@ -242,70 +255,66 @@ static int fixed_mdio_register_device(in
+ 
+ 	/* create phy_device and register it on the mdio bus */
+ 	phydev = phy_device_create(new_bus, 0, 0);
++	if (phydev == NULL)
++		goto err_phy_dev_create;
+ 
+ 	/*
+-	 Put the phydev pointer into the fixed pack so that bus read/write code could
+-	 be able to access for instance attached netdev. Well it doesn't have to do
+-	 so, only in case of utilizing user-specified link-update...
++	 * Put the phydev pointer into the fixed pack so that bus read/write
++	 * code could be able to access for instance attached netdev. Well it
++	 * doesn't have to do so, only in case of utilizing user-specified
++	 * link-update...
+ 	 */
+ 	fixed->phydev = phydev;
+ 
+-	if(NULL == phydev) {
+-		err = -ENOMEM;
+-		goto device_create_fail;
+-	}
++	phydev->speed = speed;
++	phydev->duplex = duplex;
+ 
+ 	phydev->irq = PHY_IGNORE_INTERRUPT;
+ 	phydev->dev.bus = &mdio_bus_type;
+ 
+-	if(number)
+-		snprintf(phydev->dev.bus_id, BUS_ID_SIZE,
+-				"fixed_%d@%d:%d", number, speed, duplex);
+-	else
+-		snprintf(phydev->dev.bus_id, BUS_ID_SIZE,
+-				"fixed@%d:%d", speed, duplex);
+-	phydev->bus = new_bus;
++	snprintf(phydev->dev.bus_id, BUS_ID_SIZE,
++		PHY_ID_FMT, bus_id, phy_id);
+ 
+-	err = device_register(&phydev->dev);
+-	if(err) {
+-		printk(KERN_ERR "Phy %s failed to register\n",
+-				phydev->dev.bus_id);
+-		goto bus_register_fail;
+-	}
++	phydev->bus = new_bus;
+ 
+-	/*
+-	   the mdio bus has phy_id match... In order not to do it
+-	   artificially, we are binding the driver here by hand;
+-	   it will be the same for all the fixed phys anyway.
+-	 */
+ 	down_write(&phydev->dev.bus->subsys.rwsem);
+ 
+ 	phydev->dev.driver = &fixed_mdio_driver.driver;
+ 
++	phydev->dev.release = fixed_mdio_release;
+ 	err = phydev->dev.driver->probe(&phydev->dev);
+-	if(err < 0) {
+-		printk(KERN_ERR "Phy %s: problems with fixed driver\n",phydev->dev.bus_id);
+-		up_write(&phydev->dev.bus->subsys.rwsem);
+-		goto probe_fail;
++	if (err < 0) {
++		printk(KERN_ERR "Phy %s: problems with fixed driver\n",
++			phydev->dev.bus_id);
++		goto err_out;
+ 	}
+ 
+-	device_bind_driver(&phydev->dev);
++	err = device_register(&phydev->dev);
++	if (err) {
++		printk(KERN_ERR "Phy %s failed to register\n",
++			phydev->dev.bus_id);
++		goto err_out;
++	}
++	//phydev->state = PHY_RUNNING; /* make phy go up quick, but in 10Mbit/HDX
+ 	up_write(&phydev->dev.bus->subsys.rwsem);
++	return fixed;
+ 
+-	return 0;
+-
+-probe_fail:
+-	device_unregister(&phydev->dev);
+-bus_register_fail:
++err_out:
+ 	kfree(phydev);
+-device_create_fail:
+-	kfree(dev);
+-	kfree(new_bus);
++err_phy_dev_create:
++	kfree(fixed->regs);
++err_fixed_regs_alloc:
+ 	kfree(fixed);
++err_fixed_alloc:
++	kfree(new_bus);
++err_bus_alloc:
++	kfree(dev);
++err_dev_alloc:
+ 
+-	return err;
+-}
++	return NULL;
+ 
++}
++#endif
+ 
+ MODULE_DESCRIPTION("Fixed PHY device & driver for PAL");
+ MODULE_AUTHOR("Vitaly Bordug");
+@@ -313,45 +322,48 @@ MODULE_LICENSE("GPL");
+ 
+ static int __init fixed_init(void)
+ {
+-	int ret;
+-	int duplex = 0;
+-
+-	/* register on the bus... Not expected to be matched with anything there... */
++	int cnt = 0;
++	int i;
++/* register on the bus... Not expected to be matched
++ * with anything there...
++ *
++ */
+ 	phy_driver_register(&fixed_mdio_driver);
+ 
+-	/* So let the fun begin...
+-	   We will create several mdio devices here, and will bound the upper
+-	   driver to them.
+-
+-	   Then the external software can lookup the phy bus by searching
+-	   fixed@speed:duplex, e.g. fixed@100:1, to be connected to the
+-	   virtual 100M Fdx phy.
+-
+-	   In case several virtual PHYs required, the bus_id will be in form
+-	   fixed_<num>@<speed>:<duplex>, which make it able even to define
+-	   driver-specific link control callback, if for instance PHY is completely
+-	   SW-driven.
+-
+-	*/
+-
+-#ifdef CONFIG_FIXED_MII_DUPLEX
+-	duplex = 1;
++/* We will create several mdio devices here, and will bound the upper
++ * driver to them.
++ *
++ * Then the external software can lookup the phy bus by searching
++ * for 0:101, to be connected to the virtual 100M Fdx phy.
++ *
++ * In case several virtual PHYs required, the bus_id will be in form
++ * [num]:[duplex]+[speed], which make it able even to define
++ * driver-specific link control callback, if for instance PHY is
++ * completely SW-driven.
++ */
++	for (i=1; i <= CONFIG_FIXED_MII_AMNT; i++) {
++#ifdef CONFIG_FIXED_MII_1000_FDX
++		fixed_phy_ptrs[cnt++] = fixed_mdio_register_device(0, 1000, 1, i);
+ #endif
+-
+ #ifdef CONFIG_FIXED_MII_100_FDX
+-	fixed_mdio_register_device(0, 100, 1);
++		fixed_phy_ptrs[cnt++] = fixed_mdio_register_device(1, 100, 1, i);
+ #endif
+-
+ #ifdef CONFIG_FIXED_MII_10_FDX
+-	fixed_mdio_register_device(0, 10, 1);
++		fixed_phy_ptrs[cnt++] = fixed_mdio_register_device(2, 10, 1, i);
+ #endif
++	}
++
+ 	return 0;
+ }
+ 
+ static void __exit fixed_exit(void)
+ {
++	int i;
++
+ 	phy_driver_unregister(&fixed_mdio_driver);
+-	/* :WARNING:02/18/2006 04:32:40 AM:: Cleanup all the created stuff */
++	for (i=0; i < MAX_PHY_AMNT; i++)
++		if ( fixed_phy_ptrs[i] )
++			device_unregister(&fixed_phy_ptrs[i]->phydev->dev);
+ }
+ 
+ module_init(fixed_init);
+Index: linux-2.6.18/include/linux/phy_fixed.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/linux/phy_fixed.h
+@@ -0,0 +1,55 @@
++/*
++ * include/linux/phy_fixed.h
++ *
++ * Header file for Ethernet fixed phy devices support
++
++ * Author: Gennadiy Kurtsman
++ *
++ * 2007 (c) MontaVista Software, Inc.
++ *
++ * This program is free software; you can redistribute  it and/or modify it
++ * under  the terms of  the GNU General  Public License as published by the
++ * Free Software Foundation;  either version 2 of the  License, or (at your
++ * option) any later version.
++ *
++ */
++
++#ifndef __PHY_FIXED_H
++#define __PHY_FIXED_H
++
++#define MII_REGS_NUM	29
++
++/* max number of virtual phy stuff */
++#define MAX_PHY_AMNT	10
++/*
++    The idea is to emulate normal phy behavior by responding with
++    pre-defined values to mii BMCR read, so that read_status hook could
++    take all the needed info.
++*/
++
++struct fixed_phy_status {
++	u8 link;
++	u16 speed;
++	u8 duplex;
++};
++
++/*-----------------------------------------------------------------------------
++ *  Private information hoder for mii_bus
++ *-----------------------------------------------------------------------------*/
++struct fixed_info {
++	u16 *regs;
++	u8 regs_num;
++	struct fixed_phy_status phy_status;
++	struct phy_device *phydev;	/* pointer to the container */
++	/* link & speed cb */
++	int (*link_update) (struct net_device *, struct fixed_phy_status *);
++
++};
++
++
++int fixed_mdio_set_link_update(struct phy_device *,
++       int (*link_update) (struct net_device *, struct fixed_phy_status *));
++struct fixed_info *fixed_mdio_get_phydev (int phydev_ind);
++
++#endif /* __PHY_FIXED_H */
++
+Index: linux-2.6.18/mvl_patches/pro50-0171.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0171.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(171);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

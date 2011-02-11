@@ -1,0 +1,369 @@
+#! /usr/bin/env bash
+# Patch: -pro_e100_configurable_napi
+# Date: Sat Feb  2 08:52:53 2008
+# Source: MontaVista Software, Inc.
+# MR: 24727
+# Type: Enhancement
+# Disposition: local
+# Signed-off-by: Javier Campos <jcampos@mvista.com>
+# Signed-off-by: Chris Larson <clarson@mvista.com>
+# Description:
+#  Make NAPI usage configurable in the E100 network driver.
+# 
+#  drivers/net/Kconfig |    8 ++++++++
+#  drivers/net/e100.c  |   24 +++++++++++++++++++++++-
+#  2 files changed, 31 insertions(+), 1 deletion(-)
+# 
+
+PATCHNUM=726
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: MontaVista Software, Inc.
+MR: 24727
+Type: Enhancement
+Disposition: local
+Signed-off-by: Javier Campos <jcampos@mvista.com>
+Signed-off-by: Chris Larson <clarson@mvista.com>
+Description:
+ Make NAPI usage configurable in the E100 network driver.
+
+ drivers/net/Kconfig      |    8 ++++++++
+ drivers/net/e100.c       |   24 +++++++++++++++++++++++-
+ mvl_patches/pro50-0726.c |   16 ++++++++++++++++
+ 3 files changed, 47 insertions(+), 1 deletion(-)
+
+Index: linux-2.6.18/drivers/net/e100.c
+===================================================================
+--- linux-2.6.18.orig/drivers/net/e100.c
++++ linux-2.6.18/drivers/net/e100.c
+@@ -158,7 +158,11 @@
+ 
+ 
+ #define DRV_NAME		"e100"
++#ifndef CONFIG_E100_NAPI
++#define DRV_EXT
++#else
+ #define DRV_EXT			"-NAPI"
++#endif
+ #define DRV_VERSION		"3.5.16-k2"DRV_EXT
+ #define DRV_DESCRIPTION		"Intel(R) PRO/100 Network Driver"
+ #define DRV_COPYRIGHT		"Copyright(c) 1999-2006 Intel Corporation"
+@@ -1801,8 +1805,10 @@ static int e100_rx_indicate(struct nic *
+ 	struct rfd *rfd = (struct rfd *)skb->data;
+ 	u16 rfd_status, actual_size;
+ 
++#ifdef CONFIG_E100_NAPI
+ 	if(unlikely(work_done && *work_done >= work_to_do))
+ 		return -EAGAIN;
++#endif
+ 
+ 	/* Need to sync before taking a peek at cb_complete bit */
+ 	pci_dma_sync_single_for_cpu(nic->pdev, rx->dma_addr,
+@@ -1844,7 +1850,11 @@ static int e100_rx_indicate(struct nic *
+ 		nic->net_stats.rx_packets++;
+ 		nic->net_stats.rx_bytes += actual_size;
+ 		nic->netdev->last_rx = jiffies;
++#ifdef CONFIG_E100_NAPI
+ 		netif_receive_skb(skb);
++#else /* softnet */
++		netif_rx(skb);
++#endif
+ 		if(work_done)
+ 			(*work_done)++;
+ 	}
+@@ -1967,14 +1977,20 @@ static irqreturn_t e100_intr(int irq, vo
+ 	if(stat_ack & stat_ack_rnr)
+ 		nic->ru_running = RU_SUSPENDED;
+ 
++#ifdef CONFIG_E100_NAPI
+ 	if(likely(netif_rx_schedule_prep(netdev))) {
+ 		e100_disable_irq(nic);
+ 		__netif_rx_schedule(netdev);
+ 	}
++#else
++	e100_rx_clean(nic, NULL, 0);
++	e100_tx_clean(nic);
++#endif
+ 
+ 	return IRQ_HANDLED;
+ }
+ 
++#ifdef CONFIG_E100_NAPI
+ static int e100_poll(struct net_device *netdev, int *budget)
+ {
+ 	struct nic *nic = netdev_priv(netdev);
+@@ -1997,6 +2013,7 @@ static int e100_poll(struct net_device *
+ 
+ 	return 1;
+ }
++#endif
+ 
+ #ifdef CONFIG_NET_POLL_CONTROLLER
+ static void e100_netpoll(struct net_device *netdev)
+@@ -2005,7 +2022,6 @@ static void e100_netpoll(struct net_devi
+ 
+ 	e100_disable_irq(nic);
+ 	e100_intr(nic->pdev->irq, netdev, NULL);
+-	e100_tx_clean(nic);
+ 	e100_enable_irq(nic);
+ }
+ #endif
+@@ -2066,9 +2082,11 @@ static int e100_up(struct nic *nic)
+ 		nic->netdev->name, nic->netdev)))
+ 		goto err_no_irq;
+ 	netif_wake_queue(nic->netdev);
++#ifdef CONFIG_E100_NAPI
+ 	netif_poll_enable(nic->netdev);
+ 	/* enable ints _after_ enabling poll, preventing a race between
+ 	 * disable ints+schedule */
++#endif
+ 	e100_enable_irq(nic);
+ 	return 0;
+ 
+@@ -2083,8 +2101,10 @@ err_rx_clean_list:
+ 
+ static void e100_down(struct nic *nic)
+ {
++#ifdef CONFIG_E100_NAPI
+ 	/* wait here for poll to complete */
+ 	netif_poll_disable(nic->netdev);
++#endif
+ 	netif_stop_queue(nic->netdev);
+ 	e100_hw_reset(nic);
+ 	free_irq(nic->pdev->irq, nic->netdev);
+@@ -2567,8 +2587,10 @@ static int __devinit e100_probe(struct p
+ 	SET_ETHTOOL_OPS(netdev, &e100_ethtool_ops);
+ 	netdev->tx_timeout = e100_tx_timeout;
+ 	netdev->watchdog_timeo = E100_WATCHDOG_PERIOD;
++#ifdef CONFIG_E100_NAPI
+ 	netdev->poll = e100_poll;
+ 	netdev->weight = E100_NAPI_WEIGHT;
++#endif
+ #ifdef CONFIG_NET_POLL_CONTROLLER
+ 	netdev->poll_controller = e100_netpoll;
+ #endif
+Index: linux-2.6.18/drivers/net/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/net/Kconfig
++++ linux-2.6.18/drivers/net/Kconfig
+@@ -1435,6 +1435,14 @@ config E100
+ 	  <file:Documentation/networking/net-modules.txt>.  The module
+ 	  will be called e100.
+ 
++config E100_NAPI
++	bool "Use Rx Polling (NAPI)"
++	depends on E100
++	default y
++	help
++	  NAPI is a driver API designed to reduce CPU and interrupt load
++	  when the driver is receiving lots of packets from the card.
++
+ config LNE390
+ 	tristate "Mylex EISA LNE390A/B support (EXPERIMENTAL)"
+ 	depends on NET_PCI && EISA && EXPERIMENTAL
+Index: linux-2.6.18/mvl_patches/pro50-0726.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0726.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(726);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

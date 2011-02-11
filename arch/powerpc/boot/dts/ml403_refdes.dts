@@ -1,0 +1,141 @@
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	model = "xilinx,ml403";
+	compatible = "xilinx,virtex";
+
+	plb2opb_bridge_0@60000000 {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "plb2opb_bridge_0" ;
+		device_type = "opb" ;
+		opb2dcr_bridge_0 {
+			compatible = "opb2dcr_bridge_1.00.b\0opb2dcr_bridge" ;
+			reg = < 70000000 1000 >;
+			device_type = "opb2dcr_bridge" ;
+		} ;
+		opb_intc_0 {
+			compatible = "xilinx,intc" ;
+			linux,phandle = <101>;
+			reg = < d1000fc0 20 >;
+			device_type = "opb_intc" ;
+			#interrupt-cells = <1>;
+	                interrupt-controller;
+		} ;
+		serial@a0001003 {
+			device_type = "serial";
+			compatible = "ns16550" ;
+			interrupt-parent = <101>;
+			interrupts = < 9 0 >;
+			reg = < a0001003 1000 >;
+			virtual-reg = < a0001003 >;
+                        clock-frequency = < 5f5e100 >;
+			reg-shift = <2>;
+			current-speed = < 2580 >;
+		} ;
+                EMAC0: ethernet@60000000 {
+                        device_type = "network";
+                        compatible = "xilinx,emac";
+                        interrupt-parent = <101>;
+                        interrupts = < 0 0 >;
+                        reg = <60000000 3fff>;
+			local-mac-address = [00 0C 01 95 59 97];
+                        cell-index = <0>;
+			device-id = <0>;
+			dma-mode = <1>;
+			has-mii = <1>;
+			has-cam = <0>;
+			has-jumbo = <0>;
+			tx-dre = <0>;
+			rx-dre = <0>;
+			tx-hw-csum = <0>;
+			rx-hw-csum = <0>;
+                };
+                opb-ps2-0@a9000000 {
+			device_type = "opb-ps2";
+                        compatible = "xlnx,opb-ps2-dual-ref-1.00.a";
+                        reg = < a9000000 40 >;
+                        interrupt-parent = <101>;
+                        interrupts = < 8 0 >;
+			port-number = < 0 >;
+                } ;
+                opb-ps2-0@a9001000 {
+			device_type = "opb-ps2";
+                        compatible = "xlnx,opb-ps2-dual-ref-1.00.a";
+                        reg = < a9001000 40 >;
+                        interrupt-parent = <101>;
+                        interrupts = < 7 0 >;
+			port-number = < 1 >;
+                } ;
+                opb-gpio-0@90000000 {
+			device_type = "opb-gpio";
+                        compatible = "xlnx,opb-gpio";
+                        reg = < 90000000 1ff >;
+			device-id = < 0 >;
+			dual-channel = < 1 >;
+                } ;
+                opb-gpio-0@90001000 {
+			device_type = "opb-gpio";
+                        compatible = "xlnx,opb-gpio";
+                        reg = < 90001000 1ff >;
+			device-id = < 1 >;
+			dual-channel = < 1 >;
+                } ;
+                opb-gpio-0@90002000 {
+			device_type = "opb-gpio";
+                        compatible = "xlnx,opb-gpio";
+                        reg = < 90002000 1ff >;
+			device-id = < 2 >;
+			dual-channel = < 1 >;
+                } ;
+		xsysace@cf000000 {
+			device_type = "xsysace";
+			compatible = "xilinx,xsysace" ;
+			interrupt-parent = <101>;
+			interrupts = < 3 0 >;
+			port-number = < 0 >;
+			reg = < cf000000 1ff >;
+		} ;
+		VGA_FrameBuffer: plb-tft-cntlr-ref@d0000200 {
+                        compatible = "xilinx,ml300-fb";
+                        reg = < d0000200 8 >;
+                } ;
+		xi2x@a8000000 {
+			device_type = "iic";
+			compatible = "xilinx,iic" ;
+			interrupt-parent = <101>;
+			interrupts = < 6 0 >;
+			reg = < a8000000 1ff >;
+			index = < 0 >;
+		} ;
+	} ;
+	memory {
+		device_type = "memory";
+		reg = < 0 4000000 >;		// 64MBytes
+	} ;
+	cpus {
+		#size-cells = <0>;
+		#cpus = <1>;
+		#address-cells = <1>;
+		ppc405_0,405@0 {
+			device_type = "cpu" ;
+			d-cache-size = <4000>;
+			d-cache-line-size = <20>;
+			i-cache-line-size = <20>;
+			i-cache-size = <4000>;
+			reg = <0>;
+			clock-frequency = <11e1a300>;	// 300 MHz
+			timebase-frequency = <11e1a300>;   // 300 MHz
+		} ;
+	} ;
+	plb_bram_if_cntlr_0 {
+		compatible = "plb_bram_if_cntlr_1.00.b\0plb_bram_if_cntlr" ;
+		reg = < ffff0000 10000 >;
+		device_type = "plb_bram_if_cntlr" ;
+	} ;
+
+	chosen {
+		bootargs = "console=tty1 console=ttyS0,9600 ip=on root=/dev/xsa2 rw";
+		linux,stdout-path = "/plb2opb_bridge_0@60000000/serial";
+	};
+} ;

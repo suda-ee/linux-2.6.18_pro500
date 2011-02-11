@@ -1,0 +1,451 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_Add_8572_SMP_capabilities
+# Date: Wed Apr  9 10:00:54 2008
+# Source: Freescale
+# MR: 26902
+# Type: Enhancement
+# Disposition: merged from MPC8572DS_20071204-ltib
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# Add 8572 SMP capabilities.
+# 
+# Signed-off-by: Xianghua Xiao <x.xiao@freescale.com>
+# Signed-off-by: Roy Zang <tie-fei.zang@freescale.com>
+# Signed-off-by: Kumar Gala <kumar.gala@freescale.com>
+# Signed-off-by: Zhang Wei <wei.zhang@freescale.com>
+# Signed-off-by: Andy Fleming <afleming@freescale.com>
+# Signed-off-by: Haiying Wang <haiying.wang@freescale.com>
+# 
+
+PATCHNUM=1016
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Freescale
+MR: 26902
+Type: Enhancement
+Disposition: merged from MPC8572DS_20071204-ltib
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+Add 8572 SMP capabilities.
+
+Signed-off-by: Xianghua Xiao <x.xiao@freescale.com>
+Signed-off-by: Roy Zang <tie-fei.zang@freescale.com>
+Signed-off-by: Kumar Gala <kumar.gala@freescale.com>
+Signed-off-by: Zhang Wei <wei.zhang@freescale.com>
+Signed-off-by: Andy Fleming <afleming@freescale.com>
+Signed-off-by: Haiying Wang <haiying.wang@freescale.com>
+
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8572ds.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8572ds.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8572ds.dts
+@@ -30,6 +30,18 @@
+ 			bus-frequency = <0>;
+ 			clock-frequency = <0>;
+ 		};
++
++		PowerPC,8572@1 {
++			device_type = "cpu";
++			reg = <1>;
++			d-cache-line-size = <20>;	// 32 bytes
++			i-cache-line-size = <20>;	// 32 bytes
++			d-cache-size = <8000>;		// L1, 32K
++			i-cache-size = <8000>;		// L1, 32K
++			timebase-frequency = <0>;
++			bus-frequency = <0>;
++			clock-frequency = <0>;
++		};
+ 	};
+ 
+ 	memory {
+Index: linux-2.6.18/arch/powerpc/platforms/85xx/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/85xx/Kconfig
++++ linux-2.6.18/arch/powerpc/platforms/85xx/Kconfig
+@@ -33,7 +33,7 @@ config MPC85xx_MDS
+ 
+ config MPC85xx_DS
+ 	bool "Freescale MPC85xx DS"
+-	select PPC_I8259
++	select PPC_I8259 if PCI
+ 	select DEFAULT_UIMAGE
+ 	select FSL_ULI1575
+ 	help
+Index: linux-2.6.18/arch/powerpc/platforms/85xx/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/85xx/Makefile
++++ linux-2.6.18/arch/powerpc/platforms/85xx/Makefile
+@@ -7,3 +7,4 @@ obj-$(CONFIG_MPC8560_ADS) += mpc85xx_ads
+ obj-$(CONFIG_MPC85xx_CDS) += mpc85xx_cds.o
+ obj-$(CONFIG_MPC85xx_DS)  += mpc85xx_ds.o
+ obj-$(CONFIG_MPC85xx_MDS) += mpc85xx_mds.o
++obj-$(CONFIG_SMP) += mpc85xx_smp.o
+Index: linux-2.6.18/arch/powerpc/platforms/85xx/mpc85xx_ds.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/85xx/mpc85xx_ds.c
++++ linux-2.6.18/arch/powerpc/platforms/85xx/mpc85xx_ds.c
+@@ -141,6 +141,9 @@ static int mpc85xx_exclude_device(struct
+ /*
+  * Setup the architecture
+  */
++#ifdef CONFIG_SMP
++extern void __init mpc85xx_smp_init(void);
++#endif
+ static void __init mpc85xx_ds_setup_arch(void)
+ {
+ #ifdef CONFIG_PCI
+@@ -167,6 +170,10 @@ static void __init mpc85xx_ds_setup_arch
+ 	ppc_md.pci_exclude_device = mpc85xx_exclude_device;
+ #endif
+ 
++#ifdef CONFIG_SMP
++	mpc85xx_smp_init();
++#endif
++
+ 	printk("MPC85xx DS board from Freescale Semiconductor\n");
+ }
+ 
+Index: linux-2.6.18/arch/powerpc/platforms/85xx/mpc85xx_smp.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/85xx/mpc85xx_smp.c
+@@ -0,0 +1,120 @@
++/*
++ * Copyright (C) 2006,2007 Freescale Semiconductor, Inc. All rights reserved.
++ *
++ * Author: Xianghua Xiao, x.xiao@freescale.com
++ *         Zhang Wei, wei.zhang@freescale.com
++ *         Andy Fleming, afleming@freescale.com
++ *
++ * Description:
++ * MPC85xx SMP setup file
++ *
++ * This file is part of the Linux kernel
++ *
++ * This is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ */
++
++#include <linux/stddef.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/delay.h>
++
++#include <asm/pgtable.h>
++#include <asm/page.h>
++#include <asm/pci-bridge.h>
++#include <asm-powerpc/mpic.h>
++#include <asm/cacheflush.h>
++
++#include <sysdev/fsl_soc.h>
++
++extern void __secondary_start_page(void);
++extern volatile unsigned long __secondary_hold_acknowledge;
++
++#define EEBPCR_CPU1_EN	0x02000000
++#define EEBPCR_CPU0_EN	0x01000000
++#define MPC85xx_ECM_OFFSET 0x1000
++#define MPC85xx_ECM_SIZE 0xf00
++#define ECM_PORT_CONFIG_OFFSET 0x0010
++#define MPC85xx_BPTR_OFFSET 0x20
++#define BPTR_EN	0x80000000
++
++
++static void __init
++smp_85xx_release_core(int nr)
++{
++	__iomem u32 *ecm_vaddr;
++	unsigned long pcr;
++
++	/*
++	 * Startup Core #nr.
++	 */
++	ecm_vaddr = ioremap(get_immrbase() + MPC85xx_ECM_OFFSET,
++			    MPC85xx_ECM_SIZE);
++	pcr = in_be32(ecm_vaddr + (ECM_PORT_CONFIG_OFFSET >> 2));
++	pcr |= EEBPCR_CPU1_EN;
++	out_be32(ecm_vaddr + (ECM_PORT_CONFIG_OFFSET >> 2), pcr);
++}
++
++
++static void __init
++smp_85xx_kick_cpu(int nr)
++{
++	unsigned long flags;
++	u32 bptr, oldbptr;
++	__iomem u32 *bptr_vaddr;
++	int n = 0;
++
++	WARN_ON (nr < 0 || nr >= NR_CPUS);
++
++	pr_debug("smp_85xx_kick_cpu: kick CPU #%d\n", nr);
++
++	local_irq_save(flags);
++
++	/* Get the BPTR */
++	bptr_vaddr = ioremap(get_immrbase() + MPC85xx_BPTR_OFFSET, 4);
++
++	/* Set the BPTR to the secondary boot page */
++	oldbptr = in_be32(bptr_vaddr);
++	bptr = (BPTR_EN | (__pa((unsigned)__secondary_start_page) >> 12));
++	out_be32(bptr_vaddr, bptr);
++
++	/* Kick that CPU */
++	smp_85xx_release_core(nr);
++
++	/* Wait a bit for the CPU to take the exception. */
++	while ((__secondary_hold_acknowledge != nr) && (++n < 1000))
++		mdelay(1);
++
++	/* Restore the BPTR */
++	out_be32(bptr_vaddr, oldbptr);
++
++	local_irq_restore(flags);
++
++	pr_debug("waited %d msecs for CPU #%d.\n", nr, n);
++}
++
++
++static void __init
++smp_85xx_setup_cpu(int cpu_nr)
++{
++	mpic_setup_this_cpu();
++}
++
++
++struct smp_ops_t smp_85xx_ops = {
++	.message_pass = smp_mpic_message_pass,
++	.probe = smp_mpic_probe,
++	.kick_cpu = smp_85xx_kick_cpu,
++	.setup_cpu = smp_85xx_setup_cpu,
++	.take_timebase = smp_generic_take_timebase,
++	.give_timebase = smp_generic_give_timebase,
++};
++
++
++void __init
++mpc85xx_smp_init(void)
++{
++	smp_ops = &smp_85xx_ops;
++}
+Index: linux-2.6.18/arch/powerpc/platforms/Kconfig.cputype
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/Kconfig.cputype
++++ linux-2.6.18/arch/powerpc/platforms/Kconfig.cputype
+@@ -189,7 +189,7 @@ config VIRT_CPU_ACCOUNTING
+ 	  If in doubt, say Y here.
+ 
+ config SMP
+-	depends on PPC_STD_MMU
++#	depends on PPC_STD_MMU
+ 	bool "Symmetric multi-processing support"
+ 	---help---
+ 	  This enables support for systems with more than one CPU. If you have
+Index: linux-2.6.18/mvl_patches/pro50-1016.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1016.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1016);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

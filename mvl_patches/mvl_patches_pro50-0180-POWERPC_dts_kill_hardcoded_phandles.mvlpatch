@@ -1,0 +1,658 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_dts_kill_hardcoded_phandles
+# Date: Wed Sep 26 11:10:39 2007
+# Source: MontaVista Software, Inc.
+# MR: 23344
+# Type: Enhancement
+# Disposition: merged from mm tree
+# Signed-off-by: Vitaly Bordug <vbordug@ru.mvista.com>
+# Description:
+# 
+#     Removed explicit linux,phandle usage. Using references and labels now in
+#     PQ and PQ2 boards currently supported in arch/powerpc.
+#     Signed-off-by: Vitaly Bordug <vitb@kernel.crashing.org>
+# 
+
+PATCHNUM=180
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: MontaVista Software, Inc.
+MR: 23344
+Type: Enhancement
+Disposition: merged from mm tree
+Signed-off-by: Vitaly Bordug <vbordug@ru.mvista.com>
+Description:
+
+    Removed explicit linux,phandle usage. Using references and labels now in
+    PQ and PQ2 boards currently supported in arch/powerpc.
+    Signed-off-by: Vitaly Bordug <vitb@kernel.crashing.org>
+
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8272ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8272ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8272ads.dts
+@@ -14,12 +14,10 @@
+        compatible = "MPC8260ADS";
+        #address-cells = <1>;
+        #size-cells = <1>;
+-       linux,phandle = <100>;
+ 
+        cpus {
+                #address-cells = <1>;
+                #size-cells = <0>;
+-               linux,phandle = <200>;
+ 
+                PowerPC,8272@0 {
+                        device_type = "cpu";
+@@ -32,13 +30,10 @@
+                        bus-frequency = <0>;
+                        clock-frequency = <0>;
+                        32-bit;
+-                       linux,phandle = <201>;
+-                       linux,boot-cpu;
+                };
+        };
+ 
+-       interrupt-controller@f8200000 {
+-               linux,phandle = <f8200000>;
++       pci_pic: interrupt-controller@f8200000 {
+                #address-cells = <0>;
+                #interrupt-cells = <2>;
+                interrupt-controller;
+@@ -46,17 +41,16 @@
+                built-in;
+                device_type = "pci-pic";
+        };
++
+        memory {
+                device_type = "memory";
+-               linux,phandle = <300>;
+                reg = <00000000 4000000 f4500000 00000020>;
+        };
+ 
+        chosen {
+                name = "chosen";
+                linux,platform = <0>;
+-               interrupt-controller = <10c00>;
+-               linux,phandle = <400>;
++		interrupt-controller = <&Cpm_pic>;
+        };
+ 
+        soc8272@f0000000 {
+@@ -71,20 +65,17 @@
+                        device_type = "mdio";
+                        compatible = "fs_enet";
+                        reg = <0 0>;
+-                       linux,phandle = <24520>;
+                        #address-cells = <1>;
+                        #size-cells = <0>;
+-                       ethernet-phy@0 {
+-                               linux,phandle = <2452000>;
+-                               interrupt-parent = <10c00>;
++			phy0:ethernet-phy@0 {
++				interrupt-parent = <&Cpm_pic>;
+                                interrupts = <17 4>;
+                                reg = <0>;
+                                bitbang = [ 12 12 13 02 02 01 ];
+                                device_type = "ethernet-phy";
+                        };
+-                       ethernet-phy@1 {
+-                               linux,phandle = <2452001>;
+-                               interrupt-parent = <10c00>;
++			phy1:ethernet-phy@1 {
++				interrupt-parent = <&Cpm_pic>;
+                                interrupts = <17 4>;
+                                bitbang = [ 12 12 13 02 02 01 ];
+                                reg = <3>;
+@@ -102,8 +93,8 @@
+                        reg = <11300 20 8400 100 11380 30>;
+                        mac-address = [ 00 11 2F 99 43 54 ];
+                        interrupts = <20 2>;
+-                       interrupt-parent = <10c00>;
+-                       phy-handle = <2452000>;
++			interrupt-parent = <&Cpm_pic>;
++			phy-handle = <&Phy0>;
+                        rx-clock = <13>;
+                        tx-clock = <12>;
+                };
+@@ -116,14 +107,13 @@
+                        reg = <11320 20 8500 100 113b0 30>;
+                        mac-address = [ 00 11 2F 99 44 54 ];
+                        interrupts = <21 2>;
+-                       interrupt-parent = <10c00>;
+-                       phy-handle = <2452001>;
++			interrupt-parent = <&Cpm_pic>;
++			phy-handle = <&Phy1>;
+                        rx-clock = <17>;
+                        tx-clock = <18>;
+                };
+ 
+                cpm@f0000000 {
+-                       linux,phandle = <f0000000>;
+                        #address-cells = <1>;
+                        #size-cells = <1>;
+                        #interrupt-cells = <2>;
+@@ -143,7 +133,7 @@
+                                reg = <11a00 20 8000 100>;
+                                current-speed = <1c200>;
+                                interrupts = <28 2>;
+-                               interrupt-parent = <10c00>;
++				interrupt-parent = <&Cpm_pic>;
+                                clock-setup = <0 00ffffff>;
+                                rx-clock = <1>;
+                                tx-clock = <1>;
+@@ -157,15 +147,14 @@
+                                reg = <11a60 20 8300 100>;
+                                current-speed = <1c200>;
+                                interrupts = <2b 2>;
+-                               interrupt-parent = <10c00>;
++				interrupt-parent = <&Cpm_pic>;
+                                clock-setup = <1b ffffff00>;
+                                rx-clock = <4>;
+                                tx-clock = <4>;
+                        };
+ 
+                };
+-               interrupt-controller@10c00 {
+-                       linux,phandle = <10c00>;
++			cpm_pic:interrupt-controller@10c00 {
+                        #address-cells = <0>;
+                        #interrupt-cells = <2>;
+                        interrupt-controller;
+@@ -175,7 +164,6 @@
+ 		       compatible = "CPM2";
+                };
+                pci@0500 {
+-                       linux,phandle = <0500>;
+                        #interrupt-cells = <1>;
+                        #size-cells = <2>;
+                        #address-cells = <3>;
+@@ -203,7 +191,7 @@
+                                         c000 0 0 2 f8200000 43 8
+                                         c000 0 0 3 f8200000 40 8
+                                         c000 0 0 4 f8200000 41 8>;
+-                       interrupt-parent = <10c00>;
++			interrupt-parent = <&Cpm_pic>;
+                        interrupts = <14 8>;
+                        bus-range = <0 0>;
+                        ranges = <02000000 0 80000000 80000000 0 40000000
+@@ -217,7 +205,7 @@
+                        compatible = "talitos";
+                        reg = <30000 10000>;
+                        interrupts = <b 2>;
+-                       interrupt-parent = <10c00>;
++			interrupt-parent = <&Cpm_pic>;
+                        num-channels = <4>;
+                        channel-fifo-len = <18>;
+                        exec-units-mask = <0000007e>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc866ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc866ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc866ads.dts
+@@ -15,12 +15,10 @@
+ 	compatible = "mpc8xx";
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+-	linux,phandle = <100>;
+ 
+ 	cpus {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+-		linux,phandle = <200>;
+ 
+ 		PowerPC,866@0 {
+ 			device_type = "cpu";
+@@ -34,15 +32,12 @@
+ 			clock-frequency = <0>;
+ 			32-bit;
+ 			interrupts = <f 2>;	// decrementer interrupt
+-			interrupt-parent = <ff000000>;
+-			linux,phandle = <201>;
+-			linux,boot-cpu;
++			interrupt-parent = <&Mpc8xx_pic>;
+ 		};
+ 	};
+ 
+ 	memory {
+ 		device_type = "memory";
+-		linux,phandle = <300>;
+ 		reg = <00000000 800000>;
+ 	};
+ 
+@@ -58,11 +53,9 @@
+ 			device_type = "mdio";
+ 			compatible = "fs_enet";
+ 			reg = <e80 8>;
+-			linux,phandle = <e80>;
+ 			#address-cells = <1>;
+ 			#size-cells = <0>;
+-			ethernet-phy@f {
+-				linux,phandle = <e800f>;
++			phy: ethernet-phy@f {
+ 				reg = <f>;
+ 				device_type = "ethernet-phy";
+ 			};
+@@ -76,12 +69,11 @@
+ 			reg = <e00 188>;
+ 			mac-address = [ 00 00 0C 00 01 FD ];
+ 			interrupts = <3 1>;
+-			interrupt-parent = <ff000000>;
+-			phy-handle = <e800f>;
++			interrupt-parent = <&Mpc8xx_pic>;
++			phy-handle = <&Phy>;
+ 		};
+ 
+-		pic@ff000000 {
+-			linux,phandle = <ff000000>;
++		mpc8xx_pic: pic@ff000000 {
+ 			interrupt-controller;
+ 			#address-cells = <0>;
+ 			#interrupt-cells = <2>;
+@@ -92,7 +84,6 @@
+ 		};
+ 
+ 		cpm@ff000000 {
+-			linux,phandle = <ff000000>;
+ 			#address-cells = <1>;
+ 			#size-cells = <1>;
+ 			#interrupt-cells = <2>;
+@@ -103,15 +94,14 @@
+ 			command-proc = <9c0>;
+ 			brg-frequency = <0>;
+ 			interrupts = <0 2>;	// cpm error interrupt
+-			interrupt-parent = <930>;
++			interrupt-parent = <&Cpm_pic>;
+ 
+-			pic@930 {
+-				linux,phandle = <930>;
++			cpm_pic: pic@930 {
+ 				interrupt-controller;
+ 				#address-cells = <0>;
+ 				#interrupt-cells = <2>;
+ 				interrupts = <5 2 0 2>;
+-				interrupt-parent = <ff000000>;
++				interrupt-parent = <&Mpc8xx_pic>;
+ 				reg = <930 20>;
+ 				built-in;
+ 				device_type = "cpm-pic";
+@@ -129,7 +119,7 @@
+ 				tx-clock = <1>;
+ 				current-speed = <0>;
+ 				interrupts = <4 3>;
+-				interrupt-parent = <930>;
++				interrupt-parent = <&Cpm_pic>;
+ 			};
+ 
+ 			smc@a90 {
+@@ -143,7 +133,7 @@
+ 				tx-clock = <2>;
+ 				current-speed = <0>;
+ 				interrupts = <3 3>;
+-				interrupt-parent = <930>;
++				interrupt-parent = <&Cpm_pic>;
+ 			};
+ 
+ 			scc@a00 {
+@@ -154,7 +144,7 @@
+ 				reg = <a00 18 3c00 80>;
+ 				mac-address = [ 00 00 0C 00 03 FD ];
+ 				interrupts = <1e 3>;
+-				interrupt-parent = <930>;
++				interrupt-parent = <&Cpm_pic>;
+ 			};
+ 		};
+ 	};
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc885ads.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc885ads.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc885ads.dts
+@@ -15,12 +15,10 @@
+ 	compatible = "mpc8xx";
+ 	#address-cells = <1>;
+ 	#size-cells = <1>;
+-	linux,phandle = <100>;
+ 
+ 	cpus {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+-		linux,phandle = <200>;
+ 
+ 		PowerPC,885@0 {
+ 			device_type = "cpu";
+@@ -34,15 +32,12 @@
+ 			clock-frequency = <0>;
+ 			32-bit;
+ 			interrupts = <f 2>;	// decrementer interrupt
+-			interrupt-parent = <ff000000>;
+-			linux,phandle = <201>;
+-			linux,boot-cpu;
++			interrupt-parent = <&Mpc8xx_pic>;
+ 		};
+ 	};
+ 
+ 	memory {
+ 		device_type = "memory";
+-		linux,phandle = <300>;
+ 		reg = <00000000 800000>;
+ 	};
+ 
+@@ -58,21 +53,17 @@
+ 			device_type = "mdio";
+ 			compatible = "fs_enet";
+ 			reg = <e80 8>;
+-			linux,phandle = <e80>;
+ 			#address-cells = <1>;
+ 			#size-cells = <0>;
+-			ethernet-phy@0 {
+-				linux,phandle = <e8000>;
++			Phy0: ethernet-phy@0 {
+ 				reg = <0>;
+ 				device_type = "ethernet-phy";
+ 			};
+-			ethernet-phy@1 {
+-				linux,phandle = <e8001>;
++			Phy1: ethernet-phy@1 {
+ 				reg = <1>;
+ 				device_type = "ethernet-phy";
+ 			};
+-			ethernet-phy@2 {
+-				linux,phandle = <e8002>;
++			Phy2: ethernet-phy@2 {
+ 				reg = <2>;
+ 				device_type = "ethernet-phy";
+ 			};
+@@ -86,8 +77,8 @@
+ 			reg = <e00 188>;
+ 			mac-address = [ 00 00 0C 00 01 FD ];
+ 			interrupts = <3 1>;
+-			interrupt-parent = <ff000000>;
+-			phy-handle = <e8000>;
++			interrupt-parent = <&Mpc8xx_pic>;
++			phy-handle = <&Phy1>;
+ 		};
+ 
+ 		fec@1e00 {
+@@ -98,12 +89,11 @@
+ 			reg = <1e00 188>;
+ 			mac-address = [ 00 00 0C 00 02 FD ];
+ 			interrupts = <7 1>;
+-			interrupt-parent = <ff000000>;
+-			phy-handle = <e8001>;
++			interrupt-parent = <&Mpc8xx_pic>;
++			phy-handle = <&Phy2>;
+ 		};
+ 
+-		pic@ff000000 {
+-			linux,phandle = <ff000000>;
++		Mpc8xx_pic: pic@ff000000 {
+ 			interrupt-controller;
+ 			#address-cells = <0>;
+ 			#interrupt-cells = <2>;
+@@ -120,12 +110,11 @@
+ 			compatible = "fsl,pq-pcmcia";
+ 			device_type = "pcmcia";
+ 			reg = <80 80>;
+-			interrupt-parent = <ff000000>;
++			interrupt-parent = <&Mpc8xx_pic>;
+ 			interrupts = <d 1>;
+ 		};
+ 
+ 		cpm@ff000000 {
+-			linux,phandle = <ff000000>;
+ 			#address-cells = <1>;
+ 			#size-cells = <1>;
+ 			#interrupt-cells = <2>;
+@@ -136,15 +125,14 @@
+ 			command-proc = <9c0>;
+ 			brg-frequency = <0>;
+ 			interrupts = <0 2>;	// cpm error interrupt
+-			interrupt-parent = <930>;
++			interrupt-parent = <&Cpm_pic>;
+ 
+-			pic@930 {
+-				linux,phandle = <930>;
++			Cpm_pic: pic@930 {
+ 				interrupt-controller;
+ 				#address-cells = <0>;
+ 				#interrupt-cells = <2>;
+ 				interrupts = <5 2 0 2>;
+-				interrupt-parent = <ff000000>;
++				interrupt-parent = <&Mpc8xx_pic>;
+ 				reg = <930 20>;
+ 				built-in;
+ 				device_type = "cpm-pic";
+@@ -162,7 +150,7 @@
+ 				tx-clock = <1>;
+ 				current-speed = <0>;
+ 				interrupts = <4 3>;
+-				interrupt-parent = <930>;
++				interrupt-parent = <&Cpm_pic>;
+ 			};
+ 
+ 			smc@a90 {
+@@ -176,7 +164,7 @@
+ 				tx-clock = <2>;
+ 				current-speed = <0>;
+ 				interrupts = <3 3>;
+-				interrupt-parent = <930>;
++				interrupt-parent = <&Cpm_pic>;
+ 			};
+ 
+ 			scc@a40 {
+@@ -187,8 +175,8 @@
+ 				reg = <a40 18 3e00 80>;
+ 				mac-address = [ 00 00 0C 00 03 FD ];
+ 				interrupts = <1c 3>;
+-				interrupt-parent = <930>;
+-				phy-handle = <e8002>;
++				interrupt-parent = <&Cpm_pic>;
++				phy-handle = <&Phy2>;
+ 			};
+ 		};
+ 	};
+Index: linux-2.6.18/mvl_patches/pro50-0180.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0180.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(180);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

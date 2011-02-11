@@ -1,0 +1,477 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_MVL_POWERPC_Bamboo_zImage_wrapper
+# Date: Wed Sep 26 11:18:59 2007
+# MR: 24856
+# Adjustments:
+#     arch/powerpc/boot/Makefile modified slightly to apply with no fuzz
+# From 2ba4573cdaf98b0f3acb8795a66f412c1c41284a Mon Sep 17 00:00:00 2001
+# From: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+# Date: Mon, 20 Aug 2007 07:30:32 -0500
+# Subject: [PATCH] [POWERPC] Bamboo zImage wrapper
+# 
+# Add a bootwrapper for the AMCC 440EP Bamboo Eval board.  This also adds a
+# common fixup_clock function for all 440EP(x) chips.
+# 
+# Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+# Acked-by: David Gibson <david@gibson.dropbear.id.au>
+
+PATCHNUM=387
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+Adjustments:
+    arch/powerpc/boot/Makefile modified slightly to apply with no fuzz
+From 2ba4573cdaf98b0f3acb8795a66f412c1c41284a Mon Sep 17 00:00:00 2001
+From: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+Date: Mon, 20 Aug 2007 07:30:32 -0500
+Subject: [PATCH] [POWERPC] Bamboo zImage wrapper
+
+Add a bootwrapper for the AMCC 440EP Bamboo Eval board.  This also adds a
+common fixup_clock function for all 440EP(x) chips.
+
+Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+Acked-by: David Gibson <david@gibson.dropbear.id.au>
+Index: linux-2.6.18/arch/powerpc/boot/44x.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/44x.h
++++ linux-2.6.18/arch/powerpc/boot/44x.h
+@@ -11,5 +11,6 @@
+ #define _PPC_BOOT_44X_H_
+ 
+ void ebony_init(void *mac0, void *mac1);
++void bamboo_init(void);
+ 
+ #endif /* _PPC_BOOT_44X_H_ */
+Index: linux-2.6.18/arch/powerpc/boot/4xx.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/4xx.c
++++ linux-2.6.18/arch/powerpc/boot/4xx.c
+@@ -108,3 +108,85 @@ void ibm4xx_fixup_ebc_ranges(const char 
+ 
+ 	setprop(devp, "ranges", ranges, (p - ranges) * sizeof(u32));
+ }
++
++#define SPRN_CCR1 0x378
++void ibm440ep_fixup_clocks(unsigned int sysclk, unsigned int ser_clk)
++{
++	u32 cpu, plb, opb, ebc, tb, uart0, m, vco;
++	u32 reg;
++	u32 fwdva, fwdvb, fbdv, lfbdv, opbdv0, perdv0, spcid0, prbdv0, tmp;
++
++	mtdcr(DCRN_CPR0_ADDR, CPR0_PLLD0);
++	reg = mfdcr(DCRN_CPR0_DATA);
++	tmp = (reg & 0x000F0000) >> 16;
++	fwdva = tmp ? tmp : 16;
++	tmp = (reg & 0x00000700) >> 8;
++	fwdvb = tmp ? tmp : 8;
++	tmp = (reg & 0x1F000000) >> 24;
++	fbdv = tmp ? tmp : 32;
++	lfbdv = (reg & 0x0000007F);
++
++	mtdcr(DCRN_CPR0_ADDR, CPR0_OPBD0);
++	reg = mfdcr(DCRN_CPR0_DATA);
++	tmp = (reg & 0x03000000) >> 24;
++	opbdv0 = tmp ? tmp : 4;
++
++	mtdcr(DCRN_CPR0_ADDR, CPR0_PERD0);
++	reg = mfdcr(DCRN_CPR0_DATA);
++	tmp = (reg & 0x07000000) >> 24;
++	perdv0 = tmp ? tmp : 8;
++
++	mtdcr(DCRN_CPR0_ADDR, CPR0_PRIMBD0);
++	reg = mfdcr(DCRN_CPR0_DATA);
++	tmp = (reg & 0x07000000) >> 24;
++	prbdv0 = tmp ? tmp : 8;
++
++	mtdcr(DCRN_CPR0_ADDR, CPR0_SCPID);
++	reg = mfdcr(DCRN_CPR0_DATA);
++	tmp = (reg & 0x03000000) >> 24;
++	spcid0 = tmp ? tmp : 4;
++
++	/* Calculate M */
++	mtdcr(DCRN_CPR0_ADDR, CPR0_PLLC0);
++	reg = mfdcr(DCRN_CPR0_DATA);
++	tmp = (reg & 0x03000000) >> 24;
++	if (tmp == 0) { /* PLL output */
++		tmp = (reg & 0x20000000) >> 29;
++		if (!tmp) /* PLLOUTA */
++			m = fbdv * lfbdv * fwdva;
++		else
++			m = fbdv * lfbdv * fwdvb;
++	}
++	else if (tmp == 1) /* CPU output */
++		m = fbdv * fwdva;
++	else
++		m = perdv0 * opbdv0 * fwdvb;
++
++	vco = (m * sysclk) + (m >> 1);
++	cpu = vco / fwdva;
++	plb = vco / fwdvb / prbdv0;
++	opb = plb / opbdv0;
++	ebc = plb / perdv0;
++
++	/* FIXME */
++	uart0 = ser_clk;
++
++	/* Figure out timebase.  Either CPU or default TmrClk */
++	asm volatile (
++			"mfspr	%0,%1\n"
++			:
++			"=&r"(reg) : "i"(SPRN_CCR1));
++	if (reg & 0x0080)
++		tb = 25000000; /* TmrClk is 25MHz */
++	else
++		tb = cpu;
++
++	dt_fixup_cpu_clocks(cpu, tb, 0);
++	dt_fixup_clock("/plb", plb);
++	dt_fixup_clock("/plb/opb", opb);
++	dt_fixup_clock("/plb/opb/ebc", ebc);
++	dt_fixup_clock("/plb/opb/serial@ef600300", uart0);
++	dt_fixup_clock("/plb/opb/serial@ef600400", uart0);
++	dt_fixup_clock("/plb/opb/serial@ef600500", uart0);
++	dt_fixup_clock("/plb/opb/serial@ef600600", uart0);
++}
+Index: linux-2.6.18/arch/powerpc/boot/4xx.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/4xx.h
++++ linux-2.6.18/arch/powerpc/boot/4xx.h
+@@ -16,5 +16,6 @@ void ibm44x_dbcr_reset(void);
+ void ibm40x_dbcr_reset(void);
+ void ibm4xx_quiesce_eth(u32 *emac0, u32 *emac1);
+ void ibm4xx_fixup_ebc_ranges(const char *ebc);
++void ibm440ep_fixup_clocks(unsigned int sysclk, unsigned int ser_clk);
+ 
+ #endif /* _POWERPC_BOOT_4XX_H_ */
+Index: linux-2.6.18/arch/powerpc/boot/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/Makefile
++++ linux-2.6.18/arch/powerpc/boot/Makefile
+@@ -54,9 +54,10 @@ $(addprefix $(obj)/,$(zlib) gunzip_util.
+ src-wlib := string.S crt0.S stdio.c main.c flatdevtree.c flatdevtree_misc.c \
+ 		ns16550.c serial.c simple_alloc.c div64.S util.S \
+ 		gunzip_util.c elf_util.c $(zlib) devtree.c oflib.c ofconsole.c \
+-		4xx.c ebony.c mv64x60.c mpsc.c mv64x60_i2c.c cuboot.c
++		4xx.c ebony.c mv64x60.c mpsc.c mv64x60_i2c.c cuboot.c bamboo.c
+ src-plat := of.c cuboot-83xx.c cuboot-85xx.c holly.c \
+-		cuboot-ebony.c treeboot-ebony.c prpmc2800.c
++		cuboot-ebony.c treeboot-ebony.c prpmc2800.c \
++		treeboot-bamboo.c
+ src-boot := $(src-wlib) $(src-plat) empty.c
+ 
+ src-boot := $(addprefix $(obj)/, $(src-boot))
+@@ -150,6 +151,7 @@ ifneq ($(CONFIG_DEVICE_TREE),"")
+ image-$(CONFIG_PPC_83xx)		+= cuImage.83xx
+ image-$(CONFIG_PPC_85xx)		+= cuImage.85xx
+ image-$(CONFIG_EBONY)			+= treeImage.ebony cuImage.ebony
++image-$(CONFIG_BAMBOO)			+= treeImage.bamboo
+ endif
+ 
+ # For 32-bit powermacs, build the COFF and miboot images
+Index: linux-2.6.18/arch/powerpc/boot/bamboo.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/boot/bamboo.c
+@@ -0,0 +1,45 @@
++/*
++ * Copyright IBM Corporation, 2007
++ * Josh Boyer <jwboyer@linux.vnet.ibm.com>
++ *
++ * Based on ebony wrapper:
++ * Copyright 2007 David Gibson, IBM Corporation.
++ *
++ * Clocking code based on code by:
++ * Stefan Roese <sr@denx.de>
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; version 2 of the License
++ */
++#include <stdarg.h>
++#include <stddef.h>
++#include "types.h"
++#include "elf.h"
++#include "string.h"
++#include "stdio.h"
++#include "page.h"
++#include "ops.h"
++#include "dcr.h"
++#include "4xx.h"
++#include "44x.h"
++
++extern char _dtb_start[];
++extern char _dtb_end[];
++
++static void bamboo_fixups(void)
++{
++	unsigned long sysclk = 33333333;
++
++	ibm440ep_fixup_clocks(sysclk, 11059200);
++	ibm4xx_fixup_memsize();
++	ibm4xx_quiesce_eth((u32 *)0xef600e00, (u32 *)0xef600f00);
++}
++
++void bamboo_init(void)
++{
++	platform_ops.fixups = bamboo_fixups;
++	platform_ops.exit = ibm44x_dbcr_reset;
++	ft_init(_dtb_start, 0, 32);
++	serial_console_init();
++}
+Index: linux-2.6.18/arch/powerpc/boot/dcr.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dcr.h
++++ linux-2.6.18/arch/powerpc/boot/dcr.h
+@@ -124,4 +124,14 @@ static const unsigned long sdram_bxcr[] 
+ #define DCRN_MAL0_CFG					0x180
+ #define MAL_RESET 0x80000000
+ 
++/* 440EP Clock/Power-on Reset regs */
++#define DCRN_CPR0_ADDR	0xc
++#define DCRN_CPR0_DATA	0xd
++#define CPR0_PLLD0	0x60
++#define CPR0_OPBD0	0xc0
++#define CPR0_PERD0	0xe0
++#define CPR0_PRIMBD0	0xa0
++#define CPR0_SCPID	0x120
++#define CPR0_PLLC0	0x40
++
+ #endif	/* _PPC_BOOT_DCR_H_ */
+Index: linux-2.6.18/arch/powerpc/boot/treeboot-bamboo.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/boot/treeboot-bamboo.c
+@@ -0,0 +1,27 @@
++/*
++ * Copyright IBM Corporation, 2007
++ * Josh Boyer <jwboyer@linux.vnet.ibm.com>
++ *
++ * Based on ebony wrapper:
++ * Copyright 2007 David Gibson, IBM Corporation.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; version 2 of the License
++ */
++#include "ops.h"
++#include "stdio.h"
++#include "44x.h"
++
++extern char _end[];
++
++BSS_STACK(4096);
++
++void platform_init(void)
++{
++	unsigned long end_of_ram = 0x8000000;
++	unsigned long avail_ram = end_of_ram - (unsigned long)_end;
++
++	simple_alloc_init(_end, avail_ram, 32, 64);
++	bamboo_init();
++}
+Index: linux-2.6.18/mvl_patches/pro50-0387.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0387.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(387);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

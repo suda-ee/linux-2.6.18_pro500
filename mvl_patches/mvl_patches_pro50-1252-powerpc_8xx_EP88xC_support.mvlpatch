@@ -1,0 +1,466 @@
+#! /usr/bin/env bash
+# Patch: -powerpc_8xx_EP88xC_support
+# Date: Thu Jun 26 14:13:24 2008
+# Source: Scott Wood <scottwood@freescale.com>,
+#         backport from 2.6.24-rc1(11c146cc19df337f4af42dade9e4fca33c5a54ee)
+# MR: 27582
+# Type: Enhancement
+# Disposition: local
+# Signed-off-by: Gennadiy Kurtsman <gkurtsman@ru.mvista.com>
+# Description:
+# 
+# NOTE: This is partial backport (arch/powerpc/boot/... changes omitted)
+# 
+# commit 11c146cc19df337f4af42dade9e4fca33c5a54ee
+# Author: Scott Wood <scottwood@freescale.com>
+# Date:   09/14/2007 11:58:25 PM
+#     [POWERPC] 8xx/wrapper: Embedded Planet EP88xC support
+#     
+#     This board is also resold by Freescale under the names
+#     "QUICCStart MPC885 Evaluation System" and "CWH-PPC-885XN-VE".
+#     
+#     Signed-off-by: Scott Wood <scottwood@freescale.com>
+#     Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+
+PATCHNUM=1252
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Scott Wood <scottwood@freescale.com>,
+        backport from 2.6.24-rc1(11c146cc19df337f4af42dade9e4fca33c5a54ee)
+MR: 27582
+Type: Enhancement
+Disposition: local
+Signed-off-by: Gennadiy Kurtsman <gkurtsman@ru.mvista.com>
+Description:
+
+NOTE: This is partial backport (arch/powerpc/boot/... changes omitted)
+
+commit 11c146cc19df337f4af42dade9e4fca33c5a54ee
+Author: Scott Wood <scottwood@freescale.com>
+Date:   09/14/2007 11:58:25 PM
+    [POWERPC] 8xx/wrapper: Embedded Planet EP88xC support
+    
+    This board is also resold by Freescale under the names
+    "QUICCStart MPC885 Evaluation System" and "CWH-PPC-885XN-VE".
+    
+    Signed-off-by: Scott Wood <scottwood@freescale.com>
+    Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+Index: linux-2.6.18/arch/powerpc/platforms/8xx/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/8xx/Kconfig
++++ linux-2.6.18/arch/powerpc/platforms/8xx/Kconfig
+@@ -32,6 +32,16 @@ config MPC885ADS
+ 	  The MPC885ADS is meant to serve as a platform for s/w and h/w
+ 	  development around the MPC885 processor family.
+ 
++config PPC_EP88XC
++	bool "Embedded Planet EP88xC (a.k.a. CWH-PPC-885XN-VE)"
++	select CPM1
++	select PPC_CPM_NEW_BINDING
++	help
++	  This enables support for the Embedded Planet EP88xC board.
++
++	  This board is also resold by Freescale as the QUICCStart
++	  MPC885 Evaluation System and/or the CWH-PPC-885XN-VE.
++
+ endchoice
+ 
+ menu "Freescale Ethernet driver platform-specific options"
+Index: linux-2.6.18/arch/powerpc/platforms/8xx/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/8xx/Makefile
++++ linux-2.6.18/arch/powerpc/platforms/8xx/Makefile
+@@ -4,3 +4,4 @@
+ obj-$(CONFIG_PPC_8xx)	  += m8xx_setup.o
+ obj-$(CONFIG_MPC885ADS)   += mpc885ads_setup.o
+ obj-$(CONFIG_MPC86XADS)   += mpc86xads_setup.o
++obj-$(CONFIG_PPC_EP88XC)  += ep88xc.o
+Index: linux-2.6.18/arch/powerpc/platforms/8xx/ep88xc.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/8xx/ep88xc.c
+@@ -0,0 +1,176 @@
++/*
++ * Platform setup for the Embedded Planet EP88xC board
++ *
++ * Author: Scott Wood <scottwood@freescale.com>
++ * Copyright 2007 Freescale Semiconductor, Inc.
++ *
++ * This file is licensed under the terms of the GNU General Public License
++ * version 2. This program is licensed "as is" without any warranty of any
++ * kind, whether express or implied.
++ */
++
++#include <linux/init.h>
++#include <linux/of_platform.h>
++
++#include <asm/machdep.h>
++#include <asm/io.h>
++#include <asm/udbg.h>
++#include <asm/commproc.h>
++
++#include <sysdev/commproc.h>
++
++struct cpm_pin {
++	int port, pin, flags;
++};
++
++static struct cpm_pin ep88xc_pins[] = {
++	/* SMC1 */
++	{1, 24, CPM_PIN_INPUT}, /* RX */
++	{1, 25, CPM_PIN_INPUT | CPM_PIN_SECONDARY}, /* TX */
++
++	/* SCC2 */
++	{0, 12, CPM_PIN_INPUT}, /* TX */
++	{0, 13, CPM_PIN_INPUT}, /* RX */
++	{2, 8, CPM_PIN_INPUT | CPM_PIN_SECONDARY | CPM_PIN_GPIO}, /* CD */
++	{2, 9, CPM_PIN_INPUT | CPM_PIN_SECONDARY | CPM_PIN_GPIO}, /* CTS */
++	{2, 14, CPM_PIN_INPUT}, /* RTS */
++
++	/* MII1 */
++	{0, 0, CPM_PIN_INPUT},
++	{0, 1, CPM_PIN_INPUT},
++	{0, 2, CPM_PIN_INPUT},
++	{0, 3, CPM_PIN_INPUT},
++	{0, 4, CPM_PIN_OUTPUT},
++	{0, 10, CPM_PIN_OUTPUT},
++	{0, 11, CPM_PIN_OUTPUT},
++	{1, 19, CPM_PIN_INPUT},
++	{1, 31, CPM_PIN_INPUT},
++	{2, 12, CPM_PIN_INPUT},
++	{2, 13, CPM_PIN_INPUT},
++	{3, 8, CPM_PIN_INPUT},
++	{4, 30, CPM_PIN_OUTPUT},
++	{4, 31, CPM_PIN_OUTPUT},
++
++	/* MII2 */
++	{4, 14, CPM_PIN_OUTPUT | CPM_PIN_SECONDARY},
++	{4, 15, CPM_PIN_OUTPUT | CPM_PIN_SECONDARY},
++	{4, 16, CPM_PIN_OUTPUT},
++	{4, 17, CPM_PIN_OUTPUT | CPM_PIN_SECONDARY},
++	{4, 18, CPM_PIN_OUTPUT | CPM_PIN_SECONDARY},
++	{4, 19, CPM_PIN_OUTPUT | CPM_PIN_SECONDARY},
++	{4, 20, CPM_PIN_OUTPUT | CPM_PIN_SECONDARY},
++	{4, 21, CPM_PIN_OUTPUT},
++	{4, 22, CPM_PIN_OUTPUT},
++	{4, 23, CPM_PIN_OUTPUT},
++	{4, 24, CPM_PIN_OUTPUT},
++	{4, 25, CPM_PIN_OUTPUT},
++	{4, 26, CPM_PIN_OUTPUT},
++	{4, 27, CPM_PIN_OUTPUT},
++	{4, 28, CPM_PIN_OUTPUT},
++	{4, 29, CPM_PIN_OUTPUT},
++
++	/* USB */
++	{0, 6, CPM_PIN_INPUT},  /* CLK2 */
++	{0, 14, CPM_PIN_INPUT}, /* USBOE */
++	{0, 15, CPM_PIN_INPUT}, /* USBRXD */
++	{2, 6, CPM_PIN_OUTPUT}, /* USBTXN */
++	{2, 7, CPM_PIN_OUTPUT}, /* USBTXP */
++	{2, 10, CPM_PIN_INPUT}, /* USBRXN */
++	{2, 11, CPM_PIN_INPUT}, /* USBRXP */
++
++	/* Misc */
++	{1, 26, CPM_PIN_INPUT}, /* BRGO2 */
++	{1, 27, CPM_PIN_INPUT}, /* BRGO1 */
++};
++
++static void __init init_ioports(void)
++{
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(ep88xc_pins); i++) {
++		struct cpm_pin *pin = &ep88xc_pins[i];
++		cpm1_set_pin(pin->port, pin->pin, pin->flags);
++	}
++
++	cpm1_clk_setup(CPM_CLK_SMC1, CPM_BRG1, CPM_CLK_RTX);
++	cpm1_clk_setup(CPM_CLK_SCC1, CPM_CLK2, CPM_CLK_TX); /* USB */
++	cpm1_clk_setup(CPM_CLK_SCC1, CPM_CLK2, CPM_CLK_RX);
++	cpm1_clk_setup(CPM_CLK_SCC2, CPM_BRG2, CPM_CLK_TX);
++	cpm1_clk_setup(CPM_CLK_SCC2, CPM_BRG2, CPM_CLK_RX);
++}
++
++static u8 __iomem *ep88xc_bcsr;
++
++#define BCSR7_SCC2_ENABLE 0x10
++
++#define BCSR8_PHY1_ENABLE 0x80
++#define BCSR8_PHY1_POWER  0x40
++#define BCSR8_PHY2_ENABLE 0x20
++#define BCSR8_PHY2_POWER  0x10
++
++#define BCSR9_USB_ENABLE  0x80
++#define BCSR9_USB_POWER   0x40
++#define BCSR9_USB_HOST    0x20
++#define BCSR9_USB_FULL_SPEED_TARGET 0x10
++
++static void __init ep88xc_setup_arch(void)
++{
++	struct device_node *np;
++
++	cpm_reset();
++	init_ioports();
++
++	np = of_find_compatible_node(NULL, NULL, "fsl,ep88xc-bcsr");
++	if (!np) {
++		printk(KERN_CRIT "Could not find fsl,ep88xc-bcsr node\n");
++		return;
++	}
++
++	ep88xc_bcsr = of_iomap(np, 0);
++	of_node_put(np);
++
++	if (!ep88xc_bcsr) {
++		printk(KERN_CRIT "Could not remap BCSR\n");
++		return;
++	}
++
++	setbits8(&ep88xc_bcsr[7], BCSR7_SCC2_ENABLE);
++	setbits8(&ep88xc_bcsr[8], BCSR8_PHY1_ENABLE | BCSR8_PHY1_POWER |
++	                          BCSR8_PHY2_ENABLE | BCSR8_PHY2_POWER);
++}
++
++static int __init ep88xc_probe(void)
++{
++	unsigned long root = of_get_flat_dt_root();
++	return of_flat_dt_is_compatible(root, "fsl,ep88xc");
++}
++
++static struct of_device_id __initdata of_bus_ids[] = {
++	{ .name = "soc", },
++	{ .name = "cpm", },
++	{ .name = "localbus", },
++	{},
++};
++
++static int __init declare_of_platform_devices(void)
++{
++	/* Publish the QE devices */
++	if (machine_is(ep88xc))
++		of_platform_bus_probe(NULL, of_bus_ids, NULL);
++
++	return 0;
++}
++device_initcall(declare_of_platform_devices);
++
++define_machine(ep88xc) {
++	.name = "Embedded Planet EP88xC",
++	.probe = ep88xc_probe,
++	.setup_arch = ep88xc_setup_arch,
++	.init_IRQ = m8xx_pic_init,
++	.get_irq	= mpc8xx_get_irq,
++	.restart = mpc8xx_restart,
++	.calibrate_decr = mpc8xx_calibrate_decr,
++	.set_rtc_time = mpc8xx_set_rtc_time,
++	.get_rtc_time = mpc8xx_get_rtc_time,
++	.progress = udbg_progress,
++};
+Index: linux-2.6.18/mvl_patches/pro50-1252.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1252.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1252);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

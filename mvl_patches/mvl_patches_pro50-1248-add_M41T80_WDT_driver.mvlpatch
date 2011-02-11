@@ -1,0 +1,599 @@
+#! /usr/bin/env bash
+# Patch: -add_M41T80_WDT_driver
+# Date: Thu Jun 26 14:13:04 2008
+# Source: Atsushi Nemoto <anemo@mba.ocn.ne.jp>
+# 	backport from 2.6.23-rc1 (617780d290bd6eb2b260928c6acff5b7c6084154)
+# MR: 27582
+# Type: Enhancement
+# Disposition: local
+# Signed-off-by: Gennadiy Kurtsman <gkurtsman@ru.mvista.com>
+# Description:
+# 
+# commit 617780d290bd6eb2b260928c6acff5b7c6084154
+# Author: Atsushi Nemoto <anemo@mba.ocn.ne.jp>
+# Date:   07/17/2007 03:05:04 PM
+# 
+#     rtc: watchdog support for rtc-m41t80 driver
+#     
+#     Add a watchdog driver interface to rtc-m41t80 driver.  This is derived from
+#     works by Alexander Bigga <ab@mycable.de>
+#     
+#     Signed-off-by: Atsushi Nemoto <anemo@mba.ocn.ne.jp>
+#     Signed-off-by: Alexander Bigga <ab@mycable.de>
+#     Cc: David Brownell <david-b@pacbell.net>
+#     Acked-by: Alessandro Zummo <a.zummo@towertech.it>
+#     Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+#     Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+# 
+
+PATCHNUM=1248
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Atsushi Nemoto <anemo@mba.ocn.ne.jp>
+	backport from 2.6.23-rc1 (617780d290bd6eb2b260928c6acff5b7c6084154)
+MR: 27582
+Type: Enhancement
+Disposition: local
+Signed-off-by: Gennadiy Kurtsman <gkurtsman@ru.mvista.com>
+Description:
+
+commit 617780d290bd6eb2b260928c6acff5b7c6084154
+Author: Atsushi Nemoto <anemo@mba.ocn.ne.jp>
+Date:   07/17/2007 03:05:04 PM
+
+    rtc: watchdog support for rtc-m41t80 driver
+    
+    Add a watchdog driver interface to rtc-m41t80 driver.  This is derived from
+    works by Alexander Bigga <ab@mycable.de>
+    
+    Signed-off-by: Atsushi Nemoto <anemo@mba.ocn.ne.jp>
+    Signed-off-by: Alexander Bigga <ab@mycable.de>
+    Cc: David Brownell <david-b@pacbell.net>
+    Acked-by: Alessandro Zummo <a.zummo@towertech.it>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+Index: linux-2.6.18/drivers/rtc/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/rtc/Kconfig
++++ linux-2.6.18/drivers/rtc/Kconfig
+@@ -262,6 +262,13 @@ config RTC_DRV_M41T80
+ 	  This driver can also be built as a module. If so, the module
+ 	  will be called rtc-m41t80.
+ 
++config RTC_DRV_M41T80_WDT
++	bool "ST M41T80 series RTC watchdog timer"
++	depends on RTC_DRV_M41T80
++	help
++	  If you say Y here you will get support for the
++	  watchdog timer in ST M41T80 RTC chips series.
++
+ config RTC_DRV_M48T86
+ 	tristate "ST M48T86/Dallas DS12887"
+ 	depends on RTC_CLASS
+Index: linux-2.6.18/drivers/rtc/rtc-m41t80.c
+===================================================================
+--- linux-2.6.18.orig/drivers/rtc/rtc-m41t80.c
++++ linux-2.6.18/drivers/rtc/rtc-m41t80.c
+@@ -20,6 +20,13 @@
+ #include <linux/i2c.h>
+ #include <linux/rtc.h>
+ #include <linux/bcd.h>
++#ifdef CONFIG_RTC_DRV_M41T80_WDT
++#include <linux/miscdevice.h>
++#include <linux/watchdog.h>
++#include <linux/reboot.h>
++#include <linux/fs.h>
++#include <linux/ioctl.h>
++#endif
+ 
+ #define M41T80_REG_SSEC	0
+ #define M41T80_REG_SEC	1
+@@ -480,6 +487,268 @@ static int m41t80_sysfs_register(struct 
+ }
+ #endif
+ 
++#ifdef CONFIG_RTC_DRV_M41T80_WDT
++/*
++ *****************************************************************************
++ *
++ * Watchdog Driver
++ *
++ *****************************************************************************
++ */
++static struct i2c_client *save_client;
++
++/* Default margin */
++#define WD_TIMO 60		/* 1..31 seconds */
++
++static int wdt_margin = WD_TIMO;
++module_param(wdt_margin, int, 0);
++MODULE_PARM_DESC(wdt_margin, "Watchdog timeout in seconds (default 60s)");
++
++static unsigned long wdt_is_open;
++static int boot_flag;
++
++/**
++ *	wdt_ping:
++ *
++ *	Reload counter one with the watchdog timeout. We don't bother reloading
++ *	the cascade counter.
++ */
++static void wdt_ping(void)
++{
++	unsigned char i2c_data[2];
++	struct i2c_msg msgs1[1] = {
++		{
++			.addr	= save_client->addr,
++			.flags	= 0,
++			.len	= 2,
++			.buf	= i2c_data,
++		},
++	};
++	i2c_data[0] = 0x09;		/* watchdog register */
++
++	if (wdt_margin > 31)
++		i2c_data[1] = (wdt_margin & 0xFC) | 0x83; /* resolution = 4s */
++	else
++		/*
++		 * WDS = 1 (0x80), mulitplier = WD_TIMO, resolution = 1s (0x02)
++		 */
++		i2c_data[1] = wdt_margin<<2 | 0x82;
++
++	i2c_transfer(save_client->adapter, msgs1, 1);
++}
++
++/**
++ *	wdt_disable:
++ *
++ *	disables watchdog.
++ */
++static void wdt_disable(void)
++{
++	unsigned char i2c_data[2], i2c_buf[0x10];
++	struct i2c_msg msgs0[2] = {
++		{
++			.addr	= save_client->addr,
++			.flags	= 0,
++			.len	= 1,
++			.buf	= i2c_data,
++		},
++		{
++			.addr	= save_client->addr,
++			.flags	= I2C_M_RD,
++			.len	= 1,
++			.buf	= i2c_buf,
++		},
++	};
++	struct i2c_msg msgs1[1] = {
++		{
++			.addr	= save_client->addr,
++			.flags	= 0,
++			.len	= 2,
++			.buf	= i2c_data,
++		},
++	};
++
++	i2c_data[0] = 0x09;
++	i2c_transfer(save_client->adapter, msgs0, 2);
++
++	i2c_data[0] = 0x09;
++	i2c_data[1] = 0x00;
++	i2c_transfer(save_client->adapter, msgs1, 1);
++}
++
++/**
++ *	wdt_write:
++ *	@file: file handle to the watchdog
++ *	@buf: buffer to write (unused as data does not matter here
++ *	@count: count of bytes
++ *	@ppos: pointer to the position to write. No seeks allowed
++ *
++ *	A write to a watchdog device is defined as a keepalive signal. Any
++ *	write of data will do, as we we don't define content meaning.
++ */
++static ssize_t wdt_write(struct file *file, const char __user *buf,
++			 size_t count, loff_t *ppos)
++{
++	/*  Can't seek (pwrite) on this device
++	if (ppos != &file->f_pos)
++	return -ESPIPE;
++	*/
++	if (count) {
++		wdt_ping();
++		return 1;
++	}
++	return 0;
++}
++
++static ssize_t wdt_read(struct file *file, char __user *buf,
++			size_t count, loff_t *ppos)
++{
++	return 0;
++}
++
++/**
++ *	wdt_ioctl:
++ *	@inode: inode of the device
++ *	@file: file handle to the device
++ *	@cmd: watchdog command
++ *	@arg: argument pointer
++ *
++ *	The watchdog API defines a common set of functions for all watchdogs
++ *	according to their available features. We only actually usefully support
++ *	querying capabilities and current status.
++ */
++static int wdt_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
++		     unsigned long arg)
++{
++	int new_margin, rv;
++	static struct watchdog_info ident = {
++		.options = WDIOF_POWERUNDER | WDIOF_KEEPALIVEPING |
++			WDIOF_SETTIMEOUT,
++		.firmware_version = 1,
++		.identity = "M41T80 WTD"
++	};
++
++	switch (cmd) {
++	case WDIOC_GETSUPPORT:
++		return copy_to_user((struct watchdog_info __user *)arg, &ident,
++				    sizeof(ident)) ? -EFAULT : 0;
++
++	case WDIOC_GETSTATUS:
++	case WDIOC_GETBOOTSTATUS:
++		return put_user(boot_flag, (int __user *)arg);
++	case WDIOC_KEEPALIVE:
++		wdt_ping();
++		return 0;
++	case WDIOC_SETTIMEOUT:
++		if (get_user(new_margin, (int __user *)arg))
++			return -EFAULT;
++		/* Arbitrary, can't find the card's limits */
++		if (new_margin < 1 || new_margin > 124)
++			return -EINVAL;
++		wdt_margin = new_margin;
++		wdt_ping();
++		/* Fall */
++	case WDIOC_GETTIMEOUT:
++		return put_user(wdt_margin, (int __user *)arg);
++
++	case WDIOC_SETOPTIONS:
++		if (copy_from_user(&rv, (int __user *)arg, sizeof(int)))
++			return -EFAULT;
++
++		if (rv & WDIOS_DISABLECARD) {
++			printk(KERN_INFO
++			       "rtc-m41t80: disable watchdog\n");
++			wdt_disable();
++		}
++
++		if (rv & WDIOS_ENABLECARD) {
++			printk(KERN_INFO
++			       "rtc-m41t80: enable watchdog\n");
++			wdt_ping();
++		}
++
++		return -EINVAL;
++	}
++	return -ENOTTY;
++}
++
++/**
++ *	wdt_open:
++ *	@inode: inode of device
++ *	@file: file handle to device
++ *
++ */
++static int wdt_open(struct inode *inode, struct file *file)
++{
++	if (MINOR(inode->i_rdev) == WATCHDOG_MINOR) {
++		if (test_and_set_bit(0, &wdt_is_open))
++			return -EBUSY;
++		/*
++		 *	Activate
++		 */
++		wdt_is_open = 1;
++		return 0;
++	}
++	return -ENODEV;
++}
++
++/**
++ *	wdt_close:
++ *	@inode: inode to board
++ *	@file: file handle to board
++ *
++ */
++static int wdt_release(struct inode *inode, struct file *file)
++{
++	if (MINOR(inode->i_rdev) == WATCHDOG_MINOR)
++		clear_bit(0, &wdt_is_open);
++	return 0;
++}
++
++/**
++ *	notify_sys:
++ *	@this: our notifier block
++ *	@code: the event being reported
++ *	@unused: unused
++ *
++ *	Our notifier is called on system shutdowns. We want to turn the card
++ *	off at reboot otherwise the machine will reboot again during memory
++ *	test or worse yet during the following fsck. This would suck, in fact
++ *	trust me - if it happens it does suck.
++ */
++static int wdt_notify_sys(struct notifier_block *this, unsigned long code,
++			  void *unused)
++{
++	if (code == SYS_DOWN || code == SYS_HALT)
++		/* Disable Watchdog */
++		wdt_disable();
++	return NOTIFY_DONE;
++}
++
++static const struct file_operations wdt_fops = {
++	.owner	= THIS_MODULE,
++	.read	= wdt_read,
++	.ioctl	= wdt_ioctl,
++	.write	= wdt_write,
++	.open	= wdt_open,
++	.release = wdt_release,
++};
++
++static struct miscdevice wdt_dev = {
++	.minor = WATCHDOG_MINOR,
++	.name = "watchdog",
++	.fops = &wdt_fops,
++};
++
++/*
++ *	The WDT card needs to learn about soft shutdowns in order to
++ *	turn the timebomb registers off.
++ */
++static struct notifier_block wdt_notifier = {
++	.notifier_call = wdt_notify_sys,
++};
++#endif /* CONFIG_RTC_DRV_M41T80_WDT */
++
+ /*
+  *****************************************************************************
+  *
+@@ -572,6 +841,19 @@ static int m41t80_probe(struct i2c_clien
+ 	if (rc)
+ 		goto exit;
+ 
++#ifdef CONFIG_RTC_DRV_M41T80_WDT
++	if (chip->features & M41T80_FEATURE_HT) {
++		rc = misc_register(&wdt_dev);
++		if (rc)
++			goto exit;
++		rc = register_reboot_notifier(&wdt_notifier);
++		if (rc) {
++			misc_deregister(&wdt_dev);
++			goto exit;
++		}
++		save_client = client;
++	}
++#endif
+ 	return 0;
+ 
+ st_err:
+@@ -595,6 +877,12 @@ static int m41t80_remove(struct i2c_clie
+ 	struct m41t80_data *clientdata = i2c_get_clientdata(client);
+ 	struct rtc_device *rtc = clientdata->rtc;
+ 
++#ifdef CONFIG_RTC_DRV_M41T80_WDT
++	if (clientdata->chip->features & M41T80_FEATURE_HT) {
++		misc_deregister(&wdt_dev);
++		unregister_reboot_notifier(&wdt_notifier);
++	}
++#endif
+ 	if (rtc)
+ 		rtc_device_unregister(rtc);
+ 	kfree(clientdata);
+Index: linux-2.6.18/mvl_patches/pro50-1248.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1248.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1248);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

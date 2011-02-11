@@ -1,0 +1,639 @@
+#! /usr/bin/env bash
+# Patch: -pro_mips_latency_fixes
+# Date: Fri Aug 15 13:05:39 2008
+# Source: MontaVista Software, Inc.
+# MR: 26134
+# Type: Defect Fix
+# Disposition: MontaVista
+# Signed-off-by: Manish Lachwani <mlachwani@mvista.com>
+# Description:
+# 
+# LATENCY_TRACE and LATENCY_TIMING fixes
+# 
+#  arch/mips/kernel/entry.S       |   55 ++++++++
+#  arch/mips/kernel/scall64-n32.S |  277 +++++++++++++++++++++++++++++++++++++++++
+#  arch/mips/kernel/time.c        |   10 -
+#  include/asm-mips/unistd.h      |    2 
+#  4 files changed, 334 insertions(+), 10 deletions(-)
+# 
+# 
+
+PATCHNUM=1446
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: MontaVista Software, Inc.
+MR: 26134
+Type: Defect Fix
+Disposition: MontaVista
+Signed-off-by: Manish Lachwani <mlachwani@mvista.com>
+Description:
+
+LATENCY_TRACE and LATENCY_TIMING fixes
+
+ arch/mips/kernel/entry.S       |   55 ++++++++
+ arch/mips/kernel/scall64-n32.S |  277 +++++++++++++++++++++++++++++++++++++++++
+ arch/mips/kernel/time.c        |   10 -
+ include/asm-mips/unistd.h      |    2 
+ mvl_patches/pro50-1446.c       |   16 ++
+ 5 files changed, 350 insertions(+), 10 deletions(-)
+
+
+Index: linux-2.6.18/arch/mips/kernel/entry.S
+===================================================================
+--- linux-2.6.18.orig/arch/mips/kernel/entry.S
++++ linux-2.6.18/arch/mips/kernel/entry.S
+@@ -48,6 +48,61 @@ resume_userspace:
+ 	bnez	t0, work_pending
+ 	j	restore_all
+ 
++#ifdef CONFIG_LATENCY_TRACE
++
++#ifdef CONFIG_32BIT
++
++#define PTR_ADDU_STRING add
++#define PTR_SUBU_STRING	sub
++
++#else
++
++#define PTR_ADDU_STRING daddu
++#define PTR_SUBU_STRING dsubu
++
++#endif
++
++FEXPORT(mcount)
++	.set noreorder
++	.set noat
++	lw t0, mcount_enabled
++	beqz t0, out
++	PTR_SUBU_STRING $29,$29,96
++	LONG_S $4,24($29)
++        LONG_S $5,32($29)
++        LONG_S $6,40($29)
++        LONG_S $7,48($29)
++        LONG_S $8,56($29)
++        LONG_S $9,64($29)
++        LONG_S $10,72($29)
++        LONG_S $11,80($29)
++        LONG_S $2,16($29)
++        LONG_S $1,0($29)
++        LONG_S $31,8($29)
++        move $5,$31
++        move $4,$1
++	jal __trace
++	nop;
++        LONG_L $4,24($29)
++        LONG_L $5,32($29)
++        LONG_L $6,40($29)
++        LONG_L $7,48($29)
++        LONG_L $8,56($29)
++        LONG_L $9,64($29)
++        LONG_L $10,72($29)
++        LONG_L $11,80($29)
++        LONG_L $2,16($29)
++        LONG_L $31,8($29)
++        LONG_L $1,0($29)
++	PTR_ADDU_STRING $29,$29,96
++	j $31
++	move $31,$1;
++out:
++	.set reorder;
++	.set at
++#endif
++	
++
+ #ifdef CONFIG_PREEMPT
+ resume_kernel:
+ 	raw_local_irq_disable
+Index: linux-2.6.18/include/asm-mips/unistd.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-mips/unistd.h
++++ linux-2.6.18/include/asm-mips/unistd.h
+@@ -1285,5 +1285,7 @@ asmlinkage long sys_rt_sigaction(int sig
+  */
+ #define cond_syscall(x) asm(".weak\t" #x "\n" #x "\t=\tsys_ni_syscall")
+ 
++#define NR_syscalls __NR_Linux_syscalls
++
+ #endif /* __KERNEL__ */
+ #endif /* _ASM_UNISTD_H */
+Index: linux-2.6.18/arch/mips/kernel/scall64-n32.S
+===================================================================
+--- linux-2.6.18.orig/arch/mips/kernel/scall64-n32.S
++++ linux-2.6.18/arch/mips/kernel/scall64-n32.S
+@@ -395,3 +395,280 @@ EXPORT(sysn32_call_table)
+         PTR	sys32_fadvise64_64
+ 	PTR	sys_ltt_trace_generic
+ 	PTR	sys_ltt_register_generic
++
++EXPORT(sys_call_table)
++	PTR	sys_read			/* 6000 */
++	PTR	sys_write
++	PTR	sys_open
++	PTR	sys_close
++	PTR	sys_newstat
++	PTR	sys_newfstat			/* 6005 */
++	PTR	sys_newlstat
++	PTR	sys_poll
++	PTR	sys_lseek
++	PTR	old_mmap
++	PTR	sys_mprotect			/* 6010 */
++	PTR	sys_munmap
++	PTR	sys_brk
++	PTR	sys32_rt_sigaction
++	PTR	sys32_rt_sigprocmask
++	PTR	compat_sys_ioctl		/* 6015 */
++	PTR	sys_pread64
++	PTR	sys_pwrite64
++	PTR	compat_sys_readv
++	PTR	compat_sys_writev
++	PTR	sys_access			/* 6020 */
++	PTR	sys_pipe
++	PTR	compat_sys_select
++	PTR	sys_sched_yield
++	PTR	sys_mremap
++	PTR	sys_msync			/* 6025 */
++	PTR	sys_mincore
++	PTR	sys_madvise
++	PTR	sys_shmget
++	PTR	sys32_shmat
++	PTR	sys_shmctl			/* 6030 */
++	PTR	sys_dup
++	PTR	sys_dup2
++	PTR	sys_pause
++	PTR	compat_sys_nanosleep
++	PTR	compat_sys_getitimer		/* 6035 */
++	PTR	compat_sys_setitimer
++	PTR	sys_alarm
++	PTR	sys_getpid
++	PTR	sys32_sendfile
++	PTR	sys_socket			/* 6040 */
++	PTR	sys_connect
++	PTR	sys_accept
++	PTR	sys_sendto
++	PTR	sys_recvfrom
++	PTR	compat_sys_sendmsg		/* 6045 */
++	PTR	compat_sys_recvmsg
++	PTR	sys_shutdown
++	PTR	sys_bind
++	PTR	sys_listen
++	PTR	sys_getsockname			/* 6050 */
++	PTR	sys_getpeername
++	PTR	sys_socketpair
++	PTR	compat_sys_setsockopt
++	PTR	sys_getsockopt
++	PTR	sys_clone			/* 6055 */
++	PTR	sys_fork
++	PTR	sys32_execve
++	PTR	sys_exit
++	PTR	compat_sys_wait4
++	PTR	sys_kill			/* 6060 */
++	PTR	sys32_newuname
++	PTR	sys_semget
++	PTR	sys_semop
++	PTR	sys_semctl
++	PTR	sys_shmdt			/* 6065 */
++	PTR	sys_msgget
++	PTR	sys_msgsnd
++	PTR	sys_msgrcv
++	PTR	sys_msgctl
++	PTR	compat_sys_fcntl		/* 6070 */
++	PTR	sys_flock
++	PTR	sys_fsync
++	PTR	sys_fdatasync
++	PTR	sys_truncate
++	PTR	sys_ftruncate			/* 6075 */
++	PTR	compat_sys_getdents
++	PTR	sys_getcwd
++	PTR	sys_chdir
++	PTR	sys_fchdir
++	PTR	sys_rename			/* 6080 */
++	PTR	sys_mkdir
++	PTR	sys_rmdir
++	PTR	sys_creat
++	PTR	sys_link
++	PTR	sys_unlink			/* 6085 */
++	PTR	sys_symlink
++	PTR	sys_readlink
++	PTR	sys_chmod
++	PTR	sys_fchmod
++	PTR	sys_chown			/* 6090 */
++	PTR	sys_fchown
++	PTR	sys_lchown
++	PTR	sys_umask
++	PTR	sys32_gettimeofday
++	PTR	compat_sys_getrlimit		/* 6095 */
++	PTR	compat_sys_getrusage
++	PTR	sys32_sysinfo
++	PTR	compat_sys_times
++	PTR	sys32_ptrace
++	PTR	sys_getuid			/* 6100 */
++	PTR	sys_syslog
++	PTR	sys_getgid
++	PTR	sys_setuid
++	PTR	sys_setgid
++	PTR	sys_geteuid			/* 6105 */
++	PTR	sys_getegid
++	PTR	sys_setpgid
++	PTR	sys_getppid
++	PTR	sys_getpgrp
++	PTR	sys_setsid			/* 6110 */
++	PTR	sys_setreuid
++	PTR	sys_setregid
++	PTR	sys_getgroups
++	PTR	sys_setgroups
++	PTR	sys_setresuid			/* 6115 */
++	PTR	sys_getresuid
++	PTR	sys_setresgid
++	PTR	sys_getresgid
++	PTR	sys_getpgid
++	PTR	sys_setfsuid			/* 6120 */
++	PTR	sys_setfsgid
++	PTR	sys_getsid
++	PTR	sys_capget
++	PTR	sys_capset
++	PTR	sys32_rt_sigpending		/* 6125 */
++	PTR	compat_sys_rt_sigtimedwait
++	PTR	sys32_rt_sigqueueinfo
++	PTR	sysn32_rt_sigsuspend
++	PTR	sys32_sigaltstack
++	PTR	compat_sys_utime		/* 6130 */
++	PTR	sys_mknod
++	PTR	sys32_personality
++	PTR	sys32_ustat
++	PTR	compat_sys_statfs
++	PTR	compat_sys_fstatfs		/* 6135 */
++	PTR	sys_sysfs
++	PTR	sys_getpriority
++	PTR	sys_setpriority
++	PTR	sys_sched_setparam
++	PTR	sys_sched_getparam		/* 6140 */
++	PTR	sys_sched_setscheduler
++	PTR	sys_sched_getscheduler
++	PTR	sys_sched_get_priority_max
++	PTR	sys_sched_get_priority_min
++	PTR	sys32_sched_rr_get_interval	/* 6145 */
++	PTR	sys_mlock
++	PTR	sys_munlock
++	PTR	sys_mlockall
++	PTR	sys_munlockall
++	PTR	sys_vhangup			/* 6150 */
++	PTR	sys_pivot_root
++	PTR	sys32_sysctl
++	PTR	sys_prctl
++	PTR	compat_sys_adjtimex
++	PTR	compat_sys_setrlimit		/* 6155 */
++	PTR	sys_chroot
++	PTR	sys_sync
++	PTR	sys_acct
++	PTR	sys32_settimeofday
++	PTR	sys_mount			/* 6160 */
++	PTR	sys_umount
++	PTR	sys_swapon
++	PTR	sys_swapoff
++	PTR	sys_reboot
++	PTR	sys_sethostname			/* 6165 */
++	PTR	sys_setdomainname
++	PTR	sys_ni_syscall			/* was create_module */
++	PTR	sys_init_module
++	PTR	sys_delete_module
++	PTR	sys_ni_syscall			/* 6170, was get_kernel_syms */
++	PTR	sys_ni_syscall			/* was query_module */
++	PTR	sys_quotactl
++	PTR	sys_nfsservctl
++	PTR	sys_ni_syscall			/* res. for getpmsg */
++	PTR	sys_ni_syscall			/* 6175  for putpmsg */
++	PTR	sys_ni_syscall			/* res. for afs_syscall */
++	PTR	sys_ni_syscall			/* res. for security */
++	PTR	sys_gettid
++	PTR	sys32_readahead
++	PTR	sys_setxattr			/* 6180 */
++	PTR	sys_lsetxattr
++	PTR	sys_fsetxattr
++	PTR	sys_getxattr
++	PTR	sys_lgetxattr
++	PTR	sys_fgetxattr			/* 6185 */
++	PTR	sys_listxattr
++	PTR	sys_llistxattr
++	PTR	sys_flistxattr
++	PTR	sys_removexattr
++	PTR	sys_lremovexattr		/* 6190 */
++	PTR	sys_fremovexattr
++	PTR	sys_tkill
++	PTR	sys_ni_syscall
++	PTR	compat_sys_futex
++	PTR	compat_sys_sched_setaffinity	/* 6195 */
++	PTR	compat_sys_sched_getaffinity
++	PTR	sys_cacheflush
++	PTR	sys_cachectl
++	PTR	sys_sysmips
++	PTR	sys_io_setup			/* 6200 */
++	PTR	sys_io_destroy
++	PTR	sys_io_getevents
++	PTR	sys_io_submit
++	PTR	sys_io_cancel
++	PTR	sys_exit_group			/* 6205 */
++	PTR	sys_lookup_dcookie
++	PTR	sys_epoll_create
++	PTR	sys_epoll_ctl
++	PTR	sys_epoll_wait
++	PTR	sys_remap_file_pages		/* 6210 */
++	PTR	sysn32_rt_sigreturn
++	PTR	compat_sys_fcntl64
++	PTR	sys_set_tid_address
++	PTR	sys_restart_syscall
++	PTR	sys_semtimedop			/* 6215 */
++	PTR	sys32_fadvise64
++	PTR	compat_sys_statfs64
++	PTR	compat_sys_fstatfs64
++	PTR	sys_sendfile64
++	PTR	sys32_timer_create		/* 6220 */
++	PTR	compat_sys_timer_settime
++	PTR	compat_sys_timer_gettime
++	PTR	sys_timer_getoverrun
++	PTR	sys_timer_delete
++	PTR	compat_sys_clock_settime		/* 6225 */
++	PTR	compat_sys_clock_gettime
++	PTR	compat_sys_clock_getres
++	PTR	compat_sys_clock_nanosleep
++	PTR	sys_tgkill
++	PTR	compat_sys_utimes		/* 6230 */
++	PTR	sys_ni_syscall			/* sys_mbind */
++	PTR	sys_ni_syscall			/* sys_get_mempolicy */
++	PTR	sys_ni_syscall			/* sys_set_mempolicy */
++	PTR	compat_sys_mq_open
++	PTR	sys_mq_unlink			/* 6235 */
++	PTR	compat_sys_mq_timedsend
++	PTR	compat_sys_mq_timedreceive
++	PTR	compat_sys_mq_notify
++	PTR	compat_sys_mq_getsetattr
++	PTR	sys_ni_syscall			/* 6240, sys_vserver */
++	PTR	sys32_waitid
++	PTR	sys_ni_syscall			/* available, was setaltroot */
++	PTR	sys_add_key
++	PTR	sys_request_key
++	PTR	sys_keyctl			/* 6245 */
++	PTR	sys_set_thread_area
++	PTR	sys_inotify_init
++	PTR	sys_inotify_add_watch
++	PTR	sys_inotify_rm_watch
++	PTR	sys_migrate_pages		/* 6250 */
++	PTR	sys_openat
++	PTR	sys_mkdirat
++	PTR	sys_mknodat
++	PTR	sys_fchownat
++	PTR	sys_futimesat			/* 6255 */
++	PTR	sys_newfstatat
++	PTR	sys_unlinkat
++	PTR	sys_renameat
++	PTR	sys_linkat
++	PTR	sys_symlinkat			/* 6260 */
++	PTR	sys_readlinkat
++	PTR	sys_fchmodat
++	PTR	sys_faccessat
++	PTR	sys_pselect6
++	PTR	sys_ppoll			/* 6265 */
++	PTR	sys_unshare
++	PTR	sys_splice
++	PTR	sys32_sync_file_range
++	PTR	sys_tee
++	PTR	sys_vmsplice			/* 6271 */
++	PTR	sys_move_pages
++        PTR	sys32_fadvise64_64
++	PTR	sys_ltt_trace_generic
++	PTR	sys_ltt_register_generic
+Index: linux-2.6.18/arch/mips/kernel/time.c
+===================================================================
+--- linux-2.6.18.orig/arch/mips/kernel/time.c
++++ linux-2.6.18/arch/mips/kernel/time.c
+@@ -607,12 +607,7 @@ unsigned long mips_cycles_to_usecs(cycle
+ {
+ 	unsigned long delta_usecs;
+ 
+-#ifdef CONFIG_HIGH_RES_TIMERS
+-	delta_usecs = delta / (mips_hpt_frequency/1000000+1);
+-#else
+ 	delta_usecs = ((delta*USECS_PER_JIFFY)/cycles_per_jiffy);
+-#endif
+-
+ 	return delta_usecs;
+ }
+ 
+@@ -620,12 +615,7 @@ cycles_t mips_usecs_to_cycles(unsigned l
+ {
+ 	cycles_t delta_cycles;
+ 
+-#ifdef CONFIG_HIGH_RES_TIMERS
+-	delta_cycles = delta * (mips_hpt_frequency/1000000+1);
+-#else
+ 	delta_cycles = ((delta*cycles_per_jiffy)/USECS_PER_JIFFY);
+-#endif
+-
+ 	return delta_cycles;
+ }
+ 
+Index: linux-2.6.18/mvl_patches/pro50-1446.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1446.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1446);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

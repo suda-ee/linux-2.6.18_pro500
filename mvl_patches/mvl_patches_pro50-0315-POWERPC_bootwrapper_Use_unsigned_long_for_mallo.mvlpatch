@@ -1,0 +1,361 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_bootwrapper_Use_unsigned_long_for_mallo
+# Date: Wed Sep 26 11:16:31 2007
+# MR: 24856
+# From 4ca478e6066ce57f7cc856af36aaf1a2d64417cb Mon Sep 17 00:00:00 2001
+# From: Geert Uytterhoeven <Geert.Uytterhoeven@eu.sony.com>
+# Date: Wed, 18 Apr 2007 19:24:12 +1000
+# Subject: [PATCH] [POWERPC] bootwrapper: Use `unsigned long' for malloc sizes
+# 
+# Use `unsigned long' for malloc sizes, to match common practice and types used
+# by most callers and callees.
+# Also use `unsigned long' for integers representing pointers in simple_alloc.
+# 
+# Signed-off-by: Geert Uytterhoeven <Geert.Uytterhoeven@eu.sony.com>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=315
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From 4ca478e6066ce57f7cc856af36aaf1a2d64417cb Mon Sep 17 00:00:00 2001
+From: Geert Uytterhoeven <Geert.Uytterhoeven@eu.sony.com>
+Date: Wed, 18 Apr 2007 19:24:12 +1000
+Subject: [PATCH] [POWERPC] bootwrapper: Use `unsigned long' for malloc sizes
+
+Use `unsigned long' for malloc sizes, to match common practice and types used
+by most callers and callees.
+Also use `unsigned long' for integers representing pointers in simple_alloc.
+
+Signed-off-by: Geert Uytterhoeven <Geert.Uytterhoeven@eu.sony.com>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/boot/of.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/of.c
++++ linux-2.6.18/arch/powerpc/boot/of.c
+@@ -173,7 +173,7 @@ static void *claim(unsigned long virt, u
+ 	return (void *) virt;
+ }
+ 
+-static void *of_try_claim(u32 size)
++static void *of_try_claim(unsigned long size)
+ {
+ 	unsigned long addr = 0;
+ 
+Index: linux-2.6.18/arch/powerpc/boot/ops.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/ops.h
++++ linux-2.6.18/arch/powerpc/boot/ops.h
+@@ -23,7 +23,7 @@
+ struct platform_ops {
+ 	void	(*fixups)(void);
+ 	void	(*image_hdr)(const void *);
+-	void *	(*malloc)(u32 size);
++	void *	(*malloc)(unsigned long size);
+ 	void	(*free)(void *ptr);
+ 	void *	(*realloc)(void *ptr, unsigned long size);
+ 	void	(*exit)(void);
+@@ -79,8 +79,8 @@ void start(void);
+ int ft_init(void *dt_blob, unsigned int max_size, unsigned int max_find_device);
+ int serial_console_init(void);
+ int ns16550_console_init(void *devp, struct serial_console_data *scdp);
+-void *simple_alloc_init(char *base, u32 heap_size, u32 granularity,
+-		u32 max_allocs);
++void *simple_alloc_init(char *base, unsigned long heap_size,
++			unsigned long granularity, unsigned long max_allocs);
+ extern void flush_cache(void *, unsigned long);
+ int dt_xlate_reg(void *node, int res, unsigned long *addr,
+                  unsigned long *size);
+@@ -164,7 +164,7 @@ static inline void *find_node_by_linuxph
+ 			(char *)&linuxphandle, sizeof(u32));
+ }
+ 
+-static inline void *malloc(u32 size)
++static inline void *malloc(unsigned long size)
+ {
+ 	return (platform_ops.malloc) ? platform_ops.malloc(size) : NULL;
+ }
+Index: linux-2.6.18/arch/powerpc/boot/simple_alloc.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/simple_alloc.c
++++ linux-2.6.18/arch/powerpc/boot/simple_alloc.c
+@@ -19,24 +19,24 @@
+ #define	ENTRY_IN_USE	0x02
+ 
+ static struct alloc_info {
+-	u32	flags;
+-	u32	base;
+-	u32	size;
++	unsigned long	flags;
++	unsigned long	base;
++	unsigned long	size;
+ } *alloc_tbl;
+ 
+-static u32 tbl_entries;
+-static u32 alloc_min;
+-static u32 next_base;
+-static u32 space_left;
++static unsigned long tbl_entries;
++static unsigned long alloc_min;
++static unsigned long next_base;
++static unsigned long space_left;
+ 
+ /*
+  * First time an entry is used, its base and size are set.
+  * An entry can be freed and re-malloc'd but its base & size don't change.
+  * Should be smart enough for needs of bootwrapper.
+  */
+-static void *simple_malloc(u32 size)
++static void *simple_malloc(unsigned long size)
+ {
+-	u32 i;
++	unsigned long i;
+ 	struct alloc_info *p = alloc_tbl;
+ 
+ 	if (size == 0)
+@@ -67,13 +67,14 @@ err_out:
+ 
+ static struct alloc_info *simple_find_entry(void *ptr)
+ {
+-	u32 i;
++	unsigned long i;
+ 	struct alloc_info *p = alloc_tbl;
+ 
+ 	for (i=0; i<tbl_entries; i++,p++) {
+ 		if (!(p->flags & ENTRY_BEEN_USED))
+ 			break;
+-		if ((p->flags & ENTRY_IN_USE) && (p->base == (u32)ptr))
++		if ((p->flags & ENTRY_IN_USE) &&
++		    (p->base == (unsigned long)ptr))
+ 			return p;
+ 	}
+ 	return NULL;
+@@ -121,10 +122,10 @@ static void *simple_realloc(void *ptr, u
+  * Returns addr of first byte after heap so caller can see if it took
+  * too much space.  If so, change args & try again.
+  */
+-void *simple_alloc_init(char *base, u32 heap_size, u32 granularity,
+-		u32 max_allocs)
++void *simple_alloc_init(char *base, unsigned long heap_size,
++			unsigned long granularity, unsigned long max_allocs)
+ {
+-	u32 heap_base, tbl_size;
++	unsigned long heap_base, tbl_size;
+ 
+ 	heap_size = _ALIGN_UP(heap_size, granularity);
+ 	alloc_min = granularity;
+@@ -135,7 +136,7 @@ void *simple_alloc_init(char *base, u32 
+ 	alloc_tbl = (struct alloc_info *)_ALIGN_UP((unsigned long)base, 8);
+ 	memset(alloc_tbl, 0, tbl_size);
+ 
+-	heap_base = _ALIGN_UP((u32)alloc_tbl + tbl_size, alloc_min);
++	heap_base = _ALIGN_UP((unsigned long)alloc_tbl + tbl_size, alloc_min);
+ 
+ 	next_base = heap_base;
+ 	space_left = heap_size;
+Index: linux-2.6.18/mvl_patches/pro50-0315.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0315.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(315);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

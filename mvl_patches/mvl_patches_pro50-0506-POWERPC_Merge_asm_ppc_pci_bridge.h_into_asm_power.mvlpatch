@@ -1,0 +1,467 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Merge_asm_ppc_pci_bridge.h_into_asm_power
+# Date: Fri Oct 26 08:38:58 2007
+# Source: Kernel.org
+# MR: 25195
+# Type: Enhancement
+# Disposition: merged from Kernel.org
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# From 5531e41bf41b5bc34e3cb57af89b58a24fc0dd8d Mon Sep 17 00:00:00 2001
+# From: Kumar Gala <galak@kernel.crashing.org>
+# Date: Wed, 27 Jun 2007 00:16:25 -0500
+# Subject: [PATCH] [POWERPC] Merge asm-ppc/pci-bridge.h into asm-power/pci-bridge.h
+# 
+# Moved bits need for ppc32 from asm-ppc/pci-bridge.h into
+# asm-powerpc/pci-bridge.h.
+# 
+# Removed ARCH=powerpc specific bits (and comments related to ARCH=ppc)
+# from asm-ppc/pci-bridge.h as its only used on ARCH=ppc.
+# 
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+PATCHNUM=506
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Kernel.org
+MR: 25195
+Type: Enhancement
+Disposition: merged from Kernel.org
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+From 5531e41bf41b5bc34e3cb57af89b58a24fc0dd8d Mon Sep 17 00:00:00 2001
+From: Kumar Gala <galak@kernel.crashing.org>
+Date: Wed, 27 Jun 2007 00:16:25 -0500
+Subject: [PATCH] [POWERPC] Merge asm-ppc/pci-bridge.h into asm-power/pci-bridge.h
+
+Moved bits need for ppc32 from asm-ppc/pci-bridge.h into
+asm-powerpc/pci-bridge.h.
+
+Removed ARCH=powerpc specific bits (and comments related to ARCH=ppc)
+from asm-ppc/pci-bridge.h as its only used on ARCH=ppc.
+
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+Index: linux-2.6.18/include/asm-powerpc/pci-bridge.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/pci-bridge.h
++++ linux-2.6.18/include/asm-powerpc/pci-bridge.h
+@@ -3,7 +3,103 @@
+ #ifdef __KERNEL__
+ 
+ #ifndef CONFIG_PPC64
+-#include <asm-ppc/pci-bridge.h>
++#include <linux/ioport.h>
++#include <linux/pci.h>
++
++struct device_node;
++struct pci_controller;
++
++/*
++ * pci_io_base returns the memory address at which you can access
++ * the I/O space for PCI bus number `bus' (or NULL on error).
++ */
++extern void __iomem *pci_bus_io_base(unsigned int bus);
++extern unsigned long pci_bus_io_base_phys(unsigned int bus);
++extern unsigned long pci_bus_mem_base_phys(unsigned int bus);
++
++/* Allocate a new PCI host bridge structure */
++extern struct pci_controller* pcibios_alloc_controller(void);
++
++/* Helper function for setting up resources */
++extern void pci_init_resource(struct resource *res, resource_size_t start,
++			      resource_size_t end, int flags, char *name);
++
++/* Get the PCI host controller for a bus */
++extern struct pci_controller* pci_bus_to_hose(int bus);
++
++/*
++ * Structure of a PCI controller (host bridge)
++ */
++struct pci_controller {
++	struct pci_bus *bus;
++	void *arch_data;
++	int index;			/* PCI domain number */
++	struct pci_controller *next;
++	struct device *parent;
++
++	int first_busno;
++	int last_busno;
++	int self_busno;
++
++	void __iomem *io_base_virt;
++	resource_size_t io_base_phys;
++
++	/* Some machines (PReP) have a non 1:1 mapping of
++	 * the PCI memory space in the CPU bus space
++	 */
++	resource_size_t pci_mem_offset;
++
++	struct pci_ops *ops;
++	volatile unsigned int __iomem *cfg_addr;
++	volatile void __iomem *cfg_data;
++
++	/*
++	 * Used for variants of PCI indirect handling and possible quirks:
++	 *  SET_CFG_TYPE - used on 4xx or any PHB that does explicit type0/1
++	 *  EXT_REG - provides access to PCI-e extended registers
++	 *  SURPRESS_PRIMARY_BUS - we surpress the setting of PCI_PRIMARY_BUS
++	 *   on Freescale PCI-e controllers since they used the PCI_PRIMARY_BUS
++	 *   to determine which bus number to match on when generating type0
++	 *   config cycles
++	 */
++#define PPC_INDIRECT_TYPE_SET_CFG_TYPE		(0x00000001)
++#define PPC_INDIRECT_TYPE_EXT_REG		(0x00000002)
++#define PPC_INDIRECT_TYPE_SURPRESS_PRIMARY_BUS	(0x00000004)
++	u32 indirect_type;
++
++	/* Currently, we limit ourselves to 1 IO range and 3 mem
++	 * ranges since the common pci_bus structure can't handle more
++	 */
++	struct resource	io_resource;
++	struct resource mem_resources[3];
++};
++
++static inline struct pci_controller *pci_bus_to_host(struct pci_bus *bus)
++{
++	return bus->sysdata;
++}
++
++/* These are used for config access before all the PCI probing
++   has been done. */
++int early_read_config_byte(struct pci_controller *hose, int bus, int dev_fn,
++			   int where, u8 *val);
++int early_read_config_word(struct pci_controller *hose, int bus, int dev_fn,
++			   int where, u16 *val);
++int early_read_config_dword(struct pci_controller *hose, int bus, int dev_fn,
++			    int where, u32 *val);
++int early_write_config_byte(struct pci_controller *hose, int bus, int dev_fn,
++			    int where, u8 val);
++int early_write_config_word(struct pci_controller *hose, int bus, int dev_fn,
++			    int where, u16 val);
++int early_write_config_dword(struct pci_controller *hose, int bus, int dev_fn,
++			     int where, u32 val);
++
++extern void setup_indirect_pci_nomap(struct pci_controller* hose,
++			       void __iomem *cfg_addr, void __iomem *cfg_data);
++extern void setup_indirect_pci(struct pci_controller* hose,
++			       u32 cfg_addr, u32 cfg_data);
++extern void setup_grackle(struct pci_controller *hose);
++
+ #else
+ 
+ #include <linux/config.h>
+@@ -49,8 +145,8 @@ struct pci_controller {
+ 	 */
+ 	struct resource io_resource;
+ 	struct resource mem_resources[3];
+-	int global_number;		
+-	int local_number;		
++	int global_number;
++	int local_number;
+ 	unsigned long buid;
+ 	unsigned long dma_window_base_cur;
+ 	unsigned long dma_window_size;
+@@ -127,9 +223,6 @@ static inline struct device_node *pci_bu
+ /** Find the bus corresponding to the indicated device node */
+ struct pci_bus * pcibios_find_pci_bus(struct device_node *dn);
+ 
+-extern void pci_process_bridge_OF_ranges(struct pci_controller *hose,
+-					 struct device_node *dev, int primary);
+-
+ /** Remove all of the PCI devices under this bus */
+ void pcibios_remove_pci_devices(struct pci_bus *bus);
+ 
+@@ -147,22 +240,10 @@ static inline struct pci_controller *pci
+ 	return PCI_DN(busdn)->phb;
+ }
+ 
+-extern struct pci_controller*
+-pci_find_hose_for_OF_device(struct device_node* node);
+-
+ extern struct pci_controller *
+ pcibios_alloc_controller(struct device_node *dev);
+ extern void pcibios_free_controller(struct pci_controller *phb);
+ 
+-#ifdef CONFIG_PCI
+-extern unsigned long pci_address_to_pio(phys_addr_t address);
+-#else
+-static inline unsigned long pci_address_to_pio(phys_addr_t address)
+-{
+-	return (unsigned long)-1;
+-}
+-#endif
+-
+ /* Return values for ppc_md.pci_probe_mode function */
+ #define PCI_PROBE_NONE		-1	/* Don't look at this bus at all */
+ #define PCI_PROBE_NORMAL	0	/* Do normal PCI probing */
+@@ -175,5 +256,26 @@ static inline unsigned long pci_address_
+ #endif
+ 
+ #endif /* CONFIG_PPC64 */
++
++/* Get the PCI host controller for an OF device */
++extern struct pci_controller*
++pci_find_hose_for_OF_device(struct device_node* node);
++
++/* Fill up host controller resources from the OF node */
++extern void
++pci_process_bridge_OF_ranges(struct pci_controller *hose,
++			   struct device_node *dev, int primary);
++
++#ifdef CONFIG_PCI
++extern unsigned long pci_address_to_pio(phys_addr_t address);
++#else
++static inline unsigned long pci_address_to_pio(phys_addr_t address)
++{
++	return (unsigned long)-1;
++}
++#endif
++
++
++
+ #endif /* __KERNEL__ */
+ #endif
+Index: linux-2.6.18/include/asm-ppc/pci-bridge.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-ppc/pci-bridge.h
++++ linux-2.6.18/include/asm-ppc/pci-bridge.h
+@@ -47,8 +47,6 @@ struct pci_controller {
+ 
+ 	int first_busno;
+ 	int last_busno;
+-	int self_busno;
+-	/* bus_offset is only used by ARCH=ppc */
+ 	int bus_offset;
+ 
+ 	void __iomem *io_base_virt;
+@@ -65,24 +63,9 @@ struct pci_controller {
+ 	/*
+ 	 * If set, indirect method will set the cfg_type bit as
+ 	 * needed to generate type 1 configuration transactions.
+-	 * use only on ARCH=ppc
+ 	 */
+ 	int set_cfg_type;
+ 
+-	/*
+-	 * Used for variants of PCI indirect handling and possible quirks:
+-	 *  SET_CFG_TYPE - used on 4xx or any PHB that does explicit type0/1
+-	 *  EXT_REG - provides access to PCI-e extended registers
+-	 *  SURPRESS_PRIMARY_BUS - we surpress the setting of PCI_PRIMARY_BUS
+-	 *   on Freescale PCI-e controllers since they used the PCI_PRIMARY_BUS
+-	 *   to determine which bus number to match on when generating type0
+-	 *   config cycles
+-	 */
+-#define PPC_INDIRECT_TYPE_SET_CFG_TYPE		(0x00000001)
+-#define PPC_INDIRECT_TYPE_EXT_REG		(0x00000002)
+-#define PPC_INDIRECT_TYPE_SURPRESS_PRIMARY_BUS	(0x00000004)
+-	u32 indirect_type;
+-
+ 	/* Currently, we limit ourselves to 1 IO range and 3 mem
+ 	 * ranges since the common pci_bus structure can't handle more
+ 	 */
+Index: linux-2.6.18/mvl_patches/pro50-0506.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0506.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(506);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

@@ -1,0 +1,396 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_move_82xx_83xx_86xx_Kconfig_options_to_pla
+# Date: Fri Oct 26 08:38:42 2007
+# Source: Kernel.org
+# MR: 25195
+# Type: Enhancement
+# Disposition: merged from Kernel.org
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# From b9fd305db0b4723e70f1a5cf06e4a6949755331c Mon Sep 17 00:00:00 2001
+# From: Arnd Bergmann <arnd@arndb.de>
+# Date: Mon, 18 Jun 2007 01:06:52 +0200
+# Subject: [PATCH] [POWERPC] move 82xx/83xx/86xx Kconfig options to platform selection
+# 
+# The cores used in the MPC82xx/83xx/86xx embedded controllers are very similar
+# to those in the 32 bit general-purpose processors, so it makes sense to
+# treat them as the same CPU family.
+# 
+# Choosing between the embedded platforms and the multiplatform code is
+# now done in the platform menu, but functionally everything stays the
+# same.
+# 
+# Signed-off-by: Arnd Bergmann <arnd@arndb.de>
+
+PATCHNUM=502
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Kernel.org
+MR: 25195
+Type: Enhancement
+Disposition: merged from Kernel.org
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+From b9fd305db0b4723e70f1a5cf06e4a6949755331c Mon Sep 17 00:00:00 2001
+From: Arnd Bergmann <arnd@arndb.de>
+Date: Mon, 18 Jun 2007 01:06:52 +0200
+Subject: [PATCH] [POWERPC] move 82xx/83xx/86xx Kconfig options to platform selection
+
+The cores used in the MPC82xx/83xx/86xx embedded controllers are very similar
+to those in the 32 bit general-purpose processors, so it makes sense to
+treat them as the same CPU family.
+
+Choosing between the embedded platforms and the multiplatform code is
+now done in the platform menu, but functionally everything stays the
+same.
+
+Signed-off-by: Arnd Bergmann <arnd@arndb.de>
+Index: linux-2.6.18/arch/powerpc/platforms/82xx/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/82xx/Kconfig
++++ linux-2.6.18/arch/powerpc/platforms/82xx/Kconfig
+@@ -1,5 +1,5 @@
+ choice
+-       prompt "Machine Type"
++       prompt "82xx Board Type"
+        depends on PPC_82xx
+        default MPC8272ADS
+ 
+Index: linux-2.6.18/arch/powerpc/platforms/83xx/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/83xx/Kconfig
++++ linux-2.6.18/arch/powerpc/platforms/83xx/Kconfig
+@@ -1,5 +1,5 @@
+ choice
+-	prompt "Machine Type"
++	prompt "83xx Board Type"
+ 	depends on PPC_83xx
+ 	default MPC834x_SYS
+ 
+Index: linux-2.6.18/arch/powerpc/platforms/86xx/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/86xx/Kconfig
++++ linux-2.6.18/arch/powerpc/platforms/86xx/Kconfig
+@@ -1,5 +1,5 @@
+ choice
+-	prompt "Machine Type"
++	prompt "86xx Board Type"
+ 	depends on PPC_86xx
+ 	default MPC8641_HPCN
+ 
+Index: linux-2.6.18/arch/powerpc/platforms/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/Kconfig
++++ linux-2.6.18/arch/powerpc/platforms/Kconfig
+@@ -16,8 +16,31 @@ config EMBEDDED6xx
+ 	bool "Embedded 6xx/7xx/7xxx-based board"
+ 	depends on PPC32 && (BROKEN||BROKEN_ON_SMP)
+ 
++config PPC_82xx
++	bool "Freescale 82xx"
++	depends on 6xx
++
++config PPC_83xx
++	bool "Freescale 83xx"
++	depends on 6xx
++	select FSL_SOC
++	select 83xx
++	select WANT_DEVICE_TREE
++
++config PPC_86xx
++	bool "Freescale 86xx"
++	depends on 6xx
++	select FSL_SOC
++	select FSL_PCIE
++	select ALTIVEC
++	help
++	  The Freescale E600 SoCs have 74xx cores.
+ endchoice
+ 
++config CLASSIC32
++	def_bool y
++	depends on 6xx && PPC_MULTIPLATFORM
++
+ config QUICC_ENGINE
+ 	bool
+ 	help
+Index: linux-2.6.18/arch/powerpc/platforms/Kconfig.cputype
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/Kconfig.cputype
++++ linux-2.6.18/arch/powerpc/platforms/Kconfig.cputype
+@@ -10,41 +10,20 @@ choice
+ 	prompt "Processor Type"
+ 	depends on PPC32
+ 	default 6xx
+-
+-config CLASSIC32
+-	bool "52xx/6xx/7xx/74xx"
+-	select PPC_FPU
+-	select 6xx
+ 	help
+-	  There are four families of PowerPC chips supported.  The more common
+-	  types (601, 603, 604, 740, 750, 7400), the Motorola embedded
+-	  versions (821, 823, 850, 855, 860, 52xx, 82xx, 83xx), the AMCC
+-	  embedded versions (403 and 405) and the high end 64 bit Power
+-	  processors (POWER 3, POWER4, and IBM PPC970 also known as G5).
+-
+-	  This option is the catch-all for 6xx types, including some of the
+-	  embedded versions.  Unless there is see an option for the specific
+-	  chip family you are using, you want this option.
+-
+-	  You do not want this if you are building a kernel for a 64 bit
+-	  IBM RS/6000 or an Apple G5, choose 6xx.
+-
+-	  If unsure, select this option
+-
+-	  Note that the kernel runs in 32-bit mode even on 64-bit chips.
+-
+-config PPC_82xx
+-	bool "Freescale 82xx"
+-	select 6xx
+-	select PPC_FPU
++	  There are five families of 32 bit PowerPC chips supported.
++	  The most common ones are the desktop and server CPUs (601, 603,
++	  604, 740, 750, 74xx) CPUs from Freescale and IBM, with their
++	  embedded 52xx/82xx/83xx/86xx counterparts.
++	  The other embeeded parts, namely 4xx, 8xx, e200 (55xx) and e500
++	  (85xx) each form a family of their own that is not compatible
++	  with the others.
+ 
+-config PPC_83xx
+-	bool "Freescale 83xx"
+-	select 6xx
+-	select FSL_SOC
+-	select 83xx
++	  If unsure, select 52xx/6xx/7xx/74xx/82xx/83xx/86xx.
++
++config 6xx
++	bool "52xx/6xx/7xx/74xx/82xx/83xx/86xx"
+ 	select PPC_FPU
+-	select WANT_DEVICE_TREE
+ 
+ config PPC_85xx
+ 	bool "Freescale 85xx"
+@@ -53,16 +32,6 @@ config PPC_85xx
+ 	select 85xx
+ 	select WANT_DEVICE_TREE
+ 
+-config PPC_86xx
+-	bool "Freescale 86xx"
+-	select 6xx
+-	select FSL_SOC
+-	select FSL_PCIE
+-	select PPC_FPU
+-	select ALTIVEC
+-	help
+-	  The Freescale E600 SoCs have 74xx cores.
+-
+ config PPC_8xx
+ 	bool "Freescale 8xx"
+ 	select FSL_SOC
+Index: linux-2.6.18/mvl_patches/pro50-0502.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0502.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(502);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

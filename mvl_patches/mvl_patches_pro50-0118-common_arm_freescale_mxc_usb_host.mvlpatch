@@ -1,0 +1,855 @@
+#! /usr/bin/env bash
+# Patch: -common_arm_freescale_mxc_usb_host
+# Date: Wed Aug 29 07:27:35 2007
+# Source: Freescale Semiconductor, Inc.
+# MR:24415
+# Type: Integration
+# Disposition:
+# Signed-off-by: Nikita Youshchenko <nyoushchenko@ru.mvista.com>
+# Description:
+#     This patch adds ARC controller support to USB ehci-hcd driver.
+# 
+#     Code was taken from bsp-imx27ads-rel2 branch of freescale git tree,
+#     that could be found at
+#     http://opensource.freescale.com/pub/scm/linux-2.6-mx.git
+# 
+
+PATCHNUM=118
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Freescale Semiconductor, Inc.
+MR:24415
+Type: Integration
+Disposition:
+Signed-off-by: Nikita Youshchenko <nyoushchenko@ru.mvista.com>
+Description:
+    This patch adds ARC controller support to USB ehci-hcd driver.
+
+    Code was taken from bsp-imx27ads-rel2 branch of freescale git tree,
+    that could be found at
+    http://opensource.freescale.com/pub/scm/linux-2.6-mx.git
+
+Index: linux-2.6.18/drivers/usb/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/Kconfig
++++ linux-2.6.18/drivers/usb/Kconfig
+@@ -39,6 +39,7 @@ config USB_ARCH_HAS_EHCI
+ 	default y if PPC_83xx
+ 	default y if SOC_AU1200
+ 	default y if ARCH_IXP4XX
++	default y if ARCH_MXC
+ 	default PCI
+ 
+ # ARM SA1111 chips have a non-PCI based "OHCI-compatible" USB host interface.
+Index: linux-2.6.18/drivers/usb/host/ehci-arc.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/usb/host/ehci-arc.c
+@@ -0,0 +1,287 @@
++/*
++ * drivers/usb/host/ehci-arc.c
++ *
++ * Copyright 2005-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++
++/*!
++ * @defgroup USB ARC OTG USB Driver
++ */
++/*!
++ * @file ehci-arc.c
++ * @brief platform related part of usb host driver.
++ * @ingroup USB
++ */
++
++/*!
++ * Include files
++ */
++
++/* Note: this file is #included by ehci-hcd.c */
++
++#include <linux/platform_device.h>
++#include <linux/usb_otg.h>
++
++#include <asm/arch/arc_otg.h>
++
++#undef dbg
++#define dbg(fmt, ...) do {} while (0)
++#undef vdbg
++#define vdbg(fmt, ...) do {} while (0)
++
++static inline void set_host_mode(struct usb_hcd *hcd)
++{
++	u32 tmp = readl(hcd->regs + 0x1a8);
++	writel(tmp | USBMODE_CM_HC, hcd->regs + 0x1a8);
++}
++
++/**
++ * usb_hcd_arc_probe - initialize ARC HCDs
++ * @drvier: Driver to be used for this HCD
++ * @pdev: USB Host Controller being probed
++ * Context: !in_interrupt()
++ *
++ * Allocates basic resources for this USB host controller.
++ *
++ */
++static int usb_hcd_arc_probe(const struct hc_driver *driver,
++			     struct platform_device *pdev)
++{
++	struct arc_usb_config *pdata;
++	struct usb_hcd *hcd;
++	struct resource *res;
++	int irq;
++	int retval;
++
++	pr_debug("initializing ARC USB Controller\n");
++
++	/* Need platform data for setup */
++	pdata = (struct arc_usb_config *)pdev->dev.platform_data;
++	if (!pdata) {
++		dev_err(&pdev->dev,
++			"No platform data for %s.\n", pdev->dev.bus_id);
++		return -ENODEV;
++	}
++
++	/*
++	 * do platform specific init: check the clock, grab/config pins, etc.
++	 */
++	if (pdata->platform_init && pdata->platform_init()) {
++		retval = -ENODEV;
++		goto err1;
++	}
++
++	res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
++	if (!res) {
++		dev_err(&pdev->dev,
++			"Found HC with no IRQ. Check %s setup!\n",
++			pdev->dev.bus_id);
++		return -ENODEV;
++	}
++	irq = res->start;
++
++	if (pdata->set_vbus_power)
++		pdata->set_vbus_power(1);
++
++	hcd = usb_create_hcd(driver, &pdev->dev, pdev->dev.bus_id);
++	if (!hcd) {
++		retval = -ENOMEM;
++		goto err1;
++	}
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res) {
++		dev_err(&pdev->dev,
++			"Found HC with no register addr. Check %s setup!\n",
++			pdev->dev.bus_id);
++		retval = -ENODEV;
++		goto err2;
++	}
++	hcd->rsrc_start = res->start;
++	hcd->rsrc_len = res->end - res->start + 1;
++
++	vdbg("start=0x%x   end=0x%x    rsrc_start=0x%llx  rsrc_len=0x%llx\n",
++	     res->start, res->end, hcd->rsrc_start, hcd->rsrc_len);
++
++	if (!request_mem_region(hcd->rsrc_start, hcd->rsrc_len,
++				driver->description)) {
++		dev_dbg(&pdev->dev, "request_mem_region failed\n");
++		retval = -EBUSY;
++		goto err2;
++	}
++	hcd->regs = ioremap(hcd->rsrc_start, hcd->rsrc_len);
++
++	if (hcd->regs == NULL) {
++		dev_dbg(&pdev->dev, "error mapping memory\n");
++		retval = -EFAULT;
++		goto err3;
++	}
++
++	hcd->power_budget = pdata->power_budget;
++
++	/* DDD
++	 * the following must be done by this point, otherwise the OTG
++	 * host port doesn't make it thru initializtion.
++	 * ehci_halt(), called by ehci_arc_setup() returns -ETIMEDOUT
++	 */
++	set_host_mode(hcd);
++
++	retval = usb_add_hcd(hcd, irq, SA_SHIRQ);
++	if (retval != 0)
++		goto err4;
++
++	return retval;
++
++err4:
++	iounmap(hcd->regs);
++err3:
++	release_mem_region(hcd->rsrc_start, hcd->rsrc_len);
++err2:
++	usb_put_hcd(hcd);
++err1:
++	dev_err(&pdev->dev, "init %s fail, %d\n", pdev->dev.bus_id, retval);
++	if (pdata->platform_uninit)
++		pdata->platform_uninit();
++	return retval;
++}
++
++static void usb_hcd_arc_remove(struct usb_hcd *hcd,
++			       struct platform_device *pdev)
++{
++	struct arc_usb_config *pdata;
++
++	pdata = (struct arc_usb_config *)pdev->dev.platform_data;
++
++	dbg("%s  hcd=0x%p\n", __FUNCTION__, hcd);
++
++	usb_remove_hcd(hcd);
++	if (pdata->set_vbus_power)
++		pdata->set_vbus_power(0);
++	iounmap(hcd->regs);
++	release_mem_region(hcd->rsrc_start, hcd->rsrc_len);
++	usb_put_hcd(hcd);
++
++	/*
++	 * do platform specific un-initialization:
++	 * release iomux pins, etc.
++	 */
++	if (pdata->platform_uninit)
++		pdata->platform_uninit();
++}
++
++/* called during probe() after chip reset completes */
++static int ehci_arc_setup(struct usb_hcd *hcd)
++{
++	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
++	int retval;
++
++	/* EHCI registers start at offset 0x00 */
++	ehci->caps = hcd->regs + 0x100;
++	ehci->regs = hcd->regs + 0x100 +
++	    HC_LENGTH(readl(&ehci->caps->hc_capbase));
++
++	vdbg("%s(): ehci->caps=0x%p  ehci->regs=0x%p\n", __FUNCTION__,
++	     ehci->caps, ehci->regs);
++
++	dbg_hcs_params(ehci, "reset");
++	dbg_hcc_params(ehci, "reset");
++
++	/* cache this readonly data; minimize chip reads */
++	ehci->hcs_params = readl(&ehci->caps->hcs_params);
++
++	retval = ehci_halt(ehci);
++	if (retval)
++		return retval;
++
++	/* data structure init */
++	retval = ehci_init(hcd);
++	if (retval)
++		return retval;
++
++	ehci->is_tdi_rh_tt = 1;
++
++	ehci->sbrn = 0x20;
++
++	ehci_reset(ehci);
++	ehci_port_power(ehci, 0);
++
++	return 0;
++}
++
++static const struct hc_driver ehci_arc_hc_driver = {
++	.description	= hcd_name,
++	.product_desc	= "Freescale On-Chip EHCI Host Controller",
++	.hcd_priv_size	= sizeof(struct ehci_hcd),
++
++	/*
++	 * generic hardware linkage
++	 */
++	.irq		= ehci_irq,
++	.flags		= HCD_USB2,
++
++	/*
++	 * basic lifecycle operations
++	 */
++	.reset		= ehci_arc_setup,
++	.start		= ehci_run,
++	.stop		= ehci_stop,
++	.shutdown	= ehci_shutdown,
++#ifdef CONFIG_PM
++	.suspend	= ehci_bus_suspend,
++	.resume		= ehci_bus_resume,
++#endif
++
++	/*
++	 * managing i/o requests and associated device resources
++	 */
++	.urb_enqueue		= ehci_urb_enqueue,
++	.urb_dequeue		= ehci_urb_dequeue,
++	.endpoint_disable	= ehci_endpoint_disable,
++
++	/*
++	 * scheduling support
++	 */
++	.get_frame_number	= ehci_get_frame,
++
++	/*
++	 * root hub support
++	 */
++	.hub_status_data	= ehci_hub_status_data,
++	.hub_control		= ehci_hub_control,
++	.bus_suspend		= ehci_bus_suspend,
++	.bus_resume		= ehci_bus_resume,
++};
++
++static int ehci_hcd_drv_probe(struct platform_device *pdev)
++{
++	if (usb_disabled())
++		return -ENODEV;
++
++	return usb_hcd_arc_probe(&ehci_arc_hc_driver, pdev);
++}
++
++static int __init_or_module ehci_hcd_drv_remove(struct platform_device *pdev)
++{
++	struct usb_hcd *hcd = platform_get_drvdata(pdev);
++
++	usb_hcd_arc_remove(hcd, pdev);
++
++	return 0;
++}
++
++static struct platform_driver ehci_arc_driver = {
++	.probe   = ehci_hcd_drv_probe,
++	.remove  = ehci_hcd_drv_remove,
++	.driver  = {
++			.name = "arc-ehci",
++		   },
++};
+Index: linux-2.6.18/drivers/usb/host/ehci-hcd.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ehci-hcd.c
++++ linux-2.6.18/drivers/usb/host/ehci-hcd.c
+@@ -999,6 +999,11 @@ MODULE_LICENSE ("GPL");
+ #define	PLATFORM_DRIVER		ixp4xx_ehci_driver
+ #endif
+ 
++#ifdef CONFIG_ARCH_MXC
++#include "ehci-arc.c"
++#define PLATFORM_DRIVER		ehci_arc_driver
++#endif
++
+ #if !defined(PCI_DRIVER) && !defined(PLATFORM_DRIVER) && \
+     !defined(PS3_SYSTEM_BUS_DRIVER)
+ #error "missing bus glue for ehci-hcd"
+Index: linux-2.6.18/include/asm-arm/arch-mxc/arc_otg.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/asm-arm/arch-mxc/arc_otg.h
+@@ -0,0 +1,293 @@
++
++/*
++ * Copyright 2005-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++#ifndef __ASM_ARCH_MXC_ARC_OTG_H__
++#define __ASM_ARCH_MXC_ARC_OTG_H__
++
++struct arc_usb_config {
++	char *name;		/* pretty print */
++	int (*platform_init) (void);	/* platform-specific init routine */
++	void (*platform_uninit) (void);	/* platform-specific uninit routine */
++	void (*set_vbus_power) (int);	/* turn on/off Vbus power */
++	u32 xcvr_type;		/* PORTSC_PTS_* */
++	u32 usbmode;		/* address of usbmode register */
++	u32 does_otg;		/* set IFF it's an OTG port */
++	unsigned power_budget;	/* for hcd->power_budget */
++};
++
++struct arc_xcvr_config {
++	char *name;		/* pretty print */
++	int (*platform_init) (void);	/* platform-specific init routine */
++	void (*platform_uninit) (void);	/* platform-specific uninit routine */
++	void *regs;		/* register base */
++};
++
++#define USB_OTGREGS_BASE	(OTG_BASE_ADDR + 0x000)
++#define USB_H1REGS_BASE		(OTG_BASE_ADDR + 0x200)
++#define USB_H2REGS_BASE		(OTG_BASE_ADDR + 0x400)
++#define USB_OTHERREGS_BASE	(OTG_BASE_ADDR + 0x600)
++
++#define USB_REG32(base, offset) \
++		(*((volatile u32 *)(IO_ADDRESS(base + (offset)))))
++#define USB_REG16(base, offset) \
++		(*((volatile u16 *)(IO_ADDRESS(base + (offset)))))
++
++#define USBOTG_REG32(offset)	USB_REG32(USB_OTGREGS_BASE, (offset))
++#define USBOTG_REG16(offset)	USB_REG16(USB_OTGREGS_BASE, (offset))
++
++#define USBH1_REG32(offset)	USB_REG32(USB_H1REGS_BASE, (offset))
++#define USBH1_REG16(offset)	USB_REG16(USB_H1REGS_BASE, (offset))
++
++#define USBH2_REG32(offset)	USB_REG32(USB_H2REGS_BASE, (offset))
++#define USBH2_REG16(offset)	USB_REG16(USB_H2REGS_BASE, (offset))
++
++#define USBOTHER_REG(offset)	USB_REG32(USB_OTHERREGS_BASE, (offset))
++
++/*
++ * OTG registers
++ */
++#define UOG_ID			USBOTG_REG32(0x00)	/* Host ID */
++#define UOG_HWGENERAL		USBOTG_REG32(0x04)	/* Host General */
++#define UOG_HWHOST		USBOTG_REG32(0x08)	/* Host h/w params */
++#define UOG_HWTXBUF		USBOTG_REG32(0x10)	/* TX buffer h/w params */
++#define UOG_HWRXBUF		USBOTG_REG32(0x14)	/* RX buffer h/w params */
++#define UOG_CAPLENGTH		USBOTG_REG16(0x100)	/* Capability register length */
++#define UOG_HCIVERSION		USBOTG_REG16(0x102)	/* Host Interface version */
++#define UOG_HCSPARAMS		USBOTG_REG32(0x104)	/* Host control structural params */
++#define UOG_HCCPARAMS		USBOTG_REG32(0x108)	/* control capability params */
++#define UOG_DCIVERSION		USBOTG_REG32(0x120)	/* device interface version */
++/* start EHCI registers: */
++#define UOG_USBCMD		USBOTG_REG32(0x140)	/* USB command register */
++#define UOG_USBSTS		USBOTG_REG32(0x144)	/* USB status register */
++#define UOG_USBINTR		USBOTG_REG32(0x148)	/* interrupt enable register */
++#define UOG_FRINDEX		USBOTG_REG32(0x14c)	/* USB frame index */
++/*      segment                             (0x150)	   addr bits 63:32 if needed */
++#define UOG_PERIODICLISTBASE	USBOTG_REG32(0x154)	/* host crtlr frame list base addr */
++#define UOG_DEVICEADDR		USBOTG_REG32(0x154)	/* device crtlr device address */
++#define UOG_ASYNCLISTADDR	USBOTG_REG32(0x158)	/* host ctrlr next async addr */
++#define UOG_EPLISTADDR		USBOTG_REG32(0x158)	/* device ctrlr endpoint list addr */
++#define UOG_BURSTSIZE		USBOTG_REG32(0x160)	/* host ctrlr embedded TT async buf status */
++#define UOG_TXFILLTUNING	USBOTG_REG32(0x164)	/* TX FIFO fill tuning */
++#define UOG_ULPIVIEW		USBOTG_REG32(0x170)	/* ULPI viewport */
++#define	UOG_CFGFLAG		USBOTG_REG32(0x180)	/* configflag (supports HS) */
++#define UOG_PORTSC1		USBOTG_REG32(0x184)	/* port status and control */
++/* end EHCI registers: */
++#define UOG_OTGSC		USBOTG_REG32(0x1a4)	/* OTG status and control */
++#define UOG_USBMODE		USBOTG_REG32(0x1a8)	/* USB device mode */
++#define UOG_ENDPTSETUPSTAT	USBOTG_REG32(0x1ac)	/* endpoint setup status */
++#define UOG_ENDPTPRIME		USBOTG_REG32(0x1b0)	/* endpoint initialization */
++#define UOG_ENDPTFLUSH		USBOTG_REG32(0x1b4)	/* endpoint de-initialize */
++#define UOG_ENDPTSTAT		USBOTG_REG32(0x1b8)	/* endpoint status */
++#define UOG_ENDPTCOMPLETE	USBOTG_REG32(0x1bc)	/* endpoint complete */
++#define UOG_EPCTRL0		USBOTG_REG32(0x1c0)	/* endpoint control0 */
++#define UOG_EPCTRL1		USBOTG_REG32(0x1c4)	/* endpoint control1 */
++#define UOG_EPCTRL2		USBOTG_REG32(0x1c8)	/* endpoint control2 */
++#define UOG_EPCTRL3		USBOTG_REG32(0x1cc)	/* endpoint control3 */
++#define UOG_EPCTRL4		USBOTG_REG32(0x1d0)	/* endpoint control4 */
++#define UOG_EPCTRL5		USBOTG_REG32(0x1d4)	/* endpoint control5 */
++#define UOG_EPCTRL6		USBOTG_REG32(0x1d8)	/* endpoint control6 */
++#define UOG_EPCTRL7		USBOTG_REG32(0x1dc)	/* endpoint control7 */
++
++/*
++ * Host 1 registers
++ */
++#define UH1_ID			USBH1_REG32(0x00)	/* Host ID */
++#define UH1_HWGENERAL		USBH1_REG32(0x04)	/* Host General */
++#define UH1_HWHOST		USBH1_REG32(0x08)	/* Host h/w params */
++#define UH1_HWTXBUF		USBH1_REG32(0x10)	/* TX buffer h/w params */
++#define UH1_HWRXBUF		USBH1_REG32(0x14)	/* RX buffer h/w params */
++#define UH1_CAPLENGTH		USBH1_REG16(0x100)	/* Capability register length */
++#define UH1_HCIVERSION		USBH1_REG16(0x102)	/* Host Interface version */
++#define UH1_HCSPARAMS		USBH1_REG32(0x104)	/* Host control structural params */
++#define UH1_HCCPARAMS		USBH1_REG32(0x108)	/* control capability params */
++/* start EHCI registers: */
++#define UH1_USBCMD		USBH1_REG32(0x140)	/* USB command register */
++#define UH1_USBSTS		USBH1_REG32(0x144)	/* USB status register */
++#define UH1_USBINTR		USBH1_REG32(0x148)	/* interrupt enable register */
++#define UH1_FRINDEX		USBH1_REG32(0x14c)	/* USB frame index */
++/*      segment                            (0x150)	   addr bits 63:32 if needed */
++#define UH1_PERIODICLISTBASE	USBH1_REG32(0x154)	/* host crtlr frame list base addr */
++#define UH1_ASYNCLISTADDR	USBH1_REG32(0x158)	/* host ctrlr nest async addr */
++#define UH1_BURSTSIZE		USBH1_REG32(0x160)	/* host ctrlr embedded TT async buf status */
++#define UH1_TXFILLTUNING	USBH1_REG32(0x164)	/* TX FIFO fill tuning */
++/*      configured_flag                    (0x180)	   configflag (supports HS) */
++#define UH1_PORTSC1		USBH1_REG32(0x184)	/* port status and control */
++/* end EHCI registers: */
++#define UH1_USBMODE		USBH1_REG32(0x1a8)	/* USB device mode */
++
++/*
++ * Host 2 registers
++ */
++#define UH2_ID			USBH2_REG32(0x00)	/* Host ID */
++#define UH2_HWGENERAL		USBH2_REG32(0x04)	/* Host General */
++#define UH2_HWHOST		USBH2_REG32(0x08)	/* Host h/w params */
++#define UH2_HWTXBUF		USBH2_REG32(0x10)	/* TX buffer h/w params */
++#define UH2_HWRXBUF		USBH2_REG32(0x14)	/* RX buffer h/w params */
++#define UH2_CAPLENGTH		USBH2_REG16(0x100)	/* Capability register length */
++#define UH2_HCIVERSION		USBH2_REG16(0x102)	/* Host Interface version */
++#define UH2_HCSPARAMS		USBH2_REG32(0x104)	/* Host control structural params */
++#define UH2_HCCPARAMS		USBH2_REG32(0x108)	/* control capability params */
++/* start EHCI registers: */
++#define UH2_USBCMD		USBH2_REG32(0x140)	/* USB command register */
++#define UH2_USBSTS		USBH2_REG32(0x144)	/* USB status register */
++#define UH2_USBINTR		USBH2_REG32(0x148)	/* interrupt enable register */
++#define UH2_FRINDEX		USBH2_REG32(0x14c)	/* USB frame index */
++/*      segment                            (0x150)	   addr bits 63:32 if needed */
++#define UH2_PERIODICLISTBASE	USBH2_REG32(0x154)	/* host crtlr frame list base addr */
++#define UH2_ASYNCLISTADDR	USBH2_REG32(0x158)	/* host ctrlr nest async addr */
++#define UH2_BURSTSIZE		USBH2_REG32(0x160)	/* host ctrlr embedded TT async buf status */
++#define UH2_TXFILLTUNING	USBH2_REG32(0x164)	/* TX FIFO fill tuning */
++#define UH2_ULPIVIEW		USBH2_REG32(0x170)	/* ULPI viewport */
++/*      configured_flag                    (0x180)	   configflag (supports HS) */
++#define UH2_PORTSC1		USBH2_REG32(0x184)	/* port status and control */
++/* end EHCI registers */
++#define UH2_USBMODE		USBH2_REG32(0x1a8)	/* USB device mode */
++
++/*
++ * other regs (not part of ARC core)
++ */
++#define USBCTRL			USBOTHER_REG(0x00)	/* USB Control register */
++#define USB_OTG_MIRROR		USBOTHER_REG(0x04)	/* USB OTG mirror register */
++
++/*
++ * register bits
++ */
++
++/* x_PORTSCx */
++#define PORTSC_PTS_MASK			(3 << 30)	/* parallel xcvr select mask */
++#define PORTSC_PTS_UTMI			(0 << 30)	/* UTMI/UTMI+ */
++#define PORTSC_PTS_PHILIPS		(1 << 30)	/* Philips classic */
++#define PORTSC_PTS_ULPI			(2 << 30)	/* ULPI */
++#define PORTSC_PTS_SERIAL		(3 << 30)	/* serial */
++#define PORTSC_STS			(1 << 29)	/* serial xcvr select */
++#define PORTSC_PORT_POWER		(1 << 12)	/* port power */
++#define PORTSC_LS_MASK			(3 << 10)	/* Line State mask */
++#define PORTSC_LS_SE0			(0 << 10)	/* SE0     */
++#define PORTSC_LS_K_STATE		(1 << 10)	/* K-state */
++#define PORTSC_LS_J_STATE		(2 << 10)	/* J-state */
++#define PORTSC_PORT_RESET		(1 <<  8)	/* Port reset */
++#define PORTSC_PORT_SUSPEND		(1 <<  7)	/* Suspend */
++#define PORTSC_PORT_FORCE_RESUME	(1 <<  6)	/* Force port resume */
++#define PORTSC_OVER_CURRENT_CHG		(1 <<  5)	/* over current change */
++#define PORTSC_OVER_CURRENT_ACT		(1 <<  4)	/* over currrent active */
++#define PORTSC_PORT_EN_DIS_CHANGE	(1 <<  3)	/* port {en,dis}able change */
++#define PORTSC_PORT_ENABLE		(1 <<  2)	/* port enabled */
++#define PORTSC_CONNECT_STATUS_CHANGE	(1 <<  1)	/* connect status change */
++#define PORTSC_CURRENT_CONNECT_STATUS	(1 <<  0)	/* current connect status */
++
++#define PORTSC_W1C_BITS                     \
++       ( PORTSC_CONNECT_STATUS_CHANGE |     \
++	 PORTSC_PORT_EN_DIS_CHANGE    |     \
++	 PORTSC_OVER_CURRENT_CHG )
++
++/* UOG_OTGSC Register Bits */
++/* control bits: */
++#define  OTGSC_CTRL_VBUS_DISCHARGE	(1 <<  0)
++#define  OTGSC_CTRL_VBUS_CHARGE		(1 <<  1)
++#define  OTGSC_CTRL_OTG_TERM		(1 <<  3)	/* controls DM pulldown */
++#define  OTGSC_CTRL_DATA_PULSING	(1 <<  4)
++#define  OTGSC_CTRL_USB_ID_PU		(1 <<  5)	/* enable ID pullup */
++/* current status: (R/O) */
++#define  OTGSC_STS_USB_ID		(1 <<  8)	/* 0=A-device  1=B-device */
++#define  OTGSC_STS_A_VBUS_VALID		(1 <<  9)
++#define  OTGSC_STS_A_SESSION_VALID	(1 << 10)
++#define  OTGSC_STS_B_SESSION_VALID	(1 << 11)
++#define  OTGSC_STS_B_SESSION_END	(1 << 12)
++#define  OTGSC_STS_1ms_TIMER		(1 << 13)
++#define  OTGSC_STS_DATA_PULSE		(1 << 14)
++/* interrupt status: (write to clear) */
++#define  OTGSC_IS_MASK			(0x7f << 16)
++#define  OTGSC_IS_USB_ID		(1 << 16)
++#define  OTGSC_IS_A_VBUS_VALID		(1 << 17)
++#define  OTGSC_IS_A_SESSION_VALID	(1 << 18)
++#define  OTGSC_IS_B_SESSION_VALID	(1 << 19)
++#define  OTGSC_IS_B_SESSION_END		(1 << 20)
++#define  OTGSC_IS_1ms_TIMER		(1 << 21)
++#define  OTGSC_IS_DATA_PULSE		(1 << 22)
++/* interrupt enables: */
++#define  OTGSC_IE_MASK			(0x7f << 24)
++#define  OTGSC_IE_USB_ID		(1 << 24)
++#define  OTGSC_IE_A_VBUS_VALID		(1 << 25)
++#define  OTGSC_IE_A_SESSION_VALID	(1 << 26)
++#define  OTGSC_IE_B_SESSION_VALID	(1 << 27)
++#define  OTGSC_IE_B_SESSION_END		(1 << 28)
++#define  OTGSC_IE_1ms_TIMER		(1 << 19)
++#define  OTGSC_IE_DATA_PULSE		(1 << 30)
++
++/* USBCTRL */
++#define UCTRL_OWIR		(1 << 31)	/* OTG wakeup intr request received */
++#define UCTRL_OSIC_MASK		(3 << 29)	/* OTG  Serial Interface Config: */
++#define UCTRL_OSIC_DU6		(0 << 29)	/* Differential/unidirectional 6 wire */
++#define UCTRL_OSIC_DB4		(1 << 29)	/* Differential/bidirectional  4 wire */
++#define UCTRL_OSIC_SU6		(2 << 29)	/* single-ended/unidirectional 6 wire */
++#define UCTRL_OSIC_SB3		(3 << 29)	/* single-ended/bidirectional  3 wire */
++
++#define UCTRL_OUIE		(1 << 28)	/* OTG ULPI intr enable */
++#define UCTRL_OWIE		(1 << 27)	/* OTG wakeup intr enable */
++#define UCTRL_OBPVAL_RXDP	(1 << 26)	/* OTG RxDp status in bypass mode */
++#define UCTRL_OBPVAL_RXDM	(1 << 25)	/* OTG RxDm status in bypass mode */
++#define UCTRL_OPM		(1 << 24)	/* OTG power mask */
++#define UCTRL_H2WIR		(1 << 23)	/* HOST2 wakeup intr request received */
++#define UCTRL_H2SIC_MASK	(3 << 21)	/* HOST2 Serial Interface Config: */
++#define UCTRL_H2SIC_DU6		(0 << 21)	/* Differential/unidirectional 6 wire */
++#define UCTRL_H2SIC_DB4		(1 << 21)	/* Differential/bidirectional  4 wire */
++#define UCTRL_H2SIC_SU6		(2 << 21)	/* single-ended/unidirectional 6 wire */
++#define UCTRL_H2SIC_SB3		(3 << 21)	/* single-ended/bidirectional  3 wire */
++
++#define UCTRL_H2UIE		(1 << 20)	/* HOST2 ULPI intr enable */
++#define UCTRL_H2WIE		(1 << 19)	/* HOST2 wakeup intr enable */
++#define UCTRL_H2PM		(1 << 16)	/* HOST2 power mask */
++
++#define UCTRL_H1WIR		(1 << 15)	/* HOST1 wakeup intr request received */
++#define UCTRL_H1SIC_MASK	(3 << 13)	/* HOST1 Serial Interface Config: */
++#define UCTRL_H1SIC_DU6		(0 << 13)	/* Differential/unidirectional 6 wire */
++#define UCTRL_H1SIC_DB4		(1 << 13)	/* Differential/bidirectional  4 wire */
++#define UCTRL_H1SIC_SU6		(2 << 13)	/* single-ended/unidirectional 6 wire */
++#define UCTRL_H1SIC_SB3		(3 << 13)	/* single-ended/bidirectional  3 wire */
++
++#define UCTRL_H1WIE		(1 << 11)	/* HOST1 wakeup intr enable */
++#define UCTRL_H1BPVAL_RXDP	(1 << 10)	/* HOST1 RxDp status in bypass mode */
++#define UCTRL_H1BPVAL_RXDM	(1 <<  9)	/* HOST1 RxDm status in bypass mode */
++#define UCTRL_H1PM		(1 <<  8)	/* HOST1 power mask */
++
++#define UCTRL_H2DT		(1 <<  5)	/* HOST2 TLL disabled */
++#define UCTRL_H1DT		(1 <<  4)	/* HOST1 TLL disabled */
++#define UCTRL_BPE		(1 <<  0)	/* bypass mode enable */
++
++/* USBCMD */
++#define UCMD_RESET		(1 << 1)	/* controller reset */
++
++/* OTG_MIRROR */
++#define OTGM_SESEND		(1 << 4)	/* B device session end */
++#define OTGM_VBUSVAL		(1 << 3)	/* Vbus valid */
++#define OTGM_BSESVLD		(1 << 2)	/* B session Valid */
++#define OTGM_ASESVLD		(1 << 1)	/* A session Valid */
++#define OTGM_IDIDG		(1 << 0)	/* OTG ID pin status */
++						/* 1=high: Operate as B-device */
++						/* 0=low : Operate as A-device */
++
++/* ULPIVIEW register bits */
++#define ULPIVW_WU		(1 << 31)	/* Wakeup */
++#define ULPIVW_RUN		(1 << 30)	/* read/write run */
++#define ULPIVW_WRITE		(1 << 29)	/* 0=read  1=write */
++#define ULPIVW_SS		(1 << 27)	/* SyncState */
++#define ULPIVW_PORT_MASK	0x07	/* Port field */
++#define ULPIVW_PORT_SHIFT	24
++#define ULPIVW_ADDR_MASK	0xFF	/* data address field */
++#define ULPIVW_ADDR_SHIFT	16
++#define ULPIVW_RDATA_MASK	0xFF	/* read data field */
++#define ULPIVW_RDATA_SHIFT	8
++#define ULPIVW_WDATA_MASK	0xFF	/* write data field */
++#define ULPIVW_WDATA_SHIFT	0
++
++#endif
+Index: linux-2.6.18/mvl_patches/pro50-0118.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0118.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(118);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

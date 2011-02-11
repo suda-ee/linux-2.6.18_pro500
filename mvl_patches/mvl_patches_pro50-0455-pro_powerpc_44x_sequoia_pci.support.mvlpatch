@@ -1,0 +1,527 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_44x_sequoia_pci.support
+# Date: Fri Oct 26 08:35:01 2007
+# Source: DENX Software Engineering.
+# MR: 24856
+# Type: Enhancement
+# Disposition: merged from linuxppc-dev
+# Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+# Description:
+#     Adds PCI support for PowerPC440EPx Sequoia board.
+#     Merge arch/ppc PCI code and add ranges and irq setup
+#     using device tree ranges property.
+# 
+
+PATCHNUM=455
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: DENX Software Engineering.
+MR: 24856
+Type: Enhancement
+Disposition: merged from linuxppc-dev
+Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+Description:
+    Adds PCI support for PowerPC440EPx Sequoia board.
+    Merge arch/ppc PCI code and add ranges and irq setup
+    using device tree ranges property.
+
+Index: linux-2.6.18/arch/powerpc/platforms/44x/44x.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/44x/44x.h
++++ linux-2.6.18/arch/powerpc/platforms/44x/44x.h
+@@ -1,8 +1,37 @@
+ #ifndef __POWERPC_PLATFORMS_44X_44X_H
+ #define __POWERPC_PLATFORMS_44X_44X_H
++#include <asm/pci-bridge.h>
++
++/* PCI support */
++#define PPC4xx_PCI_CFGA_OFFSET		0
++#define PPC4xx_PCI_CFGD_OFFSET		0x4
++
++#define PPC4xx_PCIL0_PMM0LA		0x000
++#define PPC4xx_PCIL0_PMM0MA		0x004
++#define PPC4xx_PCIL0_PMM0PCILA		0x008
++#define PPC4xx_PCIL0_PMM0PCIHA		0x00C
++#define PPC4xx_PCIL0_PMM1LA		0x010
++#define PPC4xx_PCIL0_PMM1MA		0x014
++#define PPC4xx_PCIL0_PMM1PCILA		0x018
++#define PPC4xx_PCIL0_PMM1PCIHA		0x01C
++#define PPC4xx_PCIL0_PMM2LA		0x020
++#define PPC4xx_PCIL0_PMM2MA		0x024
++#define PPC4xx_PCIL0_PMM2PCILA		0x028
++#define PPC4xx_PCIL0_PMM2PCIHA		0x02C
++#define PPC4xx_PCIL0_PTM1MS		0x030
++#define PPC4xx_PCIL0_PTM1LA		0x034
++#define PPC4xx_PCIL0_PTM2MS		0x038
++#define PPC4xx_PCIL0_PTM2LA		0x03C
+ 
+ extern u8 as1_readb(volatile u8 __iomem  *addr);
+ extern void as1_writeb(u8 data, volatile u8 __iomem *addr);
+ extern void ppc44x_reset_system(char *cmd);
+ 
++#ifdef CONFIG_PCI
++extern int ppc4xx_exclude_device(struct pci_controller *hose,
++				u_char bus, u_char devfn);
++extern int ppc4xx_add_bridge(struct device_node *dev);
++extern void ppc4xx_fixup_irq(struct pci_dev *dev);
++#endif
++
+ #endif /* __POWERPC_PLATFORMS_44X_44X_H */
+Index: linux-2.6.18/arch/powerpc/platforms/44x/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/44x/Makefile
++++ linux-2.6.18/arch/powerpc/platforms/44x/Makefile
+@@ -2,3 +2,7 @@ obj-$(CONFIG_44x)	:= misc_44x.o
+ obj-$(CONFIG_EBONY)	+= ebony.o
+ obj-$(CONFIG_BAMBOO) += bamboo.o
+ obj-$(CONFIG_SEQUOIA)	+= sequoia.o
++
++ifeq ($(CONFIG_PCI),y)
++obj-$(CONFIG_440EPX)   += ppc4xx-pci.o
++endif
+Index: linux-2.6.18/arch/powerpc/platforms/44x/ppc4xx-pci.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/44x/ppc4xx-pci.c
+@@ -0,0 +1,209 @@
++/*
++ * PPC44x PCI host support
++ *
++ * Vitaly Bordug <vitb@kernel.crashing.org>
++ * Stefan Roese <sr@denx.de>
++ *
++ * Based on arch/ppc sequoia pci bits, that are
++ * Copyright 2006-2007 DENX Software Engineering, Stefan Roese <sr@denx.de>
++ *
++ * Based on bamboo.c from Wade Farnsworth <wfarnsworth@mvista.com>
++ *      Copyright 2004 MontaVista Software Inc.
++ *      Copyright 2006 AMCC
++ * This program is free software; you can redistribute  it and/or modify it
++ * under  the terms of  the GNU General  Public License as published by the
++ * Free Software Foundation;  either version 2 of the  License, or (at your
++ * option) any later version.
++ */
++
++#include <linux/stddef.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/errno.h>
++#include <linux/pci.h>
++#include <linux/delay.h>
++#include <linux/irq.h>
++#include <linux/module.h>
++#include <linux/io.h>
++
++#include <mm/mmu_decl.h>
++
++#include <asm/system.h>
++#include <asm/atomic.h>
++#include <asm/pci-bridge.h>
++#include <asm/prom.h>
++
++#include "44x.h"
++
++#undef DEBUG
++
++#ifdef DEBUG
++#define DBG(x...) printk(x)
++#else
++#define DBG(x...)
++#endif
++
++#ifdef CONFIG_PCI
++
++int ppc4xx_exclude_device(struct pci_controller *hose, u_char bus,
++			   u_char devfn)
++{
++	if ((bus == hose->first_busno) && PCI_SLOT(devfn) == 0)
++		return PCIBIOS_DEVICE_NOT_FOUND;
++	return PCIBIOS_SUCCESSFUL;
++}
++
++inline void pci_writel(void *pci_reg_base, u32 offset, unsigned int val)
++{
++	writel(val, pci_reg_base + offset);
++}
++
++inline void pci_cfg_out(void *cfg, u32 offset, unsigned int value)
++{
++	out_le32((void *)((u32) cfg + offset), value);
++}
++
++inline u32 pci_cfg_in(void *cfg, u32 offset)
++{
++	return in_le32((void *)((u32) cfg + offset));
++}
++
++static void __init ppc4xx_setup_pci(struct pci_controller *hose,
++				     void *pci_reg_base, void *pci_cfg_base)
++{
++	unsigned long memory_size, pci_size = 0;
++	phys_addr_t pci_phys_base = 0;
++	phys_addr_t pci_pci_base = 0;
++	int i;
++
++	memory_size = total_memory;
++
++	/*
++	 * 440EPx has single memory region, we'll use it to configure phb
++	 */
++	for (i = 0; i < 3; i++)
++		if (hose->mem_resources[i].start) {
++			pci_phys_base = hose->mem_resources[i].start;
++			pci_pci_base = pci_phys_base - hose->pci_mem_offset;
++			pci_size =
++			    hose->mem_resources[i].end -
++			    hose->mem_resources[i].start;
++		}
++
++	if (pci_phys_base == 0) {
++		printk(KERN_ERR "PHB bridge memory region is not defined!\n");
++		return;
++	}
++
++	pci_cfg_out(pci_cfg_base, PPC4xx_PCI_CFGA_OFFSET,
++		    (pci_pci_base & 0xFFFFFFFF) | (PCI_COMMAND & 0xfc));
++	pci_cfg_out(pci_cfg_base, PPC4xx_PCI_CFGD_OFFSET,
++		    (pci_cfg_in(pci_cfg_base, PPC4xx_PCI_CFGD_OFFSET) |
++		     PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER));
++
++	/* Disable region first */
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PMM0MA, 0);
++
++	/* PLB starting addr: 0x0000000180000000
++	 * We need just lower word to get the things work
++	 */
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PMM0LA,
++		   pci_phys_base & 0xFFFFFFFF);
++
++	/* PCI start addr, 0x80000000 (PCI Address) */
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PMM0PCILA,
++		   pci_pci_base & 0xFFFFFFFF);
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PMM0PCIHA, 0);
++
++	/* Enable no pre-fetch, enable region */
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PMM0MA,
++		   ((0xffffffff - pci_size) | 0x01));
++
++	/* Disable region one */
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PMM1MA, 0);
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PMM1LA, 0);
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PMM1PCILA, 0);
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PMM1PCIHA, 0);
++
++	/* Disable region two */
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PMM1MA, 0);
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PMM1LA, 0);
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PMM1PCILA, 0);
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PMM1PCIHA, 0);
++
++	/* Now configure the PCI->PLB windows, we only use PTM1
++	 *
++	 * For Inbound flow, set the window size to all available memory
++	 * This is required because if size is smaller,
++	 * then Eth/PCI DD would fail as PCI card not able to access
++	 * the memory allocated by DD.
++	 */
++
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PTM1MS, 0);
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PTM1LA, 0);
++
++	memory_size = 1 << fls(memory_size - 1);
++
++	/* Size low + Enabled */
++	pci_writel(pci_reg_base, PPC4xx_PCIL0_PTM1MS,
++		   (0xffffffff - (memory_size - 1)) | 0x1);
++	eieio();
++}
++
++int __init ppc4xx_add_bridge(struct device_node *dev)
++{
++	int len;
++	struct pci_controller *hose;
++	const int *bus_range;
++	int primary = 1;
++	void __iomem *reg, *cfg_addr, *cfg_data;
++
++	/* Fetch host bridge registers address */
++	reg = of_iomap(dev, 1);
++	cfg_addr = of_iomap(dev, 0);
++	cfg_data = (void __iomem*)((u32)cfg_addr + PPC4xx_PCI_CFGD_OFFSET);
++
++	DBG("Adding PCI host bridge %s\n reg %p cfg %p\n", dev->full_name, reg,
++	    cfg_addr);
++
++	/* Get bus range if any */
++	bus_range = of_get_property(dev, "bus-range", &len);
++	if (bus_range == NULL || len < 2 * sizeof(int))
++		printk(KERN_WARNING "Can't get bus-range for %s, assume"
++		       " bus 0\n", dev->full_name);
++
++	pci_assign_all_buses = 1;
++	hose = pcibios_alloc_controller();
++	if (!hose)
++		return -ENOMEM;
++	hose->arch_data = dev;
++
++	hose->first_busno = bus_range ? bus_range[0] : 0;
++	hose->last_busno = bus_range ? bus_range[1] : 0xff;
++
++	setup_indirect_pci_nomap(hose, cfg_addr, cfg_data);
++
++	/* Interpret the "ranges" property */
++	/* This also maps the I/O region and sets isa_io/mem_base */
++	pci_process_bridge_OF_ranges(hose, dev, primary);
++	ppc4xx_setup_pci(hose, reg, cfg_addr);
++
++	return 0;
++}
++
++
++void ppc4xx_fixup_irq(struct pci_dev *dev)
++{
++	struct of_irq oirq;
++
++	if (of_irq_map_pci(dev, &oirq)) {
++		printk(KERN_ERR "PCI: can't map irq\n");
++		return;
++	}
++	dev->irq = irq_create_of_mapping(oirq.controller, oirq.specifier,
++				     oirq.size);
++	pci_write_config_byte(dev, PCI_INTERRUPT_LINE, dev->irq);
++
++	DBG("PCI: dev->irq = 0x%x\n", dev->irq);
++}
++#endif
+Index: linux-2.6.18/arch/powerpc/platforms/44x/sequoia.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/44x/sequoia.c
++++ linux-2.6.18/arch/powerpc/platforms/44x/sequoia.c
+@@ -52,6 +52,21 @@ static int __init sequoia_probe(void)
+ 
+ static void __init sequoia_setup_arch(void)
+ {
++#ifdef CONFIG_PCI
++	struct device_node *np;
++#endif
++
++	if (ppc_md.progress)
++		ppc_md.progress("ppc44x_setup_arch()", 0);
++
++#ifdef CONFIG_PCI
++	for (np = NULL; (np = of_find_compatible_node(np,
++					"pci", "ibm,pci-440epx")) != NULL;)
++		ppc4xx_add_bridge(np);
++	ppc_md.pci_exclude_device = ppc4xx_exclude_device;
++	ppc_md.pci_irq_fixup = ppc4xx_fixup_irq;
++#endif
++
+ }
+ 
+ define_machine(sequoia) {
+Index: linux-2.6.18/mvl_patches/pro50-0455.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0455.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(455);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

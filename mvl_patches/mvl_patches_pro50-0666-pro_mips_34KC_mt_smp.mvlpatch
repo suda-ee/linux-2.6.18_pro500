@@ -1,0 +1,507 @@
+#! /usr/bin/env bash
+# Patch: -pro_mips_34KC_mt_smp
+# Date: Wed Jan  2 20:40:55 2008
+# Source: MontaVista Software, Inc.
+# MR: 24939
+# Type: Defect Fix 
+# Disposition: merged from LMO
+# Signed-off-by: Manish Lachwani <mlachwani@mvista.com>
+# Description:
+# 
+# Following commits from LMO:
+# 
+# 2007-02-06
+# 	Atsushi Nemoto
+# 	[MIPS] Define MIPS_CPU_IRQ_BASE in generic header
+# 
+# 2006-11-30
+# 	Atsushi Nemoto
+# 	[MIPS] use generic_handle_irq, handle_level_irq, handle ...
+# 
+# 2006-10-31
+# 	Ralf Baechle
+# 	[MIPS] VSMP: Synchronize cp0 counters on bootup.
+# 
+# 2006-10-31
+# 	Ralf Baechle
+# 	[MIPS] VSMP: Fix initialization ordering bug.
+# 
+# 2006-10-08
+# 	Ralf Baechle
+# 	[MIPS] Complete fixes after removal of pt_regs argument ...
+# 
+
+PATCHNUM=666
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: MontaVista Software, Inc.
+MR: 24939
+Type: Defect Fix 
+Disposition: merged from LMO
+Signed-off-by: Manish Lachwani <mlachwani@mvista.com>
+Description:
+
+Following commits from LMO:
+
+2007-02-06
+	Atsushi Nemoto
+	[MIPS] Define MIPS_CPU_IRQ_BASE in generic header
+
+2006-11-30
+	Atsushi Nemoto
+	[MIPS] use generic_handle_irq, handle_level_irq, handle ...
+
+2006-10-31
+	Ralf Baechle
+	[MIPS] VSMP: Synchronize cp0 counters on bootup.
+
+2006-10-31
+	Ralf Baechle
+	[MIPS] VSMP: Fix initialization ordering bug.
+
+2006-10-08
+	Ralf Baechle
+	[MIPS] Complete fixes after removal of pt_regs argument ...
+
+Index: linux-2.6.18/arch/mips/kernel/smp-mt.c
+===================================================================
+--- linux-2.6.18.orig/arch/mips/kernel/smp-mt.c
++++ linux-2.6.18/arch/mips/kernel/smp-mt.c
+@@ -106,22 +106,22 @@ void __init sanitize_tlb_entries(void)
+ 	clear_c0_mvpcontrol(MVPCONTROL_VPC);
+ }
+ 
+-static void ipi_resched_dispatch (struct pt_regs *regs)
++static void ipi_resched_dispatch(struct pt_regs *regs)
+ {
+ 	do_IRQ(MIPSCPU_INT_BASE + MIPS_CPU_IPI_RESCHED_IRQ, regs);
+ }
+ 
+-static void ipi_call_dispatch (struct pt_regs *regs)
++static void ipi_call_dispatch(struct pt_regs *regs)
+ {
+ 	do_IRQ(MIPSCPU_INT_BASE + MIPS_CPU_IPI_CALL_IRQ, regs);
+ }
+ 
+-irqreturn_t ipi_resched_interrupt(int irq, void *dev_id, struct pt_regs *regs)
++static irqreturn_t ipi_resched_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+ {
+ 	return IRQ_HANDLED;
+ }
+ 
+-irqreturn_t ipi_call_interrupt(int irq, void *dev_id, struct pt_regs *regs)
++static irqreturn_t ipi_call_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+ {
+ 	smp_call_function_interrupt();
+ 
+@@ -140,15 +140,90 @@ static struct irqaction irq_call = {
+ 	.name		= "IPI_call"
+ };
+ 
++static void __init smp_copy_vpe_config(void)
++{
++	write_vpe_c0_status(
++		(read_c0_status() & ~(ST0_IM | ST0_IE | ST0_KSU)) | ST0_CU0);
++
++	/* set config to be the same as vpe0, particularly kseg0 coherency alg */
++	write_vpe_c0_config( read_c0_config());
++
++	/* make sure there are no software interrupts pending */
++	write_vpe_c0_cause(0);
++
++	/* Propagate Config7 */
++	write_vpe_c0_config7(read_c0_config7());
++
++	write_vpe_c0_count(read_c0_count());
++}
++
++static unsigned int __init smp_vpe_init(unsigned int tc, unsigned int mvpconf0,
++	unsigned int ncpu)
++{
++	if (tc > ((mvpconf0 & MVPCONF0_PVPE) >> MVPCONF0_PVPE_SHIFT))
++		return ncpu;
++
++	/* Deactivate all but VPE 0 */
++	if (tc != 0) {
++		unsigned long tmp = read_vpe_c0_vpeconf0();
++
++		tmp &= ~VPECONF0_VPA;
++
++		/* master VPE */
++		tmp |= VPECONF0_MVP;
++		write_vpe_c0_vpeconf0(tmp);
++
++		/* Record this as available CPU */
++		cpu_set(tc, phys_cpu_present_map);
++		__cpu_number_map[tc]	= ++ncpu;
++		__cpu_logical_map[ncpu]	= tc;
++	}
++
++	/* Disable multi-threading with TC's */
++	write_vpe_c0_vpecontrol(read_vpe_c0_vpecontrol() & ~VPECONTROL_TE);
++
++	if (tc != 0)
++		smp_copy_vpe_config();
++
++	return ncpu;
++}
++
++static void __init smp_tc_init(unsigned int tc, unsigned int mvpconf0)
++{
++	unsigned long tmp;
++
++	if (!tc)
++		return;
++
++	/* bind a TC to each VPE, May as well put all excess TC's
++	   on the last VPE */
++	if (tc >= (((mvpconf0 & MVPCONF0_PVPE) >> MVPCONF0_PVPE_SHIFT)+1))
++		write_tc_c0_tcbind(read_tc_c0_tcbind() | ((mvpconf0 & MVPCONF0_PVPE) >> MVPCONF0_PVPE_SHIFT));
++	else {
++		write_tc_c0_tcbind(read_tc_c0_tcbind() | tc);
++
++		/* and set XTC */
++		write_vpe_c0_vpeconf0(read_vpe_c0_vpeconf0() | (tc << VPECONF0_XTC_SHIFT));
++	}
++
++	tmp = read_tc_c0_tcstatus();
++
++	/* mark not allocated and not dynamically allocatable */
++	tmp &= ~(TCSTATUS_A | TCSTATUS_DA);
++	tmp |= TCSTATUS_IXMT;		/* interrupt exempt */
++	write_tc_c0_tcstatus(tmp);
++
++	write_tc_c0_tchalt(TCHALT_H);
++}
++
+ /*
+  * Common setup before any secondaries are started
+  * Make sure all CPU's are in a sensible state before we boot any of the
+  * secondarys
+  */
+-void plat_smp_setup(void)
++void __init plat_smp_setup(void)
+ {
+-	unsigned long val;
+-	int i, num;
++	unsigned int mvpconf0, ntc, tc, ncpu = 0;
+ 
+ #ifdef CONFIG_MIPS_MT_FPAFF
+ 	/* If we have an FPU, enroll ourselves in the FPU-full mask */
+@@ -167,75 +242,16 @@ void plat_smp_setup(void)
+ 	/* Put MVPE's into 'configuration state' */
+ 	set_c0_mvpcontrol(MVPCONTROL_VPC);
+ 
+-	val = read_c0_mvpconf0();
++	mvpconf0 = read_c0_mvpconf0();
++	ntc = (mvpconf0 & MVPCONF0_PTC) >> MVPCONF0_PTC_SHIFT;
+ 
+ 	/* we'll always have more TC's than VPE's, so loop setting everything
+ 	   to a sensible state */
+-	for (i = 0, num = 0; i <= ((val & MVPCONF0_PTC) >> MVPCONF0_PTC_SHIFT); i++) {
+-		settc(i);
+-
+-		/* VPE's */
+-		if (i <= ((val & MVPCONF0_PVPE) >> MVPCONF0_PVPE_SHIFT)) {
+-
+-			/* deactivate all but vpe0 */
+-			if (i != 0) {
+-				unsigned long tmp = read_vpe_c0_vpeconf0();
+-
+-				tmp &= ~VPECONF0_VPA;
+-
+-				/* master VPE */
+-				tmp |= VPECONF0_MVP;
+-				write_vpe_c0_vpeconf0(tmp);
+-
+-				/* Record this as available CPU */
+-				cpu_set(i, phys_cpu_present_map);
+-				__cpu_number_map[i]	= ++num;
+-				__cpu_logical_map[num]	= i;
+-			}
+-
+-			/* disable multi-threading with TC's */
+-			write_vpe_c0_vpecontrol(read_vpe_c0_vpecontrol() & ~VPECONTROL_TE);
+-
+-			if (i != 0) {
+-				write_vpe_c0_status((read_c0_status() & ~(ST0_IM | ST0_IE | ST0_KSU)) | ST0_CU0);
+-
+-				/* set config to be the same as vpe0, particularly kseg0 coherency alg */
+-				write_vpe_c0_config( read_c0_config());
+-
+-				/* make sure there are no software interrupts pending */
+-				write_vpe_c0_cause(read_vpe_c0_cause() & ~(C_SW1|C_SW0));
+-
+-				/* Propagate Config7 */
+-				write_vpe_c0_config7(read_c0_config7());
+-			}
+-
+-		}
+-
+-		/* TC's */
+-
+-		if (i != 0) {
+-			unsigned long tmp;
+-
+-			/* bind a TC to each VPE, May as well put all excess TC's
+-			   on the last VPE */
+-			if ( i >= (((val & MVPCONF0_PVPE) >> MVPCONF0_PVPE_SHIFT)+1) )
+-				write_tc_c0_tcbind(read_tc_c0_tcbind() | ((val & MVPCONF0_PVPE) >> MVPCONF0_PVPE_SHIFT) );
+-			else {
+-				write_tc_c0_tcbind( read_tc_c0_tcbind() | i);
+-
+-				/* and set XTC */
+-				write_vpe_c0_vpeconf0( read_vpe_c0_vpeconf0() | (i << VPECONF0_XTC_SHIFT));
+-			}
+-
+-			tmp = read_tc_c0_tcstatus();
+-
+-			/* mark not allocated and not dynamically allocatable */
+-			tmp &= ~(TCSTATUS_A | TCSTATUS_DA);
+-			tmp |= TCSTATUS_IXMT;		/* interrupt exempt */
+-			write_tc_c0_tcstatus(tmp);
++	for (tc = 0; tc <= ntc; tc++) {
++		settc(tc);
+ 
+-			write_tc_c0_tchalt(TCHALT_H);
+-		}
++		smp_tc_init(tc, mvpconf0);
++		ncpu = smp_vpe_init(tc, mvpconf0, ncpu);
+ 	}
+ 
+ 	/* Release config state */
+@@ -243,15 +259,15 @@ void plat_smp_setup(void)
+ 
+ 	/* We'll wait until starting the secondaries before starting MVPE */
+ 
+-	printk(KERN_INFO "Detected %i available secondary CPU(s)\n", num);
++	printk(KERN_INFO "Detected %i available secondary CPU(s)\n", ncpu);
+ }
+ 
+ void __init plat_prepare_cpus(unsigned int max_cpus)
+ {
+ 	/* set up ipi interrupts */
+ 	if (cpu_has_vint) {
+-		set_vi_handler (MIPS_CPU_IPI_RESCHED_IRQ, ipi_resched_dispatch);
+-		set_vi_handler (MIPS_CPU_IPI_CALL_IRQ, ipi_call_dispatch);
++		set_vi_handler(MIPS_CPU_IPI_RESCHED_IRQ, ipi_resched_dispatch);
++		set_vi_handler(MIPS_CPU_IPI_CALL_IRQ, ipi_call_dispatch);
+ 	}
+ 
+ 	cpu_ipi_resched_irq = MIPSCPU_INT_BASE + MIPS_CPU_IPI_RESCHED_IRQ;
+@@ -262,7 +278,9 @@ void __init plat_prepare_cpus(unsigned i
+ 
+ 	/* need to mark IPI's as IRQ_PER_CPU */
+ 	irq_desc[cpu_ipi_resched_irq].status |= IRQ_PER_CPU;
++	set_irq_handler(cpu_ipi_resched_irq, handle_percpu_irq);
+ 	irq_desc[cpu_ipi_call_irq].status |= IRQ_PER_CPU;
++	set_irq_handler(cpu_ipi_call_irq, handle_percpu_irq);
+ }
+ 
+ /*
+Index: linux-2.6.18/mvl_patches/pro50-0666.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0666.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(666);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

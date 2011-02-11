@@ -1,0 +1,762 @@
+#! /usr/bin/env bash
+# Patch: -common_arm_freescale_mx27ads_uart
+# Date: Wed Aug 29 07:25:53 2007
+
+PATCHNUM=111
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Index: linux-2.6.18/arch/arm/mach-mx2/devices.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-mx2/devices.c
++++ linux-2.6.18/arch/arm/mach-mx2/devices.c
+@@ -14,13 +14,255 @@
+ #include <linux/module.h>
+ #include <linux/kernel.h>
+ #include <linux/init.h>
++#include <linux/platform_device.h>
++#include <asm/hardware.h>
++#include <asm/arch/mxc_uart.h>
++#include <linux/serial.h>
+ #include <asm/arch/gpio.h>
++#include "serial.h"
+ 
+ /*!
+  * @file mach-mx27/devices.c
+  * @brief device configurations for mx27.
+  */
+ 
++#if defined(CONFIG_SERIAL_MXC) || defined(CONFIG_SERIAL_MXC_MODULE)
++
++/*!
++ * This is an array where each element holds information about a UART port,
++ * like base address of the UART, interrupt numbers etc. This structure is
++ * passed to the serial_core.c file. Based on which UART is used, the core file
++ * passes back the appropriate port structure as an argument to the control
++ * functions.
++ */
++static uart_mxc_port mxc_ports[] = {
++	[0] = {
++	       .port = {
++			.membase = (void *)IO_ADDRESS(UART1_BASE_ADDR),
++			.mapbase = UART1_BASE_ADDR,
++			.iotype = SERIAL_IO_MEM,
++			.irq = UART1_INT1,
++			.fifosize = 32,
++			.flags = ASYNC_BOOT_AUTOCONF,
++			.line = 0,
++			},
++	       .ints_muxed = UART1_MUX_INTS,
++	       .irqs = {UART1_INT2, UART1_INT3},
++	       .mode = UART1_MODE,
++	       .ir_mode = UART1_IR,
++	       .enabled = UART1_ENABLED,
++	       .hardware_flow = UART1_HW_FLOW,
++	       .cts_threshold = UART1_UCR4_CTSTL,
++	       .dma_enabled = UART1_DMA_ENABLE,
++	       .dma_rxbuf_size = UART1_DMA_RXBUFSIZE,
++	       .rx_threshold = UART1_UFCR_RXTL,
++	       .tx_threshold = UART1_UFCR_TXTL,
++	       .shared = UART1_SHARED_PERI,
++	       .dma_tx_id = MXC_DMA_UART1_TX,
++	       .dma_rx_id = MXC_DMA_UART1_RX,
++	       .rxd_mux = MXC_UART_RXDMUX,
++	       },
++	[1] = {
++	       .port = {
++			.membase = (void *)IO_ADDRESS(UART2_BASE_ADDR),
++			.mapbase = UART2_BASE_ADDR,
++			.iotype = SERIAL_IO_MEM,
++			.irq = UART2_INT1,
++			.fifosize = 32,
++			.flags = ASYNC_BOOT_AUTOCONF,
++			.line = 1,
++			},
++	       .ints_muxed = UART2_MUX_INTS,
++	       .irqs = {UART2_INT2, UART2_INT3},
++	       .mode = UART2_MODE,
++	       .ir_mode = UART2_IR,
++	       .enabled = UART2_ENABLED,
++	       .hardware_flow = UART2_HW_FLOW,
++	       .cts_threshold = UART2_UCR4_CTSTL,
++	       .dma_enabled = UART2_DMA_ENABLE,
++	       .dma_rxbuf_size = UART2_DMA_RXBUFSIZE,
++	       .rx_threshold = UART2_UFCR_RXTL,
++	       .tx_threshold = UART2_UFCR_TXTL,
++	       .shared = UART2_SHARED_PERI,
++	       .dma_tx_id = MXC_DMA_UART2_TX,
++	       .dma_rx_id = MXC_DMA_UART2_RX,
++	       .rxd_mux = MXC_UART_RXDMUX,
++	       },
++	[2] = {
++	       .port = {
++			.membase = (void *)IO_ADDRESS(UART3_BASE_ADDR),
++			.mapbase = UART3_BASE_ADDR,
++			.iotype = SERIAL_IO_MEM,
++			.irq = UART3_INT1,
++			.fifosize = 32,
++			.flags = ASYNC_BOOT_AUTOCONF,
++			.line = 2,
++			},
++	       .ints_muxed = UART3_MUX_INTS,
++	       .irqs = {UART3_INT2, UART3_INT3},
++	       .mode = UART3_MODE,
++	       .ir_mode = UART3_IR,
++	       .enabled = UART3_ENABLED,
++	       .hardware_flow = UART3_HW_FLOW,
++	       .cts_threshold = UART3_UCR4_CTSTL,
++	       .dma_enabled = UART3_DMA_ENABLE,
++	       .dma_rxbuf_size = UART3_DMA_RXBUFSIZE,
++	       .rx_threshold = UART3_UFCR_RXTL,
++	       .tx_threshold = UART3_UFCR_TXTL,
++	       .shared = UART3_SHARED_PERI,
++	       .dma_tx_id = MXC_DMA_UART3_TX,
++	       .dma_rx_id = MXC_DMA_UART3_RX,
++	       .rxd_mux = MXC_UART_IR_RXDMUX,
++	       },
++	[3] = {
++	       .port = {
++			.membase = (void *)IO_ADDRESS(UART4_BASE_ADDR),
++			.mapbase = UART4_BASE_ADDR,
++			.iotype = SERIAL_IO_MEM,
++			.irq = UART4_INT1,
++			.fifosize = 32,
++			.flags = ASYNC_BOOT_AUTOCONF,
++			.line = 3,
++			},
++	       .ints_muxed = UART4_MUX_INTS,
++	       .irqs = {UART4_INT2, UART4_INT3},
++	       .mode = UART4_MODE,
++	       .ir_mode = UART4_IR,
++	       .enabled = UART4_ENABLED,
++	       .hardware_flow = UART4_HW_FLOW,
++	       .cts_threshold = UART4_UCR4_CTSTL,
++	       .dma_enabled = UART4_DMA_ENABLE,
++	       .dma_rxbuf_size = UART4_DMA_RXBUFSIZE,
++	       .rx_threshold = UART4_UFCR_RXTL,
++	       .tx_threshold = UART4_UFCR_TXTL,
++	       .shared = UART4_SHARED_PERI,
++	       .dma_tx_id = MXC_DMA_UART4_TX,
++	       .dma_rx_id = MXC_DMA_UART4_RX,
++	       .rxd_mux = MXC_UART_RXDMUX,
++	       },
++	[4] = {
++	       .port = {
++			.membase = (void *)IO_ADDRESS(UART5_BASE_ADDR),
++			.mapbase = UART5_BASE_ADDR,
++			.iotype = SERIAL_IO_MEM,
++			.irq = UART5_INT1,
++			.fifosize = 32,
++			.flags = ASYNC_BOOT_AUTOCONF,
++			.line = 4,
++			},
++	       .ints_muxed = UART5_MUX_INTS,
++	       .irqs = {UART5_INT2, UART5_INT3},
++	       .mode = UART5_MODE,
++	       .ir_mode = UART5_IR,
++	       .enabled = UART5_ENABLED,
++	       .hardware_flow = UART5_HW_FLOW,
++	       .cts_threshold = UART5_UCR4_CTSTL,
++	       .dma_enabled = UART5_DMA_ENABLE,
++	       .dma_rxbuf_size = UART5_DMA_RXBUFSIZE,
++	       .rx_threshold = UART5_UFCR_RXTL,
++	       .tx_threshold = UART5_UFCR_TXTL,
++	       .shared = UART5_SHARED_PERI,
++	       .dma_tx_id = MXC_DMA_UART5_TX,
++	       .dma_rx_id = MXC_DMA_UART5_RX,
++	       .rxd_mux = MXC_UART_RXDMUX,
++	       },
++	[5] = {
++	       .port = {
++			.membase = (void *)IO_ADDRESS(UART6_BASE_ADDR),
++			.mapbase = UART6_BASE_ADDR,
++			.iotype = SERIAL_IO_MEM,
++			.irq = UART6_INT1,
++			.fifosize = 32,
++			.flags = ASYNC_BOOT_AUTOCONF,
++			.line = 5,
++			},
++	       .ints_muxed = UART6_MUX_INTS,
++	       .irqs = {UART6_INT2, UART6_INT3},
++	       .mode = UART6_MODE,
++	       .ir_mode = UART6_IR,
++	       .enabled = UART6_ENABLED,
++	       .hardware_flow = UART6_HW_FLOW,
++	       .cts_threshold = UART6_UCR4_CTSTL,
++	       .dma_enabled = UART6_DMA_ENABLE,
++	       .dma_rxbuf_size = UART6_DMA_RXBUFSIZE,
++	       .rx_threshold = UART6_UFCR_RXTL,
++	       .tx_threshold = UART6_UFCR_TXTL,
++	       .shared = UART6_SHARED_PERI,
++	       .dma_tx_id = MXC_DMA_UART6_TX,
++	       .dma_rx_id = MXC_DMA_UART6_RX,
++	       .rxd_mux = MXC_UART_RXDMUX,
++	       },
++};
++
++static struct platform_device mxc_uart_device1 = {
++	.name = "mxcintuart",
++	.id = 0,
++	.dev = {
++		.platform_data = &mxc_ports[0],
++		},
++};
++
++static struct platform_device mxc_uart_device2 = {
++	.name = "mxcintuart",
++	.id = 1,
++	.dev = {
++		.platform_data = &mxc_ports[1],
++		},
++};
++
++static struct platform_device mxc_uart_device3 = {
++	.name = "mxcintuart",
++	.id = 2,
++	.dev = {
++		.platform_data = &mxc_ports[2],
++		},
++};
++
++static struct platform_device mxc_uart_device4 = {
++	.name = "mxcintuart",
++	.id = 3,
++	.dev = {
++		.platform_data = &mxc_ports[3],
++		},
++};
++static struct platform_device mxc_uart_device5 = {
++	.name = "mxcintuart",
++	.id = 4,
++	.dev = {
++		.platform_data = &mxc_ports[4],
++		},
++};
++static struct platform_device mxc_uart_device6 = {
++	.name = "mxcintuart",
++	.id = 5,
++	.dev = {
++		.platform_data = &mxc_ports[5],
++		},
++};
++
++static int __init mxc_init_uart(void)
++{
++	/* Register all the MXC UART platform device structures */
++	platform_device_register(&mxc_uart_device1);
++	platform_device_register(&mxc_uart_device2);
++#ifndef CONFIG_MXC_IRDA
++	platform_device_register(&mxc_uart_device3);
++#endif
++	platform_device_register(&mxc_uart_device4);
++
++	platform_device_register(&mxc_uart_device5);
++	platform_device_register(&mxc_uart_device6);
++	return 0;
++}
++
++#else
++static int __init mxc_init_uart(void)
++{
++	return 0;
++}
++#endif
++
++
+ struct mxc_gpio_port mxc_gpio_ports[GPIO_PORT_NUM] = {
+ 	{
+ 	 .num = 0,
+@@ -62,6 +304,7 @@ struct mxc_gpio_port mxc_gpio_ports[GPIO
+ 
+ static int __init mxc_init_devices(void)
+ {
++	mxc_init_uart();
+ 	return 0;
+ }
+ 
+Index: linux-2.6.18/arch/arm/mach-mx2/serial.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/arm/mach-mx2/serial.h
+@@ -0,0 +1,171 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++
++#ifndef __ARCH_ARM_MACH_MX27_SERIAL_H__
++#define __ARCH_ARM_MACH_MX27_SERIAL_H__
++
++/*!
++ * @file arch/arm/mach-mx2/serial.h
++ *
++ * @ingroup System
++ */
++#include <asm/arch/mxc_uart.h>
++
++/* UART 1 configuration */
++/*!
++ * This option allows to choose either an interrupt-driven software controlled
++ * hardware flow control (set this option to 0) or hardware-driven hardware
++ * flow control (set this option to 1).
++ */
++#define UART1_HW_FLOW           1
++/*!
++ * This specifies the threshold at which the CTS pin is deasserted by the
++ * RXFIFO. Set this value in Decimal to anything from 0 to 32 for
++ * hardware-driven hardware flow control. Read the HW spec while specifying
++ * this value. When using interrupt-driven software controlled hardware
++ * flow control set this option to -1.
++ */
++#define UART1_UCR4_CTSTL        16
++/*!
++ * This is option to enable (set this option to 1) or disable DMA data transfer
++ */
++#define UART1_DMA_ENABLE        0
++/*!
++ * Specify the size of the DMA receive buffer. The buffer size should be same
++ * with sub buffer size which is defined in mxc_uart.c for all data can be
++ * transfered.
++ */
++#define UART1_DMA_RXBUFSIZE     128
++/*!
++ * Specify the MXC UART's Receive Trigger Level. This controls the threshold at
++ * which a maskable interrupt is generated by the RxFIFO. Set this value in
++ * Decimal to anything from 0 to 32. Read the HW spec while specifying this
++ * value.
++ */
++#define UART1_UFCR_RXTL         16
++/*!
++ * Specify the MXC UART's Transmit Trigger Level. This controls the threshold at
++ * which a maskable interrupt is generated by the TxFIFO. Set this value in
++ * Decimal to anything from 0 to 32. Read the HW spec while specifying this
++ * value.
++ */
++#define UART1_UFCR_TXTL         16
++/* UART 2 configuration */
++#define UART2_HW_FLOW           1
++#define UART2_UCR4_CTSTL        16
++#define UART2_DMA_ENABLE        0
++#define UART2_DMA_RXBUFSIZE     512
++#define UART2_UFCR_RXTL         16
++#define UART2_UFCR_TXTL         16
++/* UART 3 configuration */
++#define UART3_HW_FLOW           0
++#define UART3_UCR4_CTSTL        -1
++#define UART3_DMA_ENABLE        0
++#define UART3_DMA_RXBUFSIZE     512
++#define UART3_UFCR_RXTL         16
++#define UART3_UFCR_TXTL         16
++/* UART 4 configuration */
++#define UART4_HW_FLOW           1
++#define UART4_UCR4_CTSTL        16
++#define UART4_DMA_ENABLE        0
++#define UART4_DMA_RXBUFSIZE     512
++#define UART4_UFCR_RXTL         16
++#define UART4_UFCR_TXTL         16
++/* UART 5 configuration */
++#define UART5_HW_FLOW           1
++#define UART5_UCR4_CTSTL        16
++#define UART5_DMA_ENABLE        0
++#define UART5_DMA_RXBUFSIZE     512
++#define UART5_UFCR_RXTL         16
++#define UART5_UFCR_TXTL         16
++/* UART 6 configuration */
++#define UART6_HW_FLOW           1
++#define UART6_UCR4_CTSTL        16
++#define UART6_DMA_ENABLE        0
++#define UART6_DMA_RXBUFSIZE     512
++#define UART6_UFCR_RXTL         16
++#define UART6_UFCR_TXTL         16
++/*
++ * UART Chip level Configuration that a user may not have to edit. These
++ * configuration vary depending on how the UART module is integrated with
++ * the ARM core
++ */
++/*
++ * Is the MUXED interrupt output sent to the ARM core
++ */
++#define INTS_NOTMUXED           0
++#define INTS_MUXED              1
++/* UART 1 configuration */
++/*!
++ * This define specifies whether the muxed ANDed interrupt line or the
++ * individual interrupts from the UART port is integrated with the ARM core.
++ * There exists a define like this for each UART port. Valid values that can
++ * be used are \b INTS_NOTMUXED or \b INTS_MUXED.
++ */
++#define UART1_MUX_INTS          INTS_MUXED
++/*!
++ * This define specifies the transmitter interrupt number or the interrupt
++ * number of the ANDed interrupt in case the interrupts are muxed. There exists
++ * a define like this for each UART port.
++ */
++#define UART1_INT1              MXC_INT_UART1
++/*!
++ * This define specifies the receiver interrupt number. If the interrupts of
++ * the UART are muxed, then we specify here a dummy value -1. There exists a
++ * define like this for each UART port.
++ */
++#define UART1_INT2              -1
++/*!
++ * This specifies the master interrupt number. If the interrupts of the UART
++ * are muxed, then we specify here a dummy value of -1. There exists a define
++ * like this for each UART port.
++ */
++#define UART1_INT3              -1
++/*!
++ * This specifies if the UART is a shared peripheral. It holds the shared
++ * peripheral number if it is shared or -1 if it is not shared. There exists
++ * a define like this for each UART port.
++ */
++#define UART1_SHARED_PERI       -1
++/* UART 2 configuration */
++#define UART2_MUX_INTS          INTS_MUXED
++#define UART2_INT1              MXC_INT_UART2
++#define UART2_INT2              -1
++#define UART2_INT3              -1
++#define UART2_SHARED_PERI       -1
++/* UART 3 configuration */
++#define UART3_MUX_INTS          INTS_MUXED
++#define UART3_INT1              MXC_INT_UART3
++#define UART3_INT2              -1
++#define UART3_INT3              -1
++#define UART3_SHARED_PERI       -1
++/* UART 4 configuration */
++#define UART4_MUX_INTS          INTS_MUXED
++#define UART4_INT1              MXC_INT_UART4
++#define UART4_INT2              -1
++#define UART4_INT3              -1
++#define UART4_SHARED_PERI       -1
++/* UART 5 configuration */
++#define UART5_MUX_INTS          INTS_MUXED
++#define UART5_INT1              MXC_INT_UART5
++#define UART5_INT2              -1
++#define UART5_INT3              -1
++#define UART5_SHARED_PERI       -1
++/* UART 6 configuration */
++#define UART6_MUX_INTS          INTS_MUXED
++#define UART6_INT1              MXC_INT_UART6
++#define UART6_INT2              -1
++#define UART6_INT3              -1
++#define UART6_SHARED_PERI       -1
++
++#endif				/* __ARCH_ARM_MACH_MX27_SERIAL_H__ */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/board-mx27ads.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-mxc/board-mx27ads.h
++++ linux-2.6.18/include/asm-arm/arch-mxc/board-mx27ads.h
+@@ -18,10 +18,79 @@
+ /* Size of contiguous memory for DMA and other h/w blocks */
+ #define CONSISTENT_DMA_SIZE	SZ_8M
+ 
++/*!
++ * @name MXC UART EVB board level configurations
++ */
++/*!
++ * Specify the max baudrate for the MXC UARTs for your board, do not specify
++ * a max baudrate greater than 1500000. This is used while specifying the UART
++ * Power management constraints.
++ */
++#define MAX_UART_BAUDRATE       1500000
++/*!
++ * Specifies if the Irda transmit path is inverting
++ */
++#define MXC_IRDA_TX_INV         0
++/*!
++ * Specifies if the Irda receive path is inverting
++ */
++#define MXC_IRDA_RX_INV         0
++
++/* UART 1 configuration */
++/*!
++ * This define specifies if the UART port is configured to be in DTE or
++ * DCE mode. There exists a define like this for each UART port. Valid
++ * values that can be used are \b MODE_DTE or \b MODE_DCE.
++ */
++#define UART1_MODE              MODE_DCE
++/*!
++ * This define specifies if the UART is to be used for IRDA. There exists a
++ * define like this for each UART port. Valid values that can be used are
++ * \b IRDA or \b NO_IRDA.
++ */
++#define UART1_IR                NO_IRDA
++/*!
++ * This define is used to enable or disable a particular UART port. If
++ * disabled, the UART will not be registered in the file system and the user
++ * will not be able to access it. There exists a define like this for each UART
++ * port. Specify a value of 1 to enable the UART and 0 to disable it.
++ */
++#define UART1_ENABLED           1
++
++/* UART 2 configuration */
++#define UART2_MODE              MODE_DCE
++#define UART2_IR                NO_IRDA
++#define UART2_ENABLED           1
++
++/* UART 3 configuration */
++#define UART3_MODE              MODE_DCE
++#define UART3_IR                IRDA
++#define UART3_ENABLED           1
++
++/* UART 4 configuration */
++#define UART4_MODE              MODE_DTE
++#define UART4_IR                NO_IRDA
++
++/* Disable UART 4 as its pins are shared with ATA */
++#define UART4_ENABLED           0
++
++/* UART 5 configuration */
++#define UART5_MODE              MODE_DTE
++#define UART5_IR                NO_IRDA
++#define UART5_ENABLED           1
++
++/* UART 6 configuration */
++#define UART6_MODE              MODE_DTE
++#define UART6_IR                NO_IRDA
++#define UART6_ENABLED           1
++
+ #define MXC_LL_EXTUART_PADDR	(CS4_BASE_ADDR + 0x20000)
+ #define MXC_LL_EXTUART_VADDR	(CS4_BASE_ADDR_VIRT + 0x20000)
+ #define MXC_LL_EXTUART_16BIT_BUS
+ 
++#define MXC_LL_UART_PADDR       UART1_BASE_ADDR
++#define MXC_LL_UART_VADDR       AIPI_IO_ADDRESS(UART1_BASE_ADDR)
++
+ /*!
+  * @name Memory Size parameters
+  */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/mx27.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-mxc/mx27.h
++++ linux-2.6.18/include/asm-arm/arch-mxc/mx27.h
+@@ -26,6 +26,16 @@
+  * the ARM core
+  */
+ #define MXC_UART_NR 6
++/*!
++ * This option is used to set or clear the RXDMUXSEL bit in control reg 3.
++ * Certain platforms need this bit to be set in order to receive Irda data.
++ */
++#define MXC_UART_IR_RXDMUX      0x0004
++/*!
++ * This option is used to set or clear the RXDMUXSEL bit in control reg 3.
++ * Certain platforms need this bit to be set in order to receive UART data.
++ */
++#define MXC_UART_RXDMUX         0x0004
+ 
+ /*
+  * MX27 memory map:
+Index: linux-2.6.18/mvl_patches/pro50-0111.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0111.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(111);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

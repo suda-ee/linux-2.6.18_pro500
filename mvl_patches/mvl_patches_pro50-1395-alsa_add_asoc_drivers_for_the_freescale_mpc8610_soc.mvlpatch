@@ -1,0 +1,2861 @@
+#! /usr/bin/env bash
+# Patch: -alsa_add_asoc_drivers_for_the_freescale_mpc8610_soc
+# Date: Mon Jul 21 10:30:38 2008
+# Source: kernel.org
+# MR: 28288
+# Type: Enhancement
+# Disposition: backport from 2.6.25-rc1 (17467f23395f05ba7b361f7b504fe0f1095d5bb7)
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# 
+# commit 17467f23395f05ba7b361f7b504fe0f1095d5bb7
+# Author: Timur Tabi <timur@freescale.com>
+# Date:   Fri Jan 11 18:15:26 2008 +0100
+# 
+#     [ALSA] Add ASoC drivers for the Freescale MPC8610 SoC
+#     
+#     Add the ASoC drivers for the Freescale MPC8610 SoC and the MPC8610 HPCD
+#     reference board.
+#     
+#     Signed-off-by: Timur Tabi <timur@freescale.com>
+#     Signed-off-by: Takashi Iwai <tiwai@suse.de>
+#     Signed-off-by: Jaroslav Kysela <perex@perex.cz>
+# 
+#  sound/soc/Kconfig            |    1 
+#  sound/soc/Makefile           |    2 
+#  sound/soc/fsl/Kconfig        |   20 +
+#  sound/soc/fsl/Makefile       |    6 
+#  sound/soc/fsl/fsl_dma.c      |  839 +++++++++++++++++++++++++++++++++++++++++++
+#  sound/soc/fsl/fsl_dma.h      |  149 +++++++
+#  sound/soc/fsl/fsl_ssi.c      |  644 +++++++++++++++++++++++++++++++++
+#  sound/soc/fsl/fsl_ssi.h      |  224 +++++++++++
+#  sound/soc/fsl/mpc8610_hpcd.c |  630 ++++++++++++++++++++++++++++++++
+#  9 files changed, 2514 insertions(+), 1 deletion(-)
+#  create mode 100644 sound/soc/fsl/Kconfig
+#  create mode 100644 sound/soc/fsl/Makefile
+#  create mode 100644 sound/soc/fsl/fsl_dma.c
+#  create mode 100644 sound/soc/fsl/fsl_dma.h
+#  create mode 100644 sound/soc/fsl/fsl_ssi.c
+#  create mode 100644 sound/soc/fsl/fsl_ssi.h
+#  create mode 100644 sound/soc/fsl/mpc8610_hpcd.c
+# 
+# 
+
+PATCHNUM=1395
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: kernel.org
+MR: 28288
+Type: Enhancement
+Disposition: backport from 2.6.25-rc1 (17467f23395f05ba7b361f7b504fe0f1095d5bb7)
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+
+commit 17467f23395f05ba7b361f7b504fe0f1095d5bb7
+Author: Timur Tabi <timur@freescale.com>
+Date:   Fri Jan 11 18:15:26 2008 +0100
+
+    [ALSA] Add ASoC drivers for the Freescale MPC8610 SoC
+    
+    Add the ASoC drivers for the Freescale MPC8610 SoC and the MPC8610 HPCD
+    reference board.
+    
+    Signed-off-by: Timur Tabi <timur@freescale.com>
+    Signed-off-by: Takashi Iwai <tiwai@suse.de>
+    Signed-off-by: Jaroslav Kysela <perex@perex.cz>
+
+ mvl_patches/pro50-1395.c     |   16 
+ sound/soc/Kconfig            |    1 
+ sound/soc/Makefile           |    2 
+ sound/soc/fsl/Kconfig        |   20 +
+ sound/soc/fsl/Makefile       |    6 
+ sound/soc/fsl/fsl_dma.c      |  839 +++++++++++++++++++++++++++++++++++++++++++
+ sound/soc/fsl/fsl_dma.h      |  149 +++++++
+ sound/soc/fsl/fsl_ssi.c      |  644 +++++++++++++++++++++++++++++++++
+ sound/soc/fsl/fsl_ssi.h      |  224 +++++++++++
+ sound/soc/fsl/mpc8610_hpcd.c |  630 ++++++++++++++++++++++++++++++++
+ 10 files changed, 2530 insertions(+), 1 deletion(-)
+ create mode 100644 sound/soc/fsl/Kconfig
+ create mode 100644 sound/soc/fsl/Makefile
+ create mode 100644 sound/soc/fsl/fsl_dma.c
+ create mode 100644 sound/soc/fsl/fsl_dma.h
+ create mode 100644 sound/soc/fsl/fsl_ssi.c
+ create mode 100644 sound/soc/fsl/fsl_ssi.h
+ create mode 100644 sound/soc/fsl/mpc8610_hpcd.c
+
+
+Index: linux-2.6.18/sound/soc/Kconfig
+===================================================================
+--- linux-2.6.18.orig/sound/soc/Kconfig
++++ linux-2.6.18/sound/soc/Kconfig
+@@ -28,6 +28,7 @@ source "sound/soc/at91/Kconfig"
+ source "sound/soc/pxa/Kconfig"
+ source "sound/soc/s3c24xx/Kconfig"
+ source "sound/soc/sh/Kconfig"
++source "sound/soc/fsl/Kconfig"
+ 
+ # Supported codecs
+ source "sound/soc/codecs/Kconfig"
+Index: linux-2.6.18/sound/soc/Makefile
+===================================================================
+--- linux-2.6.18.orig/sound/soc/Makefile
++++ linux-2.6.18/sound/soc/Makefile
+@@ -1,4 +1,4 @@
+ snd-soc-core-objs := soc-core.o soc-dapm.o
+ 
+ obj-$(CONFIG_SND_SOC)	+= snd-soc-core.o
+-obj-$(CONFIG_SND_SOC)	+= codecs/ at91/ pxa/ s3c24xx/ sh/
++obj-$(CONFIG_SND_SOC)	+= codecs/ at91/ pxa/ s3c24xx/ sh/ fsl/
+Index: linux-2.6.18/sound/soc/fsl/Kconfig
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/fsl/Kconfig
+@@ -0,0 +1,20 @@
++menu "ALSA SoC audio for Freescale SOCs"
++
++config SND_SOC_MPC8610
++	bool "ALSA SoC support for the MPC8610 SOC"
++	depends on SND_SOC && MPC8610_HPCD
++	default y if MPC8610
++	help
++	  Say Y if you want to add support for codecs attached to the SSI
++          device on an MPC8610.
++
++config SND_SOC_MPC8610_HPCD
++	bool "ALSA SoC support for the Freescale MPC8610 HPCD board"
++	depends on SND_SOC_MPC8610
++	select SND_SOC_CS4270
++	select SND_SOC_CS4270_VD33_ERRATA
++	default y if MPC8610_HPCD
++	help
++	  Say Y if you want to enable audio on the Freescale MPC8610 HPCD.
++
++endmenu
+Index: linux-2.6.18/sound/soc/fsl/Makefile
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/fsl/Makefile
+@@ -0,0 +1,6 @@
++# MPC8610 HPCD Machine Support
++obj-$(CONFIG_SND_SOC_MPC8610_HPCD) += mpc8610_hpcd.o
++
++# MPC8610 Platform Support
++obj-$(CONFIG_SND_SOC_MPC8610) += fsl_ssi.o fsl_dma.o
++
+Index: linux-2.6.18/sound/soc/fsl/fsl_dma.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/fsl/fsl_dma.c
+@@ -0,0 +1,839 @@
++/*
++ * Freescale DMA ALSA SoC PCM driver
++ *
++ * Author: Timur Tabi <timur@freescale.com>
++ *
++ * Copyright 2007-2008 Freescale Semiconductor, Inc.  This file is licensed
++ * under the terms of the GNU General Public License version 2.  This
++ * program is licensed "as is" without any warranty of any kind, whether
++ * express or implied.
++ *
++ * This driver implements ASoC support for the Elo DMA controller, which is
++ * the DMA controller on Freescale 83xx, 85xx, and 86xx SOCs. In ALSA terms,
++ * the PCM driver is what handles the DMA buffer.
++ */
++
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/platform_device.h>
++#include <linux/dma-mapping.h>
++#include <linux/interrupt.h>
++#include <linux/delay.h>
++
++#include <sound/driver.h>
++#include <sound/core.h>
++#include <sound/pcm.h>
++#include <sound/pcm_params.h>
++#include <sound/soc.h>
++
++#include <asm/io.h>
++
++#include "fsl_dma.h"
++
++/*
++ * The formats that the DMA controller supports, which is anything
++ * that is 8, 16, or 32 bits.
++ */
++#define FSLDMA_PCM_FORMATS (SNDRV_PCM_FMTBIT_S8 	| \
++			    SNDRV_PCM_FMTBIT_U8 	| \
++			    SNDRV_PCM_FMTBIT_S16_LE     | \
++			    SNDRV_PCM_FMTBIT_S16_BE     | \
++			    SNDRV_PCM_FMTBIT_U16_LE     | \
++			    SNDRV_PCM_FMTBIT_U16_BE     | \
++			    SNDRV_PCM_FMTBIT_S24_LE     | \
++			    SNDRV_PCM_FMTBIT_S24_BE     | \
++			    SNDRV_PCM_FMTBIT_U24_LE     | \
++			    SNDRV_PCM_FMTBIT_U24_BE     | \
++			    SNDRV_PCM_FMTBIT_S32_LE     | \
++			    SNDRV_PCM_FMTBIT_S32_BE     | \
++			    SNDRV_PCM_FMTBIT_U32_LE     | \
++			    SNDRV_PCM_FMTBIT_U32_BE)
++
++#define FSLDMA_PCM_RATES (SNDRV_PCM_RATE_5512 | SNDRV_PCM_RATE_8000_192000 | \
++			  SNDRV_PCM_RATE_CONTINUOUS)
++
++/* DMA global data.  This structure is used by fsl_dma_open() to determine
++ * which DMA channels to assign to a substream.  Unfortunately, ASoC V1 does
++ * not allow the machine driver to provide this information to the PCM
++ * driver in advance, and there's no way to differentiate between the two
++ * DMA controllers.  So for now, this driver only supports one SSI device
++ * using two DMA channels.  We cannot support multiple DMA devices.
++ *
++ * ssi_stx_phys: bus address of SSI STX register
++ * ssi_srx_phys: bus address of SSI SRX register
++ * dma_channel: pointer to the DMA channel's registers
++ * irq: IRQ for this DMA channel
++ * assigned: set to 1 if that DMA channel is assigned to a substream
++ */
++static struct {
++	dma_addr_t ssi_stx_phys;
++	dma_addr_t ssi_srx_phys;
++	struct ccsr_dma_channel __iomem *dma_channel[2];
++	unsigned int irq[2];
++	unsigned int assigned[2];
++} dma_global_data;
++
++/*
++ * The number of DMA links to use.  Two is the bare minimum, but if you
++ * have really small links you might need more.
++ */
++#define NUM_DMA_LINKS   2
++
++/** fsl_dma_private: p-substream DMA data
++ *
++ * Each substream has a 1-to-1 association with a DMA channel.
++ *
++ * The link[] array is first because it needs to be aligned on a 32-byte
++ * boundary, so putting it first will ensure alignment without padding the
++ * structure.
++ *
++ * @link[]: array of link descriptors
++ * @controller_id: which DMA controller (0, 1, ...)
++ * @channel_id: which DMA channel on the controller (0, 1, 2, ...)
++ * @dma_channel: pointer to the DMA channel's registers
++ * @irq: IRQ for this DMA channel
++ * @substream: pointer to the substream object, needed by the ISR
++ * @ssi_sxx_phys: bus address of the STX or SRX register to use
++ * @ld_buf_phys: physical address of the LD buffer
++ * @current_link: index into link[] of the link currently being processed
++ * @dma_buf_phys: physical address of the DMA buffer
++ * @dma_buf_next: physical address of the next period to process
++ * @dma_buf_end: physical address of the byte after the end of the DMA
++ * @buffer period_size: the size of a single period
++ * @num_periods: the number of periods in the DMA buffer
++ */
++struct fsl_dma_private {
++	struct fsl_dma_link_descriptor link[NUM_DMA_LINKS];
++	unsigned int controller_id;
++	unsigned int channel_id;
++	struct ccsr_dma_channel __iomem *dma_channel;
++	unsigned int irq;
++	struct snd_pcm_substream *substream;
++	dma_addr_t ssi_sxx_phys;
++	dma_addr_t ld_buf_phys;
++	unsigned int current_link;
++	dma_addr_t dma_buf_phys;
++	dma_addr_t dma_buf_next;
++	dma_addr_t dma_buf_end;
++	size_t period_size;
++	unsigned int num_periods;
++};
++
++/**
++ * fsl_dma_hardare: define characteristics of the PCM hardware.
++ *
++ * The PCM hardware is the Freescale DMA controller.  This structure defines
++ * the capabilities of that hardware.
++ *
++ * Since the sampling rate and data format are not controlled by the DMA
++ * controller, we specify no limits for those values.  The only exception is
++ * period_bytes_min, which is set to a reasonably low value to prevent the
++ * DMA controller from generating too many interrupts per second.
++ *
++ * Since each link descriptor has a 32-bit byte count field, we set
++ * period_bytes_max to the largest 32-bit number.  We also have no maximum
++ * number of periods.
++ */
++static const struct snd_pcm_hardware fsl_dma_hardware = {
++
++	.info   		= SNDRV_PCM_INFO_INTERLEAVED,
++	.formats		= FSLDMA_PCM_FORMATS,
++	.rates  		= FSLDMA_PCM_RATES,
++	.rate_min       	= 5512,
++	.rate_max       	= 192000,
++	.period_bytes_min       = 512,  	/* A reasonable limit */
++	.period_bytes_max       = (u32) -1,
++	.periods_min    	= NUM_DMA_LINKS,
++	.periods_max    	= (unsigned int) -1,
++	.buffer_bytes_max       = 128 * 1024,   /* A reasonable limit */
++};
++
++/**
++ * fsl_dma_abort_stream: tell ALSA that the DMA transfer has aborted
++ *
++ * This function should be called by the ISR whenever the DMA controller
++ * halts data transfer.
++ */
++static void fsl_dma_abort_stream(struct snd_pcm_substream *substream)
++{
++	unsigned long flags;
++
++	snd_pcm_stream_lock_irqsave(substream, flags);
++
++	if (snd_pcm_running(substream))
++		snd_pcm_stop(substream, SNDRV_PCM_STATE_XRUN);
++
++	snd_pcm_stream_unlock_irqrestore(substream, flags);
++}
++
++/**
++ * fsl_dma_update_pointers - update LD pointers to point to the next period
++ *
++ * As each period is completed, this function changes the the link
++ * descriptor pointers for that period to point to the next period.
++ */
++static void fsl_dma_update_pointers(struct fsl_dma_private *dma_private)
++{
++	struct fsl_dma_link_descriptor *link =
++		&dma_private->link[dma_private->current_link];
++
++	/* Update our link descriptors to point to the next period */
++	if (dma_private->substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
++		link->source_addr =
++			cpu_to_be32(dma_private->dma_buf_next);
++	else
++		link->dest_addr =
++			cpu_to_be32(dma_private->dma_buf_next);
++
++	/* Update our variables for next time */
++	dma_private->dma_buf_next += dma_private->period_size;
++
++	if (dma_private->dma_buf_next >= dma_private->dma_buf_end)
++		dma_private->dma_buf_next = dma_private->dma_buf_phys;
++
++	if (++dma_private->current_link >= NUM_DMA_LINKS)
++		dma_private->current_link = 0;
++}
++
++/**
++ * fsl_dma_isr: interrupt handler for the DMA controller
++ *
++ * @irq: IRQ of the DMA channel
++ * @dev_id: pointer to the dma_private structure for this DMA channel
++ */
++static irqreturn_t fsl_dma_isr(int irq, void *dev_id, struct pt_regs *regs)
++{
++	struct fsl_dma_private *dma_private = dev_id;
++	struct ccsr_dma_channel __iomem *dma_channel = dma_private->dma_channel;
++	irqreturn_t ret = IRQ_NONE;
++	u32 sr, sr2 = 0;
++
++	/* We got an interrupt, so read the status register to see what we
++	   were interrupted for.
++	 */
++	sr = in_be32(&dma_channel->sr);
++
++	if (sr & CCSR_DMA_SR_TE) {
++		dev_err(dma_private->substream->pcm->card->dev,
++			"DMA transmit error (controller=%u channel=%u irq=%u\n",
++			dma_private->controller_id,
++			dma_private->channel_id, irq);
++		fsl_dma_abort_stream(dma_private->substream);
++		sr2 |= CCSR_DMA_SR_TE;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sr & CCSR_DMA_SR_CH)
++		ret = IRQ_HANDLED;
++
++	if (sr & CCSR_DMA_SR_PE) {
++		dev_err(dma_private->substream->pcm->card->dev,
++			"DMA%u programming error (channel=%u irq=%u)\n",
++			dma_private->controller_id,
++			dma_private->channel_id, irq);
++		fsl_dma_abort_stream(dma_private->substream);
++		sr2 |= CCSR_DMA_SR_PE;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sr & CCSR_DMA_SR_EOLNI) {
++		sr2 |= CCSR_DMA_SR_EOLNI;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sr & CCSR_DMA_SR_CB)
++		ret = IRQ_HANDLED;
++
++	if (sr & CCSR_DMA_SR_EOSI) {
++		struct snd_pcm_substream *substream = dma_private->substream;
++
++		/* Tell ALSA we completed a period. */
++		snd_pcm_period_elapsed(substream);
++
++		/*
++		 * Update our link descriptors to point to the next period. We
++		 * only need to do this if the number of periods is not equal to
++		 * the number of links.
++		 */
++		if (dma_private->num_periods != NUM_DMA_LINKS)
++			fsl_dma_update_pointers(dma_private);
++
++		sr2 |= CCSR_DMA_SR_EOSI;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sr & CCSR_DMA_SR_EOLSI) {
++		sr2 |= CCSR_DMA_SR_EOLSI;
++		ret = IRQ_HANDLED;
++	}
++
++	/* Clear the bits that we set */
++	if (sr2)
++		out_be32(&dma_channel->sr, sr2);
++
++	return ret;
++}
++
++/**
++ * fsl_dma_new: initialize this PCM driver.
++ *
++ * This function is called when the codec driver calls snd_soc_new_pcms(),
++ * once for each .dai_link in the machine driver's snd_soc_machine
++ * structure.
++ */
++static int fsl_dma_new(struct snd_card *card, struct snd_soc_codec_dai *dai,
++	struct snd_pcm *pcm)
++{
++	static u64 fsl_dma_dmamask = DMA_BIT_MASK(32);
++	int ret;
++
++	if (!card->dev->dma_mask)
++		card->dev->dma_mask = &fsl_dma_dmamask;
++
++	if (!card->dev->coherent_dma_mask)
++		card->dev->coherent_dma_mask = fsl_dma_dmamask;
++
++	ret = snd_dma_alloc_pages(SNDRV_DMA_TYPE_DEV, pcm->dev,
++		fsl_dma_hardware.buffer_bytes_max,
++		&pcm->streams[0].substream->dma_buffer);
++	if (ret) {
++		dev_err(card->dev,
++			"Can't allocate playback DMA buffer (size=%u)\n",
++			fsl_dma_hardware.buffer_bytes_max);
++		return -ENOMEM;
++	}
++
++	ret = snd_dma_alloc_pages(SNDRV_DMA_TYPE_DEV, pcm->dev,
++		fsl_dma_hardware.buffer_bytes_max,
++		&pcm->streams[1].substream->dma_buffer);
++	if (ret) {
++		snd_dma_free_pages(&pcm->streams[0].substream->dma_buffer);
++		dev_err(card->dev,
++			"Can't allocate capture DMA buffer (size=%u)\n",
++			fsl_dma_hardware.buffer_bytes_max);
++		return -ENOMEM;
++	}
++
++	return 0;
++}
++
++/**
++ * fsl_dma_open: open a new substream.
++ *
++ * Each substream has its own DMA buffer.
++ */
++static int fsl_dma_open(struct snd_pcm_substream *substream)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	struct fsl_dma_private *dma_private;
++	dma_addr_t ld_buf_phys;
++	unsigned int channel;
++	int ret = 0;
++
++	/*
++	 * Reject any DMA buffer whose size is not a multiple of the period
++	 * size.  We need to make sure that the DMA buffer can be evenly divided
++	 * into periods.
++	 */
++	ret = snd_pcm_hw_constraint_integer(runtime,
++		SNDRV_PCM_HW_PARAM_PERIODS);
++	if (ret < 0) {
++		dev_err(substream->pcm->card->dev, "invalid buffer size\n");
++		return ret;
++	}
++
++	channel = substream->stream == SNDRV_PCM_STREAM_PLAYBACK ? 0 : 1;
++
++	if (dma_global_data.assigned[channel]) {
++		dev_err(substream->pcm->card->dev,
++			"DMA channel already assigned\n");
++		return -EBUSY;
++	}
++
++	dma_private = dma_alloc_coherent(substream->pcm->dev,
++		sizeof(struct fsl_dma_private), &ld_buf_phys, GFP_KERNEL);
++	if (!dma_private) {
++		dev_err(substream->pcm->card->dev,
++			"can't allocate DMA private data\n");
++		return -ENOMEM;
++	}
++	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
++		dma_private->ssi_sxx_phys = dma_global_data.ssi_stx_phys;
++	else
++		dma_private->ssi_sxx_phys = dma_global_data.ssi_srx_phys;
++
++	dma_private->dma_channel = dma_global_data.dma_channel[channel];
++	dma_private->irq = dma_global_data.irq[channel];
++	dma_private->substream = substream;
++	dma_private->ld_buf_phys = ld_buf_phys;
++	dma_private->dma_buf_phys = substream->dma_buffer.addr;
++
++	/* We only support one DMA controller for now */
++	dma_private->controller_id = 0;
++	dma_private->channel_id = channel;
++
++	ret = request_irq(dma_private->irq, fsl_dma_isr, 0, "DMA", dma_private);
++	if (ret) {
++		dev_err(substream->pcm->card->dev,
++			"can't register ISR for IRQ %u (ret=%i)\n",
++			dma_private->irq, ret);
++		dma_free_coherent(substream->pcm->dev,
++			sizeof(struct fsl_dma_private),
++			dma_private, dma_private->ld_buf_phys);
++		return ret;
++	}
++
++	dma_global_data.assigned[channel] = 1;
++
++	snd_pcm_set_runtime_buffer(substream, &substream->dma_buffer);
++	snd_soc_set_runtime_hwparams(substream, &fsl_dma_hardware);
++	runtime->private_data = dma_private;
++
++	return 0;
++}
++
++/**
++ * fsl_dma_hw_params: allocate the DMA buffer and the DMA link descriptors.
++ *
++ * ALSA divides the DMA buffer into N periods.  We create NUM_DMA_LINKS link
++ * descriptors that ping-pong from one period to the next.  For example, if
++ * there are six periods and two link descriptors, this is how they look
++ * before playback starts:
++ *
++ *      	   The last link descriptor
++ *   ____________  points back to the first
++ *  |   	 |
++ *  V   	 |
++ *  ___    ___   |
++ * |   |->|   |->|
++ * |___|  |___|
++ *   |      |
++ *   |      |
++ *   V      V
++ *  _________________________________________
++ * |      |      |      |      |      |      |  The DMA buffer is
++ * |      |      |      |      |      |      |    divided into 6 parts
++ * |______|______|______|______|______|______|
++ *
++ * and here's how they look after the first period is finished playing:
++ *
++ *   ____________
++ *  |   	 |
++ *  V   	 |
++ *  ___    ___   |
++ * |   |->|   |->|
++ * |___|  |___|
++ *   |      |
++ *   |______________
++ *          |       |
++ *          V       V
++ *  _________________________________________
++ * |      |      |      |      |      |      |
++ * |      |      |      |      |      |      |
++ * |______|______|______|______|______|______|
++ *
++ * The first link descriptor now points to the third period.  The DMA
++ * controller is currently playing the second period.  When it finishes, it
++ * will jump back to the first descriptor and play the third period.
++ *
++ * There are four reasons we do this:
++ *
++ * 1. The only way to get the DMA controller to automatically restart the
++ *    transfer when it gets to the end of the buffer is to use chaining
++ *    mode.  Basic direct mode doesn't offer that feature.
++ * 2. We need to receive an interrupt at the end of every period.  The DMA
++ *    controller can generate an interrupt at the end of every link transfer
++ *    (aka segment).  Making each period into a DMA segment will give us the
++ *    interrupts we need.
++ * 3. By creating only two link descriptors, regardless of the number of
++ *    periods, we do not need to reallocate the link descriptors if the
++ *    number of periods changes.
++ * 4. All of the audio data is still stored in a single, contiguous DMA
++ *    buffer, which is what ALSA expects.  We're just dividing it into
++ *    contiguous parts, and creating a link descriptor for each one.
++ *
++ * Note that due to a quirk of the SSI's STX register, the target address
++ * for the DMA operations depends on the sample size.  So we don't program
++ * the dest_addr (for playback -- source_addr for capture) fields in the
++ * link descriptors here.  We do that in fsl_dma_prepare()
++ */
++static int fsl_dma_hw_params(struct snd_pcm_substream *substream,
++	struct snd_pcm_hw_params *hw_params)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	struct fsl_dma_private *dma_private = runtime->private_data;
++	struct ccsr_dma_channel __iomem *dma_channel = dma_private->dma_channel;
++
++	dma_addr_t temp_addr;   /* Pointer to next period */
++	u64 temp_link;  	/* Pointer to next link descriptor */
++	u32 mr; 		/* Temporary variable for MR register */
++
++	unsigned int i;
++
++	/* Get all the parameters we need */
++	size_t buffer_size = params_buffer_bytes(hw_params);
++	size_t period_size = params_period_bytes(hw_params);
++
++	/* Initialize our DMA tracking variables */
++	dma_private->period_size = period_size;
++	dma_private->num_periods = params_periods(hw_params);
++	dma_private->dma_buf_end = dma_private->dma_buf_phys + buffer_size;
++	dma_private->dma_buf_next = dma_private->dma_buf_phys +
++		(NUM_DMA_LINKS * period_size);
++	if (dma_private->dma_buf_next >= dma_private->dma_buf_end)
++		dma_private->dma_buf_next = dma_private->dma_buf_phys;
++
++	/*
++	 * Initialize each link descriptor.
++	 *
++	 * The actual address in STX0 (destination for playback, source for
++	 * capture) is based on the sample size, but we don't know the sample
++	 * size in this function, so we'll have to adjust that later.  See
++	 * comments in fsl_dma_prepare().
++	 *
++	 * The DMA controller does not have a cache, so the CPU does not
++	 * need to tell it to flush its cache.  However, the DMA
++	 * controller does need to tell the CPU to flush its cache.
++	 * That's what the SNOOP bit does.
++	 *
++	 * Also, even though the DMA controller supports 36-bit addressing, for
++	 * simplicity we currently support only 32-bit addresses for the audio
++	 * buffer itself.
++	 */
++	temp_addr = substream->dma_buffer.addr;
++	temp_link = dma_private->ld_buf_phys +
++		sizeof(struct fsl_dma_link_descriptor);
++
++	for (i = 0; i < NUM_DMA_LINKS; i++) {
++		struct fsl_dma_link_descriptor *link = &dma_private->link[i];
++
++		link->count = cpu_to_be32(period_size);
++		link->source_attr = cpu_to_be32(CCSR_DMA_ATR_SNOOP);
++		link->dest_attr = cpu_to_be32(CCSR_DMA_ATR_SNOOP);
++		link->next = cpu_to_be64(temp_link);
++
++		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
++			link->source_addr = cpu_to_be32(temp_addr);
++		else
++			link->dest_addr = cpu_to_be32(temp_addr);
++
++		temp_addr += period_size;
++		temp_link += sizeof(struct fsl_dma_link_descriptor);
++	}
++	/* The last link descriptor points to the first */
++	dma_private->link[i - 1].next = cpu_to_be64(dma_private->ld_buf_phys);
++
++	/* Tell the DMA controller where the first link descriptor is */
++	out_be32(&dma_channel->clndar,
++		CCSR_DMA_CLNDAR_ADDR(dma_private->ld_buf_phys));
++	out_be32(&dma_channel->eclndar,
++		CCSR_DMA_ECLNDAR_ADDR(dma_private->ld_buf_phys));
++
++	/* The manual says the BCR must be clear before enabling EMP */
++	out_be32(&dma_channel->bcr, 0);
++
++	/*
++	 * Program the mode register for interrupts, external master control,
++	 * and source/destination hold.  Also clear the Channel Abort bit.
++	 */
++	mr = in_be32(&dma_channel->mr) &
++		~(CCSR_DMA_MR_CA | CCSR_DMA_MR_DAHE | CCSR_DMA_MR_SAHE);
++
++	/*
++	 * We want External Master Start and External Master Pause enabled,
++	 * because the SSI is controlling the DMA controller.  We want the DMA
++	 * controller to be set up in advance, and then we signal only the SSI
++	 * to start transfering.
++	 *
++	 * We want End-Of-Segment Interrupts enabled, because this will generate
++	 * an interrupt at the end of each segment (each link descriptor
++	 * represents one segment).  Each DMA segment is the same thing as an
++	 * ALSA period, so this is how we get an interrupt at the end of every
++	 * period.
++	 *
++	 * We want Error Interrupt enabled, so that we can get an error if
++	 * the DMA controller is mis-programmed somehow.
++	 */
++	mr |= CCSR_DMA_MR_EOSIE | CCSR_DMA_MR_EIE | CCSR_DMA_MR_EMP_EN |
++		CCSR_DMA_MR_EMS_EN;
++
++	/* For playback, we want the destination address to be held.  For
++	   capture, set the source address to be held. */
++	mr |= (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) ?
++		CCSR_DMA_MR_DAHE : CCSR_DMA_MR_SAHE;
++
++	out_be32(&dma_channel->mr, mr);
++
++	return 0;
++}
++
++/**
++ * fsl_dma_prepare - prepare the DMA registers for playback.
++ *
++ * This function is called after the specifics of the audio data are known,
++ * i.e. snd_pcm_runtime is initialized.
++ *
++ * In this function, we finish programming the registers of the DMA
++ * controller that are dependent on the sample size.
++ *
++ * One of the drawbacks with big-endian is that when copying integers of
++ * different sizes to a fixed-sized register, the address to which the
++ * integer must be copied is dependent on the size of the integer.
++ *
++ * For example, if P is the address of a 32-bit register, and X is a 32-bit
++ * integer, then X should be copied to address P.  However, if X is a 16-bit
++ * integer, then it should be copied to P+2.  If X is an 8-bit register,
++ * then it should be copied to P+3.
++ *
++ * So for playback of 8-bit samples, the DMA controller must transfer single
++ * bytes from the DMA buffer to the last byte of the STX0 register, i.e.
++ * offset by 3 bytes. For 16-bit samples, the offset is two bytes.
++ *
++ * For 24-bit samples, the offset is 1 byte.  However, the DMA controller
++ * does not support 3-byte copies (the DAHTS register supports only 1, 2, 4,
++ * and 8 bytes at a time).  So we do not support packed 24-bit samples.
++ * 24-bit data must be padded to 32 bits.
++ */
++static int fsl_dma_prepare(struct snd_pcm_substream *substream)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	struct fsl_dma_private *dma_private = runtime->private_data;
++	struct ccsr_dma_channel __iomem *dma_channel = dma_private->dma_channel;
++	u32 mr;
++	unsigned int i;
++	dma_addr_t ssi_sxx_phys;	/* Bus address of SSI STX register */
++	unsigned int frame_size;	/* Number of bytes per frame */
++
++	ssi_sxx_phys = dma_private->ssi_sxx_phys;
++
++	mr = in_be32(&dma_channel->mr) & ~(CCSR_DMA_MR_BWC_MASK |
++		  CCSR_DMA_MR_SAHTS_MASK | CCSR_DMA_MR_DAHTS_MASK);
++
++	switch (runtime->sample_bits) {
++	case 8:
++		mr |= CCSR_DMA_MR_DAHTS_1 | CCSR_DMA_MR_SAHTS_1;
++		ssi_sxx_phys += 3;
++		break;
++	case 16:
++		mr |= CCSR_DMA_MR_DAHTS_2 | CCSR_DMA_MR_SAHTS_2;
++		ssi_sxx_phys += 2;
++		break;
++	case 32:
++		mr |= CCSR_DMA_MR_DAHTS_4 | CCSR_DMA_MR_SAHTS_4;
++		break;
++	default:
++		dev_err(substream->pcm->card->dev,
++			"unsupported sample size %u\n", runtime->sample_bits);
++		return -EINVAL;
++	}
++
++	frame_size = runtime->frame_bits / 8;
++	/*
++	 * BWC should always be a multiple of the frame size.  BWC determines
++	 * how many bytes are sent/received before the DMA controller checks the
++	 * SSI to see if it needs to stop.  For playback, the transmit FIFO can
++	 * hold three frames, so we want to send two frames at a time. For
++	 * capture, the receive FIFO is triggered when it contains one frame, so
++	 * we want to receive one frame at a time.
++	 */
++
++	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
++		mr |= CCSR_DMA_MR_BWC(2 * frame_size);
++	else
++		mr |= CCSR_DMA_MR_BWC(frame_size);
++
++	out_be32(&dma_channel->mr, mr);
++
++	/*
++	 * Program the address of the DMA transfer to/from the SSI.
++	 */
++	for (i = 0; i < NUM_DMA_LINKS; i++) {
++		struct fsl_dma_link_descriptor *link = &dma_private->link[i];
++
++		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
++			link->dest_addr = cpu_to_be32(ssi_sxx_phys);
++		else
++			link->source_addr = cpu_to_be32(ssi_sxx_phys);
++	}
++
++	return 0;
++}
++
++/**
++ * fsl_dma_pointer: determine the current position of the DMA transfer
++ *
++ * This function is called by ALSA when ALSA wants to know where in the
++ * stream buffer the hardware currently is.
++ *
++ * For playback, the SAR register contains the physical address of the most
++ * recent DMA transfer.  For capture, the value is in the DAR register.
++ *
++ * The base address of the buffer is stored in the source_addr field of the
++ * first link descriptor.
++ */
++static snd_pcm_uframes_t fsl_dma_pointer(struct snd_pcm_substream *substream)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	struct fsl_dma_private *dma_private = runtime->private_data;
++	struct ccsr_dma_channel __iomem *dma_channel = dma_private->dma_channel;
++	dma_addr_t position;
++	snd_pcm_uframes_t frames;
++
++	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
++		position = in_be32(&dma_channel->sar);
++	else
++		position = in_be32(&dma_channel->dar);
++
++	frames = bytes_to_frames(runtime, position - dma_private->dma_buf_phys);
++
++	/*
++	 * If the current address is just past the end of the buffer, wrap it
++	 * around.
++	 */
++	if (frames == runtime->buffer_size)
++		frames = 0;
++
++	return frames;
++}
++
++/**
++ * fsl_dma_hw_free: release resources allocated in fsl_dma_hw_params()
++ *
++ * Release the resources allocated in fsl_dma_hw_params() and de-program the
++ * registers.
++ *
++ * This function can be called multiple times.
++ */
++static int fsl_dma_hw_free(struct snd_pcm_substream *substream)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	struct fsl_dma_private *dma_private = runtime->private_data;
++
++	if (dma_private) {
++		struct ccsr_dma_channel __iomem *dma_channel;
++
++		dma_channel = dma_private->dma_channel;
++
++		/* Stop the DMA */
++		out_be32(&dma_channel->mr, CCSR_DMA_MR_CA);
++		out_be32(&dma_channel->mr, 0);
++
++		/* Reset all the other registers */
++		out_be32(&dma_channel->sr, -1);
++		out_be32(&dma_channel->clndar, 0);
++		out_be32(&dma_channel->eclndar, 0);
++		out_be32(&dma_channel->satr, 0);
++		out_be32(&dma_channel->sar, 0);
++		out_be32(&dma_channel->datr, 0);
++		out_be32(&dma_channel->dar, 0);
++		out_be32(&dma_channel->bcr, 0);
++		out_be32(&dma_channel->nlndar, 0);
++		out_be32(&dma_channel->enlndar, 0);
++	}
++
++	return 0;
++}
++
++/**
++ * fsl_dma_close: close the stream.
++ */
++static int fsl_dma_close(struct snd_pcm_substream *substream)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	struct fsl_dma_private *dma_private = runtime->private_data;
++	int dir = substream->stream == SNDRV_PCM_STREAM_PLAYBACK ? 0 : 1;
++
++	if (dma_private) {
++		if (dma_private->irq)
++			free_irq(dma_private->irq, dma_private);
++
++		if (dma_private->ld_buf_phys) {
++			dma_unmap_single(substream->pcm->dev,
++				dma_private->ld_buf_phys,
++				sizeof(dma_private->link), DMA_TO_DEVICE);
++		}
++
++		/* Deallocate the fsl_dma_private structure */
++		dma_free_coherent(substream->pcm->dev,
++			sizeof(struct fsl_dma_private),
++			dma_private, dma_private->ld_buf_phys);
++		substream->runtime->private_data = NULL;
++	}
++
++	dma_global_data.assigned[dir] = 0;
++
++	return 0;
++}
++
++/*
++ * Remove this PCM driver.
++ */
++static void fsl_dma_free_dma_buffers(struct snd_pcm *pcm)
++{
++	struct snd_pcm_substream *substream;
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(pcm->streams); i++) {
++		substream = pcm->streams[i].substream;
++		if (substream) {
++			snd_dma_free_pages(&substream->dma_buffer);
++			substream->dma_buffer.area = NULL;
++			substream->dma_buffer.addr = 0;
++		}
++	}
++}
++
++static struct snd_pcm_ops fsl_dma_ops = {
++	.open   	= fsl_dma_open,
++	.close  	= fsl_dma_close,
++	.ioctl  	= snd_pcm_lib_ioctl,
++	.hw_params      = fsl_dma_hw_params,
++	.hw_free	= fsl_dma_hw_free,
++	.prepare	= fsl_dma_prepare,
++	.pointer	= fsl_dma_pointer,
++};
++
++struct snd_soc_platform fsl_soc_platform = {
++	.name   	= "fsl-dma",
++	.pcm_ops	= &fsl_dma_ops,
++	.pcm_new	= fsl_dma_new,
++	.pcm_free       = fsl_dma_free_dma_buffers,
++};
++EXPORT_SYMBOL_GPL(fsl_soc_platform);
++
++/**
++ * fsl_dma_configure: store the DMA parameters from the fabric driver.
++ *
++ * This function is called by the ASoC fabric driver to give us the DMA and
++ * SSI channel information.
++ *
++ * Unfortunately, ASoC V1 does make it possible to determine the DMA/SSI
++ * data when a substream is created, so for now we need to store this data
++ * into a global variable.  This means that we can only support one DMA
++ * controller, and hence only one SSI.
++ */
++int fsl_dma_configure(struct fsl_dma_info *dma_info)
++{
++	static int initialized;
++
++	/* We only support one DMA controller for now */
++	if (initialized)
++		return 0;
++
++	dma_global_data.ssi_stx_phys = dma_info->ssi_stx_phys;
++	dma_global_data.ssi_srx_phys = dma_info->ssi_srx_phys;
++	dma_global_data.dma_channel[0] = dma_info->dma_channel[0];
++	dma_global_data.dma_channel[1] = dma_info->dma_channel[1];
++	dma_global_data.irq[0] = dma_info->dma_irq[0];
++	dma_global_data.irq[1] = dma_info->dma_irq[1];
++	dma_global_data.assigned[0] = 0;
++	dma_global_data.assigned[1] = 0;
++
++	initialized = 1;
++	return 1;
++}
++EXPORT_SYMBOL_GPL(fsl_dma_configure);
++
++MODULE_AUTHOR("Timur Tabi <timur@freescale.com>");
++MODULE_DESCRIPTION("Freescale Elo DMA ASoC PCM module");
++MODULE_LICENSE("GPL");
+Index: linux-2.6.18/sound/soc/fsl/fsl_dma.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/fsl/fsl_dma.h
+@@ -0,0 +1,149 @@
++/*
++ * mpc8610-pcm.h - ALSA PCM interface for the Freescale MPC8610 SoC
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#ifndef _MPC8610_PCM_H
++#define _MPC8610_PCM_H
++
++struct ccsr_dma {
++	u8 res0[0x100];
++	struct ccsr_dma_channel {
++		__be32 mr;      /* Mode register */
++		__be32 sr;      /* Status register */
++		__be32 eclndar; /* Current link descriptor extended addr reg */
++		__be32 clndar;  /* Current link descriptor address register */
++		__be32 satr;    /* Source attributes register */
++		__be32 sar;     /* Source address register */
++		__be32 datr;    /* Destination attributes register */
++		__be32 dar;     /* Destination address register */
++		__be32 bcr;     /* Byte count register */
++		__be32 enlndar; /* Next link descriptor extended address reg */
++		__be32 nlndar;  /* Next link descriptor address register */
++		u8 res1[4];
++		__be32 eclsdar; /* Current list descriptor extended addr reg */
++		__be32 clsdar;  /* Current list descriptor address register */
++		__be32 enlsdar; /* Next list descriptor extended address reg */
++		__be32 nlsdar;  /* Next list descriptor address register */
++		__be32 ssr;     /* Source stride register */
++		__be32 dsr;     /* Destination stride register */
++		u8 res2[0x38];
++	} channel[4];
++	__be32 dgsr;
++};
++
++#define CCSR_DMA_MR_BWC_DISABLED	0x0F000000
++#define CCSR_DMA_MR_BWC_SHIFT   	24
++#define CCSR_DMA_MR_BWC_MASK    	0x0F000000
++#define CCSR_DMA_MR_BWC(x) \
++	((ilog2(x) << CCSR_DMA_MR_BWC_SHIFT) & CCSR_DMA_MR_BWC_MASK)
++#define CCSR_DMA_MR_EMP_EN      	0x00200000
++#define CCSR_DMA_MR_EMS_EN      	0x00040000
++#define CCSR_DMA_MR_DAHTS_MASK  	0x00030000
++#define CCSR_DMA_MR_DAHTS_1     	0x00000000
++#define CCSR_DMA_MR_DAHTS_2     	0x00010000
++#define CCSR_DMA_MR_DAHTS_4     	0x00020000
++#define CCSR_DMA_MR_DAHTS_8     	0x00030000
++#define CCSR_DMA_MR_SAHTS_MASK  	0x0000C000
++#define CCSR_DMA_MR_SAHTS_1     	0x00000000
++#define CCSR_DMA_MR_SAHTS_2     	0x00004000
++#define CCSR_DMA_MR_SAHTS_4     	0x00008000
++#define CCSR_DMA_MR_SAHTS_8     	0x0000C000
++#define CCSR_DMA_MR_DAHE		0x00002000
++#define CCSR_DMA_MR_SAHE		0x00001000
++#define CCSR_DMA_MR_SRW 		0x00000400
++#define CCSR_DMA_MR_EOSIE       	0x00000200
++#define CCSR_DMA_MR_EOLNIE      	0x00000100
++#define CCSR_DMA_MR_EOLSIE      	0x00000080
++#define CCSR_DMA_MR_EIE 		0x00000040
++#define CCSR_DMA_MR_XFE 		0x00000020
++#define CCSR_DMA_MR_CDSM_SWSM   	0x00000010
++#define CCSR_DMA_MR_CA  		0x00000008
++#define CCSR_DMA_MR_CTM 		0x00000004
++#define CCSR_DMA_MR_CC  		0x00000002
++#define CCSR_DMA_MR_CS  		0x00000001
++
++#define CCSR_DMA_SR_TE  		0x00000080
++#define CCSR_DMA_SR_CH  		0x00000020
++#define CCSR_DMA_SR_PE  		0x00000010
++#define CCSR_DMA_SR_EOLNI       	0x00000008
++#define CCSR_DMA_SR_CB  		0x00000004
++#define CCSR_DMA_SR_EOSI		0x00000002
++#define CCSR_DMA_SR_EOLSI       	0x00000001
++
++/* ECLNDAR takes bits 32-36 of the CLNDAR register */
++static inline u32 CCSR_DMA_ECLNDAR_ADDR(u64 x)
++{
++	return (x >> 32) & 0xf;
++}
++
++#define CCSR_DMA_CLNDAR_ADDR(x) ((x) & 0xFFFFFFFE)
++#define CCSR_DMA_CLNDAR_EOSIE   	0x00000008
++
++/* SATR and DATR, combined */
++#define CCSR_DMA_ATR_PBATMU     	0x20000000
++#define CCSR_DMA_ATR_TFLOWLVL_0 	0x00000000
++#define CCSR_DMA_ATR_TFLOWLVL_1 	0x06000000
++#define CCSR_DMA_ATR_TFLOWLVL_2 	0x08000000
++#define CCSR_DMA_ATR_TFLOWLVL_3 	0x0C000000
++#define CCSR_DMA_ATR_PCIORDER   	0x02000000
++#define CCSR_DMA_ATR_SME		0x01000000
++#define CCSR_DMA_ATR_NOSNOOP    	0x00040000
++#define CCSR_DMA_ATR_SNOOP      	0x00050000
++#define CCSR_DMA_ATR_ESAD_MASK  	0x0000000F
++
++/**
++ *  List Descriptor for extended chaining mode DMA operations.
++ *
++ *  The CLSDAR register points to the first (in a linked-list) List
++ *  Descriptor.  Each object must be aligned on a 32-byte boundary. Each
++ *  list descriptor points to a linked-list of link Descriptors.
++ */
++struct fsl_dma_list_descriptor {
++	__be64 next;    	/* Address of next list descriptor */
++	__be64 first_link;      /* Address of first link descriptor */
++	__be32 source;  	/* Source stride */
++	__be32 dest;    	/* Destination stride */
++	u8 res[8];      	/* Reserved */
++} __attribute__ ((aligned(32), packed));
++
++/**
++ *  Link Descriptor for basic and extended chaining mode DMA operations.
++ *
++ *  A Link Descriptor points to a single DMA buffer.  Each link descriptor
++ *  must be aligned on a 32-byte boundary.
++ */
++struct fsl_dma_link_descriptor {
++	__be32 source_attr;     /* Programmed into SATR register */
++	__be32 source_addr;     /* Programmed into SAR register */
++	__be32 dest_attr;       /* Programmed into DATR register */
++	__be32 dest_addr;       /* Programmed into DAR register */
++	__be64 next;    /* Address of next link descriptor */
++	__be32 count;   /* Byte count */
++	u8 res[4];      /* Reserved */
++} __attribute__ ((aligned(32), packed));
++
++/* DMA information needed to create a snd_soc_cpu_dai object
++ *
++ * ssi_stx_phys: bus address of SSI STX register to use
++ * ssi_srx_phys: bus address of SSI SRX register to use
++ * dma[0]: points to the DMA channel to use for playback
++ * dma[1]: points to the DMA channel to use for capture
++ * dma_irq[0]: IRQ of the DMA channel to use for playback
++ * dma_irq[1]: IRQ of the DMA channel to use for capture
++ */
++struct fsl_dma_info {
++	dma_addr_t ssi_stx_phys;
++	dma_addr_t ssi_srx_phys;
++	struct ccsr_dma_channel __iomem *dma_channel[2];
++	unsigned int dma_irq[2];
++};
++
++extern struct snd_soc_platform fsl_soc_platform;
++
++int fsl_dma_configure(struct fsl_dma_info *dma_info);
++
++#endif
+Index: linux-2.6.18/sound/soc/fsl/fsl_ssi.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/fsl/fsl_ssi.c
+@@ -0,0 +1,644 @@
++/*
++ * Freescale SSI ALSA SoC Digital Audio Interface (DAI) driver
++ *
++ * Author: Timur Tabi <timur@freescale.com>
++ *
++ * Copyright 2007-2008 Freescale Semiconductor, Inc.  This file is licensed
++ * under the terms of the GNU General Public License version 2.  This
++ * program is licensed "as is" without any warranty of any kind, whether
++ * express or implied.
++ */
++
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/interrupt.h>
++#include <linux/device.h>
++#include <linux/delay.h>
++
++#include <sound/driver.h>
++#include <sound/core.h>
++#include <sound/pcm.h>
++#include <sound/pcm_params.h>
++#include <sound/initval.h>
++#include <sound/soc.h>
++
++#include <asm/immap_86xx.h>
++
++#include "fsl_ssi.h"
++
++/**
++ * FSLSSI_I2S_RATES: sample rates supported by the I2S
++ *
++ * This driver currently only supports the SSI running in I2S slave mode,
++ * which means the codec determines the sample rate.  Therefore, we tell
++ * ALSA that we support all rates and let the codec driver decide what rates
++ * are really supported.
++ */
++#define FSLSSI_I2S_RATES (SNDRV_PCM_RATE_5512 | SNDRV_PCM_RATE_8000_192000 | \
++			  SNDRV_PCM_RATE_CONTINUOUS)
++
++/**
++ * FSLSSI_I2S_FORMATS: audio formats supported by the SSI
++ *
++ * This driver currently only supports the SSI running in I2S slave mode.
++ *
++ * The SSI has a limitation in that the samples must be in the same byte
++ * order as the host CPU.  This is because when multiple bytes are written
++ * to the STX register, the bytes and bits must be written in the same
++ * order.  The STX is a shift register, so all the bits need to be aligned
++ * (bit-endianness must match byte-endianness).  Processors typically write
++ * the bits within a byte in the same order that the bytes of a word are
++ * written in.  So if the host CPU is big-endian, then only big-endian
++ * samples will be written to STX properly.
++ */
++#ifdef __BIG_ENDIAN
++#define FSLSSI_I2S_FORMATS (SNDRV_PCM_FMTBIT_S8 | SNDRV_PCM_FMTBIT_S16_BE | \
++	 SNDRV_PCM_FMTBIT_S18_3BE | SNDRV_PCM_FMTBIT_S20_3BE | \
++	 SNDRV_PCM_FMTBIT_S24_3BE | SNDRV_PCM_FMTBIT_S24_BE)
++#else
++#define FSLSSI_I2S_FORMATS (SNDRV_PCM_FMTBIT_S8 | SNDRV_PCM_FMTBIT_S16_LE | \
++	 SNDRV_PCM_FMTBIT_S18_3LE | SNDRV_PCM_FMTBIT_S20_3LE | \
++	 SNDRV_PCM_FMTBIT_S24_3LE | SNDRV_PCM_FMTBIT_S24_LE)
++#endif
++
++/**
++ * fsl_ssi_private: per-SSI private data
++ *
++ * @name: short name for this device ("SSI0", "SSI1", etc)
++ * @ssi: pointer to the SSI's registers
++ * @ssi_phys: physical address of the SSI registers
++ * @irq: IRQ of this SSI
++ * @dev: struct device pointer
++ * @playback: the number of playback streams opened
++ * @capture: the number of capture streams opened
++ * @cpu_dai: the CPU DAI for this device
++ * @dev_attr: the sysfs device attribute structure
++ * @stats: SSI statistics
++ */
++struct fsl_ssi_private {
++	char name[8];
++	struct ccsr_ssi __iomem *ssi;
++	dma_addr_t ssi_phys;
++	unsigned int irq;
++	struct device *dev;
++	unsigned int playback;
++	unsigned int capture;
++	struct snd_soc_cpu_dai cpu_dai;
++	struct device_attribute dev_attr;
++
++	struct {
++		unsigned int rfrc;
++		unsigned int tfrc;
++		unsigned int cmdau;
++		unsigned int cmddu;
++		unsigned int rxt;
++		unsigned int rdr1;
++		unsigned int rdr0;
++		unsigned int tde1;
++		unsigned int tde0;
++		unsigned int roe1;
++		unsigned int roe0;
++		unsigned int tue1;
++		unsigned int tue0;
++		unsigned int tfs;
++		unsigned int rfs;
++		unsigned int tls;
++		unsigned int rls;
++		unsigned int rff1;
++		unsigned int rff0;
++		unsigned int tfe1;
++		unsigned int tfe0;
++	} stats;
++};
++
++/**
++ * fsl_ssi_isr: SSI interrupt handler
++ *
++ * Although it's possible to use the interrupt handler to send and receive
++ * data to/from the SSI, we use the DMA instead.  Programming is more
++ * complicated, but the performance is much better.
++ *
++ * This interrupt handler is used only to gather statistics.
++ *
++ * @irq: IRQ of the SSI device
++ * @dev_id: pointer to the ssi_private structure for this SSI device
++ */
++static irqreturn_t fsl_ssi_isr(int irq, void *dev_id, struct pt_regs *regs)
++{
++	struct fsl_ssi_private *ssi_private = dev_id;
++	struct ccsr_ssi __iomem *ssi = ssi_private->ssi;
++	irqreturn_t ret = IRQ_NONE;
++	__be32 sisr;
++	__be32 sisr2 = 0;
++
++	/* We got an interrupt, so read the status register to see what we
++	   were interrupted for.  We mask it with the Interrupt Enable register
++	   so that we only check for events that we're interested in.
++	 */
++	sisr = in_be32(&ssi->sisr) & in_be32(&ssi->sier);
++
++	if (sisr & CCSR_SSI_SISR_RFRC) {
++		ssi_private->stats.rfrc++;
++		sisr2 |= CCSR_SSI_SISR_RFRC;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_TFRC) {
++		ssi_private->stats.tfrc++;
++		sisr2 |= CCSR_SSI_SISR_TFRC;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_CMDAU) {
++		ssi_private->stats.cmdau++;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_CMDDU) {
++		ssi_private->stats.cmddu++;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_RXT) {
++		ssi_private->stats.rxt++;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_RDR1) {
++		ssi_private->stats.rdr1++;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_RDR0) {
++		ssi_private->stats.rdr0++;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_TDE1) {
++		ssi_private->stats.tde1++;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_TDE0) {
++		ssi_private->stats.tde0++;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_ROE1) {
++		ssi_private->stats.roe1++;
++		sisr2 |= CCSR_SSI_SISR_ROE1;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_ROE0) {
++		ssi_private->stats.roe0++;
++		sisr2 |= CCSR_SSI_SISR_ROE0;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_TUE1) {
++		ssi_private->stats.tue1++;
++		sisr2 |= CCSR_SSI_SISR_TUE1;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_TUE0) {
++		ssi_private->stats.tue0++;
++		sisr2 |= CCSR_SSI_SISR_TUE0;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_TFS) {
++		ssi_private->stats.tfs++;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_RFS) {
++		ssi_private->stats.rfs++;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_TLS) {
++		ssi_private->stats.tls++;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_RLS) {
++		ssi_private->stats.rls++;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_RFF1) {
++		ssi_private->stats.rff1++;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_RFF0) {
++		ssi_private->stats.rff0++;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_TFE1) {
++		ssi_private->stats.tfe1++;
++		ret = IRQ_HANDLED;
++	}
++
++	if (sisr & CCSR_SSI_SISR_TFE0) {
++		ssi_private->stats.tfe0++;
++		ret = IRQ_HANDLED;
++	}
++
++	/* Clear the bits that we set */
++	if (sisr2)
++		out_be32(&ssi->sisr, sisr2);
++
++	return ret;
++}
++
++/**
++ * fsl_ssi_startup: create a new substream
++ *
++ * This is the first function called when a stream is opened.
++ *
++ * If this is the first stream open, then grab the IRQ and program most of
++ * the SSI registers.
++ */
++static int fsl_ssi_startup(struct snd_pcm_substream *substream)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct fsl_ssi_private *ssi_private = rtd->dai->cpu_dai->private_data;
++
++	/*
++	 * If this is the first stream opened, then request the IRQ
++	 * and initialize the SSI registers.
++	 */
++	if (!ssi_private->playback && !ssi_private->capture) {
++		struct ccsr_ssi __iomem *ssi = ssi_private->ssi;
++		int ret;
++
++		ret = request_irq(ssi_private->irq, fsl_ssi_isr, 0,
++				  ssi_private->name, ssi_private);
++		if (ret < 0) {
++			dev_err(substream->pcm->card->dev,
++				"could not claim irq %u\n", ssi_private->irq);
++			return ret;
++		}
++
++		/*
++		 * Section 16.5 of the MPC8610 reference manual says that the
++		 * SSI needs to be disabled before updating the registers we set
++		 * here.
++		 */
++		clrbits32(&ssi->scr, CCSR_SSI_SCR_SSIEN);
++
++		/*
++		 * Program the SSI into I2S Slave Non-Network Synchronous mode.
++		 * Also enable the transmit and receive FIFO.
++		 *
++		 * FIXME: Little-endian samples require a different shift dir
++		 */
++		clrsetbits_be32(&ssi->scr, CCSR_SSI_SCR_I2S_MODE_MASK,
++			CCSR_SSI_SCR_TFR_CLK_DIS |
++			CCSR_SSI_SCR_I2S_MODE_SLAVE | CCSR_SSI_SCR_SYN);
++
++		out_be32(&ssi->stcr,
++			 CCSR_SSI_STCR_TXBIT0 | CCSR_SSI_STCR_TFEN0 |
++			 CCSR_SSI_STCR_TFSI | CCSR_SSI_STCR_TEFS |
++			 CCSR_SSI_STCR_TSCKP);
++
++		out_be32(&ssi->srcr,
++			 CCSR_SSI_SRCR_RXBIT0 | CCSR_SSI_SRCR_RFEN0 |
++			 CCSR_SSI_SRCR_RFSI | CCSR_SSI_SRCR_REFS |
++			 CCSR_SSI_SRCR_RSCKP);
++
++		/*
++		 * The DC and PM bits are only used if the SSI is the clock
++		 * master.
++		 */
++
++		/* 4. Enable the interrupts and DMA requests */
++		out_be32(&ssi->sier,
++			 CCSR_SSI_SIER_TFRC_EN | CCSR_SSI_SIER_TDMAE |
++			 CCSR_SSI_SIER_TIE | CCSR_SSI_SIER_TUE0_EN |
++			 CCSR_SSI_SIER_TUE1_EN | CCSR_SSI_SIER_RFRC_EN |
++			 CCSR_SSI_SIER_RDMAE | CCSR_SSI_SIER_RIE |
++			 CCSR_SSI_SIER_ROE0_EN | CCSR_SSI_SIER_ROE1_EN);
++
++		/*
++		 * Set the watermark for transmit FIFI 0 and receive FIFO 0. We
++		 * don't use FIFO 1.  Since the SSI only supports stereo, the
++		 * watermark should never be an odd number.
++		 */
++		out_be32(&ssi->sfcsr,
++			 CCSR_SSI_SFCSR_TFWM0(6) | CCSR_SSI_SFCSR_RFWM0(2));
++
++		/*
++		 * We keep the SSI disabled because if we enable it, then the
++		 * DMA controller will start.  It's not supposed to start until
++		 * the SCR.TE (or SCR.RE) bit is set, but it does anyway.  The
++		 * DMA controller will transfer one "BWC" of data (i.e. the
++		 * amount of data that the MR.BWC bits are set to).  The reason
++		 * this is bad is because at this point, the PCM driver has not
++		 * finished initializing the DMA controller.
++		 */
++	}
++
++	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
++		ssi_private->playback++;
++
++	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
++		ssi_private->capture++;
++
++	return 0;
++}
++
++/**
++ * fsl_ssi_prepare: prepare the SSI.
++ *
++ * Most of the SSI registers have been programmed in the startup function,
++ * but the word length must be programmed here.  Unfortunately, programming
++ * the SxCCR.WL bits requires the SSI to be temporarily disabled.  This can
++ * cause a problem with supporting simultaneous playback and capture.  If
++ * the SSI is already playing a stream, then that stream may be temporarily
++ * stopped when you start capture.
++ *
++ * Note: The SxCCR.DC and SxCCR.PM bits are only used if the SSI is the
++ * clock master.
++ */
++static int fsl_ssi_prepare(struct snd_pcm_substream *substream)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct fsl_ssi_private *ssi_private = rtd->dai->cpu_dai->private_data;
++
++	struct ccsr_ssi __iomem *ssi = ssi_private->ssi;
++	u32 wl;
++
++	wl = CCSR_SSI_SxCCR_WL(snd_pcm_format_width(runtime->format));
++
++	clrbits32(&ssi->scr, CCSR_SSI_SCR_SSIEN);
++
++	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
++		clrsetbits_be32(&ssi->stccr, CCSR_SSI_SxCCR_WL_MASK, wl);
++	else
++		clrsetbits_be32(&ssi->srccr, CCSR_SSI_SxCCR_WL_MASK, wl);
++
++	setbits32(&ssi->scr, CCSR_SSI_SCR_SSIEN);
++
++	return 0;
++}
++
++/**
++ * fsl_ssi_trigger: start and stop the DMA transfer.
++ *
++ * This function is called by ALSA to start, stop, pause, and resume the DMA
++ * transfer of data.
++ *
++ * The DMA channel is in external master start and pause mode, which
++ * means the SSI completely controls the flow of data.
++ */
++static int fsl_ssi_trigger(struct snd_pcm_substream *substream, int cmd)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct fsl_ssi_private *ssi_private = rtd->dai->cpu_dai->private_data;
++	struct ccsr_ssi __iomem *ssi = ssi_private->ssi;
++
++	switch (cmd) {
++	case SNDRV_PCM_TRIGGER_START:
++	case SNDRV_PCM_TRIGGER_RESUME:
++	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
++		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
++			setbits32(&ssi->scr, CCSR_SSI_SCR_TE);
++		} else {
++			setbits32(&ssi->scr, CCSR_SSI_SCR_RE);
++
++			/*
++			 * I think we need this delay to allow time for the SSI
++			 * to put data into its FIFO.  Without it, ALSA starts
++			 * to complain about overruns.
++			 */
++			msleep(1);
++		}
++		break;
++
++	case SNDRV_PCM_TRIGGER_STOP:
++	case SNDRV_PCM_TRIGGER_SUSPEND:
++	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
++		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
++			clrbits32(&ssi->scr, CCSR_SSI_SCR_TE);
++		else
++			clrbits32(&ssi->scr, CCSR_SSI_SCR_RE);
++		break;
++
++	default:
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++/**
++ * fsl_ssi_shutdown: shutdown the SSI
++ *
++ * Shutdown the SSI if there are no other substreams open.
++ */
++static void fsl_ssi_shutdown(struct snd_pcm_substream *substream)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct fsl_ssi_private *ssi_private = rtd->dai->cpu_dai->private_data;
++
++	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
++		ssi_private->playback--;
++
++	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
++		ssi_private->capture--;
++
++	/*
++	 * If this is the last active substream, disable the SSI and release
++	 * the IRQ.
++	 */
++	if (!ssi_private->playback && !ssi_private->capture) {
++		struct ccsr_ssi __iomem *ssi = ssi_private->ssi;
++
++		clrbits32(&ssi->scr, CCSR_SSI_SCR_SSIEN);
++
++		free_irq(ssi_private->irq, ssi_private);
++	}
++}
++
++/**
++ * fsl_ssi_set_sysclk: set the clock frequency and direction
++ *
++ * This function is called by the machine driver to tell us what the clock
++ * frequency and direction are.
++ *
++ * Currently, we only support operating as a clock slave (SND_SOC_CLOCK_IN),
++ * and we don't care about the frequency.  Return an error if the direction
++ * is not SND_SOC_CLOCK_IN.
++ *
++ * @clk_id: reserved, should be zero
++ * @freq: the frequency of the given clock ID, currently ignored
++ * @dir: SND_SOC_CLOCK_IN (clock slave) or SND_SOC_CLOCK_OUT (clock master)
++ */
++static int fsl_ssi_set_sysclk(struct snd_soc_cpu_dai *cpu_dai,
++			      int clk_id, unsigned int freq, int dir)
++{
++
++	return (dir == SND_SOC_CLOCK_IN) ? 0 : -EINVAL;
++}
++
++/**
++ * fsl_ssi_set_fmt: set the serial format.
++ *
++ * This function is called by the machine driver to tell us what serial
++ * format to use.
++ *
++ * Currently, we only support I2S mode.  Return an error if the format is
++ * not SND_SOC_DAIFMT_I2S.
++ *
++ * @format: one of SND_SOC_DAIFMT_xxx
++ */
++static int fsl_ssi_set_fmt(struct snd_soc_cpu_dai *cpu_dai, unsigned int format)
++{
++	return (format == SND_SOC_DAIFMT_I2S) ? 0 : -EINVAL;
++}
++
++/**
++ * fsl_ssi_dai_template: template CPU DAI for the SSI
++ */
++static struct snd_soc_cpu_dai fsl_ssi_dai_template = {
++	.playback = {
++		/* The SSI does not support monaural audio. */
++		.channels_min = 2,
++		.channels_max = 2,
++		.rates = FSLSSI_I2S_RATES,
++		.formats = FSLSSI_I2S_FORMATS,
++	},
++	.capture = {
++		.channels_min = 2,
++		.channels_max = 2,
++		.rates = FSLSSI_I2S_RATES,
++		.formats = FSLSSI_I2S_FORMATS,
++	},
++	.ops = {
++		.startup = fsl_ssi_startup,
++		.prepare = fsl_ssi_prepare,
++		.shutdown = fsl_ssi_shutdown,
++		.trigger = fsl_ssi_trigger,
++	},
++	.dai_ops = {
++		.set_sysclk = fsl_ssi_set_sysclk,
++		.set_fmt = fsl_ssi_set_fmt,
++	},
++};
++
++/**
++ * fsl_sysfs_ssi_show: display SSI statistics
++ *
++ * Display the statistics for the current SSI device.
++ */
++static ssize_t fsl_sysfs_ssi_show(struct device *dev,
++	struct device_attribute *attr, char *buf)
++{
++	struct fsl_ssi_private *ssi_private =
++	container_of(attr, struct fsl_ssi_private, dev_attr);
++	ssize_t length;
++
++	length = sprintf(buf, "rfrc=%u", ssi_private->stats.rfrc);
++	length += sprintf(buf + length, "\ttfrc=%u", ssi_private->stats.tfrc);
++	length += sprintf(buf + length, "\tcmdau=%u", ssi_private->stats.cmdau);
++	length += sprintf(buf + length, "\tcmddu=%u", ssi_private->stats.cmddu);
++	length += sprintf(buf + length, "\trxt=%u", ssi_private->stats.rxt);
++	length += sprintf(buf + length, "\trdr1=%u", ssi_private->stats.rdr1);
++	length += sprintf(buf + length, "\trdr0=%u", ssi_private->stats.rdr0);
++	length += sprintf(buf + length, "\ttde1=%u", ssi_private->stats.tde1);
++	length += sprintf(buf + length, "\ttde0=%u", ssi_private->stats.tde0);
++	length += sprintf(buf + length, "\troe1=%u", ssi_private->stats.roe1);
++	length += sprintf(buf + length, "\troe0=%u", ssi_private->stats.roe0);
++	length += sprintf(buf + length, "\ttue1=%u", ssi_private->stats.tue1);
++	length += sprintf(buf + length, "\ttue0=%u", ssi_private->stats.tue0);
++	length += sprintf(buf + length, "\ttfs=%u", ssi_private->stats.tfs);
++	length += sprintf(buf + length, "\trfs=%u", ssi_private->stats.rfs);
++	length += sprintf(buf + length, "\ttls=%u", ssi_private->stats.tls);
++	length += sprintf(buf + length, "\trls=%u", ssi_private->stats.rls);
++	length += sprintf(buf + length, "\trff1=%u", ssi_private->stats.rff1);
++	length += sprintf(buf + length, "\trff0=%u", ssi_private->stats.rff0);
++	length += sprintf(buf + length, "\ttfe1=%u", ssi_private->stats.tfe1);
++	length += sprintf(buf + length, "\ttfe0=%u\n", ssi_private->stats.tfe0);
++
++	return length;
++}
++
++/**
++ * fsl_ssi_create_dai: create a snd_soc_cpu_dai structure
++ *
++ * This function is called by the machine driver to create a snd_soc_cpu_dai
++ * structure.  The function creates an ssi_private object, which contains
++ * the snd_soc_cpu_dai.  It also creates the sysfs statistics device.
++ */
++struct snd_soc_cpu_dai *fsl_ssi_create_dai(struct fsl_ssi_info *ssi_info)
++{
++	struct snd_soc_cpu_dai *fsl_ssi_dai;
++	struct fsl_ssi_private *ssi_private;
++	int ret = 0;
++	struct device_attribute *dev_attr;
++
++	ssi_private = kzalloc(sizeof(struct fsl_ssi_private), GFP_KERNEL);
++	if (!ssi_private) {
++		dev_err(ssi_info->dev, "could not allocate DAI object\n");
++		return NULL;
++	}
++	memcpy(&ssi_private->cpu_dai, &fsl_ssi_dai_template,
++	       sizeof(struct snd_soc_cpu_dai));
++
++	fsl_ssi_dai = &ssi_private->cpu_dai;
++	dev_attr = &ssi_private->dev_attr;
++
++	sprintf(ssi_private->name, "ssi%u", (u8) ssi_info->id);
++	ssi_private->ssi = ssi_info->ssi;
++	ssi_private->ssi_phys = ssi_info->ssi_phys;
++	ssi_private->irq = ssi_info->irq;
++	ssi_private->dev = ssi_info->dev;
++
++	ssi_private->dev->driver_data = fsl_ssi_dai;
++
++	/* Initialize the the device_attribute structure */
++	dev_attr->attr.name = "ssi-stats";
++	dev_attr->attr.mode = S_IRUGO;
++	dev_attr->show = fsl_sysfs_ssi_show;
++
++	ret = device_create_file(ssi_private->dev, dev_attr);
++	if (ret) {
++		dev_err(ssi_info->dev, "could not create sysfs %s file\n",
++			ssi_private->dev_attr.attr.name);
++		kfree(fsl_ssi_dai);
++		return NULL;
++	}
++
++	fsl_ssi_dai->private_data = ssi_private;
++	fsl_ssi_dai->name = ssi_private->name;
++	fsl_ssi_dai->id = ssi_info->id;
++
++	return fsl_ssi_dai;
++}
++EXPORT_SYMBOL_GPL(fsl_ssi_create_dai);
++
++/**
++ * fsl_ssi_destroy_dai: destroy the snd_soc_cpu_dai object
++ *
++ * This function undoes the operations of fsl_ssi_create_dai()
++ */
++void fsl_ssi_destroy_dai(struct snd_soc_cpu_dai *fsl_ssi_dai)
++{
++	struct fsl_ssi_private *ssi_private =
++	container_of(fsl_ssi_dai, struct fsl_ssi_private, cpu_dai);
++
++	device_remove_file(ssi_private->dev, &ssi_private->dev_attr);
++
++	kfree(ssi_private);
++}
++EXPORT_SYMBOL_GPL(fsl_ssi_destroy_dai);
++
++MODULE_AUTHOR("Timur Tabi <timur@freescale.com>");
++MODULE_DESCRIPTION("Freescale Synchronous Serial Interface (SSI) ASoC Driver");
++MODULE_LICENSE("GPL");
+Index: linux-2.6.18/sound/soc/fsl/fsl_ssi.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/fsl/fsl_ssi.h
+@@ -0,0 +1,224 @@
++/*
++ * fsl_ssi.h - ALSA SSI interface for the Freescale MPC8610 SoC
++ *
++ * Author: Timur Tabi <timur@freescale.com>
++ *
++ * Copyright 2007-2008 Freescale Semiconductor, Inc.  This file is licensed
++ * under the terms of the GNU General Public License version 2.  This
++ * program is licensed "as is" without any warranty of any kind, whether
++ * express or implied.
++ */
++
++#ifndef _MPC8610_I2S_H
++#define _MPC8610_I2S_H
++
++/* SSI Register Map */
++struct ccsr_ssi {
++	__be32 stx0;	/* 0x.0000 - SSI Transmit Data Register 0 */
++	__be32 stx1;	/* 0x.0004 - SSI Transmit Data Register 1 */
++	__be32 srx0;	/* 0x.0008 - SSI Receive Data Register 0 */
++	__be32 srx1;	/* 0x.000C - SSI Receive Data Register 1 */
++	__be32 scr;	/* 0x.0010 - SSI Control Register */
++	__be32 sisr;	/* 0x.0014 - SSI Interrupt Status Register Mixed */
++	__be32 sier;	/* 0x.0018 - SSI Interrupt Enable Register */
++	__be32 stcr;	/* 0x.001C - SSI Transmit Configuration Register */
++	__be32 srcr;	/* 0x.0020 - SSI Receive Configuration Register */
++	__be32 stccr;	/* 0x.0024 - SSI Transmit Clock Control Register */
++	__be32 srccr;	/* 0x.0028 - SSI Receive Clock Control Register */
++	__be32 sfcsr;	/* 0x.002C - SSI FIFO Control/Status Register */
++	__be32 str;	/* 0x.0030 - SSI Test Register */
++	__be32 sor;	/* 0x.0034 - SSI Option Register */
++	__be32 sacnt;	/* 0x.0038 - SSI AC97 Control Register */
++	__be32 sacadd;	/* 0x.003C - SSI AC97 Command Address Register */
++	__be32 sacdat;	/* 0x.0040 - SSI AC97 Command Data Register */
++	__be32 satag;	/* 0x.0044 - SSI AC97 Tag Register */
++	__be32 stmsk;	/* 0x.0048 - SSI Transmit Time Slot Mask Register */
++	__be32 srmsk;	/* 0x.004C - SSI Receive Time Slot Mask Register */
++	__be32 saccst;	/* 0x.0050 - SSI AC97 Channel Status Register */
++	__be32 saccen;	/* 0x.0054 - SSI AC97 Channel Enable Register */
++	__be32 saccdis; /* 0x.0058 - SSI AC97 Channel Disable Register */
++};
++
++#define CCSR_SSI_SCR_RFR_CLK_DIS	0x00000800
++#define CCSR_SSI_SCR_TFR_CLK_DIS	0x00000400
++#define CCSR_SSI_SCR_TCH_EN		0x00000100
++#define CCSR_SSI_SCR_SYS_CLK_EN		0x00000080
++#define CCSR_SSI_SCR_I2S_MODE_MASK	0x00000060
++#define CCSR_SSI_SCR_I2S_MODE_NORMAL	0x00000000
++#define CCSR_SSI_SCR_I2S_MODE_MASTER	0x00000020
++#define CCSR_SSI_SCR_I2S_MODE_SLAVE	0x00000040
++#define CCSR_SSI_SCR_SYN		0x00000010
++#define CCSR_SSI_SCR_NET		0x00000008
++#define CCSR_SSI_SCR_RE			0x00000004
++#define CCSR_SSI_SCR_TE			0x00000002
++#define CCSR_SSI_SCR_SSIEN		0x00000001
++
++#define CCSR_SSI_SISR_RFRC		0x01000000
++#define CCSR_SSI_SISR_TFRC		0x00800000
++#define CCSR_SSI_SISR_CMDAU		0x00040000
++#define CCSR_SSI_SISR_CMDDU		0x00020000
++#define CCSR_SSI_SISR_RXT		0x00010000
++#define CCSR_SSI_SISR_RDR1		0x00008000
++#define CCSR_SSI_SISR_RDR0		0x00004000
++#define CCSR_SSI_SISR_TDE1		0x00002000
++#define CCSR_SSI_SISR_TDE0		0x00001000
++#define CCSR_SSI_SISR_ROE1		0x00000800
++#define CCSR_SSI_SISR_ROE0		0x00000400
++#define CCSR_SSI_SISR_TUE1		0x00000200
++#define CCSR_SSI_SISR_TUE0		0x00000100
++#define CCSR_SSI_SISR_TFS		0x00000080
++#define CCSR_SSI_SISR_RFS		0x00000040
++#define CCSR_SSI_SISR_TLS		0x00000020
++#define CCSR_SSI_SISR_RLS		0x00000010
++#define CCSR_SSI_SISR_RFF1		0x00000008
++#define CCSR_SSI_SISR_RFF0		0x00000004
++#define CCSR_SSI_SISR_TFE1		0x00000002
++#define CCSR_SSI_SISR_TFE0		0x00000001
++
++#define CCSR_SSI_SIER_RFRC_EN		0x01000000
++#define CCSR_SSI_SIER_TFRC_EN		0x00800000
++#define CCSR_SSI_SIER_RDMAE		0x00400000
++#define CCSR_SSI_SIER_RIE		0x00200000
++#define CCSR_SSI_SIER_TDMAE		0x00100000
++#define CCSR_SSI_SIER_TIE		0x00080000
++#define CCSR_SSI_SIER_CMDAU_EN		0x00040000
++#define CCSR_SSI_SIER_CMDDU_EN		0x00020000
++#define CCSR_SSI_SIER_RXT_EN		0x00010000
++#define CCSR_SSI_SIER_RDR1_EN		0x00008000
++#define CCSR_SSI_SIER_RDR0_EN		0x00004000
++#define CCSR_SSI_SIER_TDE1_EN		0x00002000
++#define CCSR_SSI_SIER_TDE0_EN		0x00001000
++#define CCSR_SSI_SIER_ROE1_EN		0x00000800
++#define CCSR_SSI_SIER_ROE0_EN		0x00000400
++#define CCSR_SSI_SIER_TUE1_EN		0x00000200
++#define CCSR_SSI_SIER_TUE0_EN		0x00000100
++#define CCSR_SSI_SIER_TFS_EN		0x00000080
++#define CCSR_SSI_SIER_RFS_EN		0x00000040
++#define CCSR_SSI_SIER_TLS_EN		0x00000020
++#define CCSR_SSI_SIER_RLS_EN		0x00000010
++#define CCSR_SSI_SIER_RFF1_EN		0x00000008
++#define CCSR_SSI_SIER_RFF0_EN		0x00000004
++#define CCSR_SSI_SIER_TFE1_EN		0x00000002
++#define CCSR_SSI_SIER_TFE0_EN		0x00000001
++
++#define CCSR_SSI_STCR_TXBIT0		0x00000200
++#define CCSR_SSI_STCR_TFEN1		0x00000100
++#define CCSR_SSI_STCR_TFEN0		0x00000080
++#define CCSR_SSI_STCR_TFDIR		0x00000040
++#define CCSR_SSI_STCR_TXDIR		0x00000020
++#define CCSR_SSI_STCR_TSHFD		0x00000010
++#define CCSR_SSI_STCR_TSCKP		0x00000008
++#define CCSR_SSI_STCR_TFSI		0x00000004
++#define CCSR_SSI_STCR_TFSL		0x00000002
++#define CCSR_SSI_STCR_TEFS		0x00000001
++
++#define CCSR_SSI_SRCR_RXEXT		0x00000400
++#define CCSR_SSI_SRCR_RXBIT0		0x00000200
++#define CCSR_SSI_SRCR_RFEN1		0x00000100
++#define CCSR_SSI_SRCR_RFEN0		0x00000080
++#define CCSR_SSI_SRCR_RFDIR		0x00000040
++#define CCSR_SSI_SRCR_RXDIR		0x00000020
++#define CCSR_SSI_SRCR_RSHFD		0x00000010
++#define CCSR_SSI_SRCR_RSCKP		0x00000008
++#define CCSR_SSI_SRCR_RFSI		0x00000004
++#define CCSR_SSI_SRCR_RFSL		0x00000002
++#define CCSR_SSI_SRCR_REFS		0x00000001
++
++/* STCCR and SRCCR */
++#define CCSR_SSI_SxCCR_DIV2		0x00040000
++#define CCSR_SSI_SxCCR_PSR		0x00020000
++#define CCSR_SSI_SxCCR_WL_SHIFT		13
++#define CCSR_SSI_SxCCR_WL_MASK		0x0001E000
++#define CCSR_SSI_SxCCR_WL(x) \
++	(((((x) / 2) - 1) << CCSR_SSI_SxCCR_WL_SHIFT) & CCSR_SSI_SxCCR_WL_MASK)
++#define CCSR_SSI_SxCCR_DC_SHIFT		8
++#define CCSR_SSI_SxCCR_DC_MASK		0x00001F00
++#define CCSR_SSI_SxCCR_DC(x) \
++	((((x) - 1) << CCSR_SSI_SxCCR_DC_SHIFT) & CCSR_SSI_SxCCR_DC_MASK)
++#define CCSR_SSI_SxCCR_PM_SHIFT		0
++#define CCSR_SSI_SxCCR_PM_MASK		0x000000FF
++#define CCSR_SSI_SxCCR_PM(x) \
++	((((x) - 1) << CCSR_SSI_SxCCR_PM_SHIFT) & CCSR_SSI_SxCCR_PM_MASK)
++
++/*
++ * The xFCNT bits are read-only, and the xFWM bits are read/write.  Use the
++ * CCSR_SSI_SFCSR_xFCNTy() macros to read the FIFO counters, and use the
++ * CCSR_SSI_SFCSR_xFWMy() macros to set the watermarks.
++ */
++#define CCSR_SSI_SFCSR_RFCNT1_SHIFT	28
++#define CCSR_SSI_SFCSR_RFCNT1_MASK	0xF0000000
++#define CCSR_SSI_SFCSR_RFCNT1(x) \
++	(((x) & CCSR_SSI_SFCSR_RFCNT1_MASK) >> CCSR_SSI_SFCSR_RFCNT1_SHIFT)
++#define CCSR_SSI_SFCSR_TFCNT1_SHIFT	24
++#define CCSR_SSI_SFCSR_TFCNT1_MASK	0x0F000000
++#define CCSR_SSI_SFCSR_TFCNT1(x) \
++	(((x) & CCSR_SSI_SFCSR_TFCNT1_MASK) >> CCSR_SSI_SFCSR_TFCNT1_SHIFT)
++#define CCSR_SSI_SFCSR_RFWM1_SHIFT	20
++#define CCSR_SSI_SFCSR_RFWM1_MASK	0x00F00000
++#define CCSR_SSI_SFCSR_RFWM1(x)	\
++	(((x) << CCSR_SSI_SFCSR_RFWM1_SHIFT) & CCSR_SSI_SFCSR_RFWM1_MASK)
++#define CCSR_SSI_SFCSR_TFWM1_SHIFT	16
++#define CCSR_SSI_SFCSR_TFWM1_MASK	0x000F0000
++#define CCSR_SSI_SFCSR_TFWM1(x)	\
++	(((x) << CCSR_SSI_SFCSR_TFWM1_SHIFT) & CCSR_SSI_SFCSR_TFWM1_MASK)
++#define CCSR_SSI_SFCSR_RFCNT0_SHIFT	12
++#define CCSR_SSI_SFCSR_RFCNT0_MASK	0x0000F000
++#define CCSR_SSI_SFCSR_RFCNT0(x) \
++	(((x) & CCSR_SSI_SFCSR_RFCNT0_MASK) >> CCSR_SSI_SFCSR_RFCNT0_SHIFT)
++#define CCSR_SSI_SFCSR_TFCNT0_SHIFT	8
++#define CCSR_SSI_SFCSR_TFCNT0_MASK	0x00000F00
++#define CCSR_SSI_SFCSR_TFCNT0(x) \
++	(((x) & CCSR_SSI_SFCSR_TFCNT0_MASK) >> CCSR_SSI_SFCSR_TFCNT0_SHIFT)
++#define CCSR_SSI_SFCSR_RFWM0_SHIFT	4
++#define CCSR_SSI_SFCSR_RFWM0_MASK	0x000000F0
++#define CCSR_SSI_SFCSR_RFWM0(x)	\
++	(((x) << CCSR_SSI_SFCSR_RFWM0_SHIFT) & CCSR_SSI_SFCSR_RFWM0_MASK)
++#define CCSR_SSI_SFCSR_TFWM0_SHIFT	0
++#define CCSR_SSI_SFCSR_TFWM0_MASK	0x0000000F
++#define CCSR_SSI_SFCSR_TFWM0(x)	\
++	(((x) << CCSR_SSI_SFCSR_TFWM0_SHIFT) & CCSR_SSI_SFCSR_TFWM0_MASK)
++
++#define CCSR_SSI_STR_TEST		0x00008000
++#define CCSR_SSI_STR_RCK2TCK		0x00004000
++#define CCSR_SSI_STR_RFS2TFS		0x00002000
++#define CCSR_SSI_STR_RXSTATE(x) (((x) >> 8) & 0x1F)
++#define CCSR_SSI_STR_TXD2RXD		0x00000080
++#define CCSR_SSI_STR_TCK2RCK		0x00000040
++#define CCSR_SSI_STR_TFS2RFS		0x00000020
++#define CCSR_SSI_STR_TXSTATE(x) ((x) & 0x1F)
++
++#define CCSR_SSI_SOR_CLKOFF		0x00000040
++#define CCSR_SSI_SOR_RX_CLR		0x00000020
++#define CCSR_SSI_SOR_TX_CLR		0x00000010
++#define CCSR_SSI_SOR_INIT		0x00000008
++#define CCSR_SSI_SOR_WAIT_SHIFT		1
++#define CCSR_SSI_SOR_WAIT_MASK		0x00000006
++#define CCSR_SSI_SOR_WAIT(x) (((x) & 3) << CCSR_SSI_SOR_WAIT_SHIFT)
++#define CCSR_SSI_SOR_SYNRST 		0x00000001
++
++/* Instantiation data for an SSI interface
++ *
++ * This structure contains all the information that the the SSI driver needs
++ * to instantiate an SSI interface with ALSA.  The machine driver should
++ * create this structure, fill it in, call fsl_ssi_create_dai(), and then
++ * delete the structure.
++ *
++ * id: which SSI this is (0, 1, etc. )
++ * ssi: pointer to the SSI's registers
++ * ssi_phys: physical address of the SSI registers
++ * irq: IRQ of this SSI
++ * dev: struct device, used to create the sysfs statistics file
++*/
++struct fsl_ssi_info {
++	unsigned int id;
++	struct ccsr_ssi __iomem *ssi;
++	dma_addr_t ssi_phys;
++	unsigned int irq;
++	struct device *dev;
++};
++
++struct snd_soc_cpu_dai *fsl_ssi_create_dai(struct fsl_ssi_info *ssi_info);
++void fsl_ssi_destroy_dai(struct snd_soc_cpu_dai *fsl_ssi_dai);
++
++#endif
++
+Index: linux-2.6.18/sound/soc/fsl/mpc8610_hpcd.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/fsl/mpc8610_hpcd.c
+@@ -0,0 +1,630 @@
++/**
++ * Freescale MPC8610HPCD ALSA SoC Fabric driver
++ *
++ * Author: Timur Tabi <timur@freescale.com>
++ *
++ * Copyright 2007-2008 Freescale Semiconductor, Inc.  This file is licensed
++ * under the terms of the GNU General Public License version 2.  This
++ * program is licensed "as is" without any warranty of any kind, whether
++ * express or implied.
++ */
++
++#include <linux/module.h>
++#include <linux/interrupt.h>
++#include <sound/soc.h>
++#include <asm/of_platform.h>
++#include <asm/immap_86xx.h>
++
++#include "../codecs/cs4270.h"
++#include "fsl_dma.h"
++#include "fsl_ssi.h"
++
++/**
++ * mpc8610_hpcd_data: fabric-specific ASoC device data
++ *
++ * This structure contains data for a single sound platform device on an
++ * MPC8610 HPCD.  Some of the data is taken from the device tree.
++ */
++struct mpc8610_hpcd_data {
++	struct snd_soc_device sound_devdata;
++	struct snd_soc_dai_link dai;
++	struct snd_soc_machine machine;
++	unsigned int dai_format;
++	unsigned int codec_clk_direction;
++	unsigned int cpu_clk_direction;
++	unsigned int clk_frequency;
++	struct ccsr_guts __iomem *guts;
++	struct ccsr_ssi __iomem *ssi;
++	unsigned int ssi_id;    	/* 0 = SSI1, 1 = SSI2, etc */
++	unsigned int ssi_irq;
++	unsigned int dma_id;    	/* 0 = DMA1, 1 = DMA2, etc */
++	unsigned int dma_irq[2];
++	struct ccsr_dma_channel __iomem *dma[2];
++	unsigned int dma_channel_id[2]; /* 0 = ch 0, 1 = ch 1, etc*/
++};
++
++/**
++ * mpc8610_hpcd_machine_probe: initalize the board
++ *
++ * This function is called when platform_device_add() is called.  It is used
++ * to initialize the board-specific hardware.
++ *
++ * Here we program the DMACR and PMUXCR registers.
++ */
++static int mpc8610_hpcd_machine_probe(struct platform_device *sound_device)
++{
++	struct mpc8610_hpcd_data *machine_data =
++		sound_device->dev.platform_data;
++
++	/* Program the signal routing between the SSI and the DMA */
++	guts_set_dmacr(machine_data->guts, machine_data->dma_id + 1,
++		machine_data->dma_channel_id[0], CCSR_GUTS_DMACR_DEV_SSI);
++	guts_set_dmacr(machine_data->guts, machine_data->dma_id + 1,
++		machine_data->dma_channel_id[1], CCSR_GUTS_DMACR_DEV_SSI);
++
++	guts_set_pmuxcr_dma(machine_data->guts, machine_data->dma_id,
++		machine_data->dma_channel_id[0], 0);
++	guts_set_pmuxcr_dma(machine_data->guts, machine_data->dma_id,
++		machine_data->dma_channel_id[1], 0);
++
++	guts_set_pmuxcr_dma(machine_data->guts, 1, 0, 0);
++	guts_set_pmuxcr_dma(machine_data->guts, 1, 3, 0);
++	guts_set_pmuxcr_dma(machine_data->guts, 0, 3, 0);
++
++	switch (machine_data->ssi_id) {
++	case 0:
++		clrsetbits_be32(&machine_data->guts->pmuxcr,
++			CCSR_GUTS_PMUXCR_SSI1_MASK, CCSR_GUTS_PMUXCR_SSI1_SSI);
++		break;
++	case 1:
++		clrsetbits_be32(&machine_data->guts->pmuxcr,
++			CCSR_GUTS_PMUXCR_SSI2_MASK, CCSR_GUTS_PMUXCR_SSI2_SSI);
++		break;
++	}
++
++	return 0;
++}
++
++/**
++ * mpc8610_hpcd_startup: program the board with various hardware parameters
++ *
++ * This function takes board-specific information, like clock frequencies
++ * and serial data formats, and passes that information to the codec and
++ * transport drivers.
++ */
++static int mpc8610_hpcd_startup(struct snd_pcm_substream *substream)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct snd_soc_codec_dai *codec_dai = rtd->dai->codec_dai;
++	struct snd_soc_cpu_dai *cpu_dai = rtd->dai->cpu_dai;
++	struct mpc8610_hpcd_data *machine_data =
++		rtd->socdev->dev->platform_data;
++	int ret = 0;
++
++	/* Tell the CPU driver what the serial protocol is. */
++	if (cpu_dai->dai_ops.set_fmt) {
++		ret = cpu_dai->dai_ops.set_fmt(cpu_dai,
++			machine_data->dai_format);
++		if (ret < 0) {
++			dev_err(substream->pcm->card->dev,
++				"could not set CPU driver audio format\n");
++			return ret;
++		}
++	}
++
++	/* Tell the codec driver what the serial protocol is. */
++	if (codec_dai->dai_ops.set_fmt) {
++		ret = codec_dai->dai_ops.set_fmt(codec_dai,
++			machine_data->dai_format);
++		if (ret < 0) {
++			dev_err(substream->pcm->card->dev,
++				"could not set codec driver audio format\n");
++			return ret;
++		}
++	}
++
++	/*
++	 * Tell the CPU driver what the clock frequency is, and whether it's a
++	 * slave or master.
++	 */
++	if (cpu_dai->dai_ops.set_sysclk) {
++		ret = cpu_dai->dai_ops.set_sysclk(cpu_dai, 0,
++			machine_data->clk_frequency,
++			machine_data->cpu_clk_direction);
++		if (ret < 0) {
++			dev_err(substream->pcm->card->dev,
++				"could not set CPU driver clock parameters\n");
++			return ret;
++		}
++	}
++
++	/*
++	 * Tell the codec driver what the MCLK frequency is, and whether it's
++	 * a slave or master.
++	 */
++	if (codec_dai->dai_ops.set_sysclk) {
++		ret = codec_dai->dai_ops.set_sysclk(codec_dai, 0,
++			machine_data->clk_frequency,
++			machine_data->codec_clk_direction);
++		if (ret < 0) {
++			dev_err(substream->pcm->card->dev,
++				"could not set codec driver clock params\n");
++			return ret;
++		}
++	}
++
++	return 0;
++}
++
++/**
++ * mpc8610_hpcd_machine_remove: Remove the sound device
++ *
++ * This function is called to remove the sound device for one SSI.  We
++ * de-program the DMACR and PMUXCR register.
++ */
++int mpc8610_hpcd_machine_remove(struct platform_device *sound_device)
++{
++	struct mpc8610_hpcd_data *machine_data =
++		sound_device->dev.platform_data;
++
++	/* Restore the signal routing */
++
++	guts_set_dmacr(machine_data->guts, machine_data->dma_id + 1,
++		machine_data->dma_channel_id[0], 0);
++	guts_set_dmacr(machine_data->guts, machine_data->dma_id + 1,
++		machine_data->dma_channel_id[1], 0);
++
++	switch (machine_data->ssi_id) {
++	case 0:
++		clrsetbits_be32(&machine_data->guts->pmuxcr,
++			CCSR_GUTS_PMUXCR_SSI1_MASK, CCSR_GUTS_PMUXCR_SSI1_LA);
++		break;
++	case 1:
++		clrsetbits_be32(&machine_data->guts->pmuxcr,
++			CCSR_GUTS_PMUXCR_SSI2_MASK, CCSR_GUTS_PMUXCR_SSI1_LA);
++		break;
++	}
++
++	return 0;
++}
++
++/**
++ * mpc8610_hpcd_ops: ASoC fabric driver operations
++ */
++static struct snd_soc_ops mpc8610_hpcd_ops = {
++	.startup = mpc8610_hpcd_startup,
++};
++
++/**
++ * mpc8610_hpcd_machine: ASoC machine data
++ */
++static struct snd_soc_machine mpc8610_hpcd_machine = {
++	.probe = mpc8610_hpcd_machine_probe,
++	.remove = mpc8610_hpcd_machine_remove,
++	.name = "MPC8610 HPCD",
++	.num_links = 1,
++};
++
++/**
++ * mpc8610_hpcd_probe: OF probe function for the fabric driver
++ *
++ * This function gets called when an SSI node is found in the device tree.
++ *
++ * Although this is a fabric driver, the SSI node is the "master" node with
++ * respect to audio hardware connections.  Therefore, we create a new ASoC
++ * device for each new SSI node that has a codec attached.
++ *
++ * FIXME: Currently, we only support one DMA controller, so if there are
++ * multiple SSI nodes with codecs, only the first will be supported.
++ *
++ * FIXME: Even if we did support multiple DMA controllers, we have no
++ * mechanism for assigning DMA controllers and channels to the individual
++ * SSI devices.  We also probably aren't compatible with the generic Elo DMA
++ * device driver.
++ */
++static int mpc8610_hpcd_probe(struct of_device *ofdev,
++	const struct of_device_id *match)
++{
++	struct device_node *np = ofdev->node;
++	struct device_node *codec_np = NULL;
++	struct device_node *guts_np = NULL;
++	struct device_node *dma_np = NULL;
++	struct device_node *dma_channel_np = NULL;
++	const phandle *codec_ph;
++	const char *sprop;
++	const u32 *iprop;
++	struct resource res;
++	struct platform_device *sound_device = NULL;
++	struct mpc8610_hpcd_data *machine_data;
++	struct fsl_ssi_info ssi_info;
++	struct fsl_dma_info dma_info;
++	int ret = -ENODEV;
++
++	machine_data = kzalloc(sizeof(struct mpc8610_hpcd_data), GFP_KERNEL);
++	if (!machine_data)
++		return -ENOMEM;
++
++	memset(&ssi_info, 0, sizeof(ssi_info));
++	memset(&dma_info, 0, sizeof(dma_info));
++
++	ssi_info.dev = &ofdev->dev;
++
++	/*
++	 * We are only interested in SSIs with a codec phandle in them, so let's
++	 * make sure this SSI has one.
++	 */
++	codec_ph = of_get_property(np, "codec-handle", NULL);
++	if (!codec_ph)
++		goto error;
++
++	codec_np = of_find_node_by_phandle(*codec_ph);
++	if (!codec_np)
++		goto error;
++
++	/* The MPC8610 HPCD only knows about the CS4270 codec, so reject
++	   anything else. */
++	if (!of_device_is_compatible(codec_np, "cirrus,cs4270"))
++		goto error;
++
++	/* Get the device ID */
++	iprop = of_get_property(np, "cell-index", NULL);
++	if (!iprop) {
++		dev_err(&ofdev->dev, "cell-index property not found\n");
++		ret = -EINVAL;
++		goto error;
++	}
++	machine_data->ssi_id = *iprop;
++	ssi_info.id = *iprop;
++
++	/* Get the serial format and clock direction. */
++	sprop = of_get_property(np, "fsl,mode", NULL);
++	if (!sprop) {
++		dev_err(&ofdev->dev, "fsl,mode property not found\n");
++		ret = -EINVAL;
++		goto error;
++	}
++
++	if (strcasecmp(sprop, "i2s-slave") == 0) {
++		machine_data->dai_format = SND_SOC_DAIFMT_I2S;
++		machine_data->codec_clk_direction = SND_SOC_CLOCK_OUT;
++		machine_data->cpu_clk_direction = SND_SOC_CLOCK_IN;
++
++		/*
++		 * In i2s-slave mode, the codec has its own clock source, so we
++		 * need to get the frequency from the device tree and pass it to
++		 * the codec driver.
++		 */
++		iprop = of_get_property(codec_np, "clock-frequency", NULL);
++		if (!iprop || !*iprop) {
++			dev_err(&ofdev->dev, "codec bus-frequency property "
++				"is missing or invalid\n");
++			ret = -EINVAL;
++			goto error;
++		}
++		machine_data->clk_frequency = *iprop;
++	} else if (strcasecmp(sprop, "i2s-master") == 0) {
++		machine_data->dai_format = SND_SOC_DAIFMT_I2S;
++		machine_data->codec_clk_direction = SND_SOC_CLOCK_IN;
++		machine_data->cpu_clk_direction = SND_SOC_CLOCK_OUT;
++	} else if (strcasecmp(sprop, "lj-slave") == 0) {
++		machine_data->dai_format = SND_SOC_DAIFMT_LEFT_J;
++		machine_data->codec_clk_direction = SND_SOC_CLOCK_OUT;
++		machine_data->cpu_clk_direction = SND_SOC_CLOCK_IN;
++	} else if (strcasecmp(sprop, "lj-master") == 0) {
++		machine_data->dai_format = SND_SOC_DAIFMT_LEFT_J;
++		machine_data->codec_clk_direction = SND_SOC_CLOCK_IN;
++		machine_data->cpu_clk_direction = SND_SOC_CLOCK_OUT;
++	} else if (strcasecmp(sprop, "rj-master") == 0) {
++		machine_data->dai_format = SND_SOC_DAIFMT_RIGHT_J;
++		machine_data->codec_clk_direction = SND_SOC_CLOCK_OUT;
++		machine_data->cpu_clk_direction = SND_SOC_CLOCK_IN;
++	} else if (strcasecmp(sprop, "rj-master") == 0) {
++		machine_data->dai_format = SND_SOC_DAIFMT_RIGHT_J;
++		machine_data->codec_clk_direction = SND_SOC_CLOCK_IN;
++		machine_data->cpu_clk_direction = SND_SOC_CLOCK_OUT;
++	} else if (strcasecmp(sprop, "ac97-slave") == 0) {
++		machine_data->dai_format = SND_SOC_DAIFMT_AC97;
++		machine_data->codec_clk_direction = SND_SOC_CLOCK_OUT;
++		machine_data->cpu_clk_direction = SND_SOC_CLOCK_IN;
++	} else if (strcasecmp(sprop, "ac97-master") == 0) {
++		machine_data->dai_format = SND_SOC_DAIFMT_AC97;
++		machine_data->codec_clk_direction = SND_SOC_CLOCK_IN;
++		machine_data->cpu_clk_direction = SND_SOC_CLOCK_OUT;
++	} else {
++		dev_err(&ofdev->dev,
++			"unrecognized fsl,mode property \"%s\"\n", sprop);
++		ret = -EINVAL;
++		goto error;
++	}
++
++	if (!machine_data->clk_frequency) {
++		dev_err(&ofdev->dev, "unknown clock frequency\n");
++		ret = -EINVAL;
++		goto error;
++	}
++
++	/* Read the SSI information from the device tree */
++	ret = of_address_to_resource(np, 0, &res);
++	if (ret) {
++		dev_err(&ofdev->dev, "could not obtain SSI address\n");
++		goto error;
++	}
++	if (!res.start) {
++		dev_err(&ofdev->dev, "invalid SSI address\n");
++		goto error;
++	}
++	ssi_info.ssi_phys = res.start;
++
++	machine_data->ssi = ioremap(ssi_info.ssi_phys, sizeof(struct ccsr_ssi));
++	if (!machine_data->ssi) {
++		dev_err(&ofdev->dev, "could not map SSI address %x\n",
++			ssi_info.ssi_phys);
++		ret = -EINVAL;
++		goto error;
++	}
++	ssi_info.ssi = machine_data->ssi;
++
++
++	/* Get the IRQ of the SSI */
++	machine_data->ssi_irq = irq_of_parse_and_map(np, 0);
++	if (!machine_data->ssi_irq) {
++		dev_err(&ofdev->dev, "could not get SSI IRQ\n");
++		ret = -EINVAL;
++		goto error;
++	}
++	ssi_info.irq = machine_data->ssi_irq;
++
++
++	/* Map the global utilities registers. */
++	guts_np = of_find_compatible_node(NULL, NULL, "fsl,mpc8610-guts");
++	if (!guts_np) {
++		dev_err(&ofdev->dev, "could not obtain address of GUTS\n");
++		ret = -EINVAL;
++		goto error;
++	}
++	machine_data->guts = of_iomap(guts_np, 0);
++	of_node_put(guts_np);
++	if (!machine_data->guts) {
++		dev_err(&ofdev->dev, "could not map GUTS\n");
++		ret = -EINVAL;
++		goto error;
++	}
++
++	/* Find the DMA channels to use.  For now, we always use the first DMA
++	   controller. */
++	for_each_compatible_node(dma_np, NULL, "fsl,mpc8610-dma") {
++		iprop = of_get_property(dma_np, "cell-index", NULL);
++		if (iprop && (*iprop == 0)) {
++			of_node_put(dma_np);
++			break;
++		}
++	}
++	if (!dma_np) {
++		dev_err(&ofdev->dev, "could not find DMA node\n");
++		ret = -EINVAL;
++		goto error;
++	}
++	machine_data->dma_id = *iprop;
++
++	/*
++	 * Find the DMA channels to use.  For now, we always use DMA channel 0
++	 * for playback, and DMA channel 1 for capture.
++	 */
++	while ((dma_channel_np = of_get_next_child(dma_np, dma_channel_np))) {
++		iprop = of_get_property(dma_channel_np, "cell-index", NULL);
++		/* Is it DMA channel 0? */
++		if (iprop && (*iprop == 0)) {
++			/* dma_channel[0] and dma_irq[0] are for playback */
++			dma_info.dma_channel[0] = of_iomap(dma_channel_np, 0);
++			dma_info.dma_irq[0] =
++				irq_of_parse_and_map(dma_channel_np, 0);
++			machine_data->dma_channel_id[0] = *iprop;
++			continue;
++		}
++		if (iprop && (*iprop == 1)) {
++			/* dma_channel[1] and dma_irq[1] are for capture */
++			dma_info.dma_channel[1] = of_iomap(dma_channel_np, 0);
++			dma_info.dma_irq[1] =
++				irq_of_parse_and_map(dma_channel_np, 0);
++			machine_data->dma_channel_id[1] = *iprop;
++			continue;
++		}
++	}
++	if (!dma_info.dma_channel[0] || !dma_info.dma_channel[1] ||
++	    !dma_info.dma_irq[0] || !dma_info.dma_irq[1]) {
++		dev_err(&ofdev->dev, "could not find DMA channels\n");
++		ret = -EINVAL;
++		goto error;
++	}
++
++	dma_info.ssi_stx_phys = ssi_info.ssi_phys +
++		offsetof(struct ccsr_ssi, stx0);
++	dma_info.ssi_srx_phys = ssi_info.ssi_phys +
++		offsetof(struct ccsr_ssi, srx0);
++
++	/* We have the DMA information, so tell the DMA driver what it is */
++	if (!fsl_dma_configure(&dma_info)) {
++		dev_err(&ofdev->dev, "could not instantiate DMA device\n");
++		ret = -EBUSY;
++		goto error;
++	}
++
++	/*
++	 * Initialize our DAI data structure.  We should probably get this
++	 * information from the device tree.
++	 */
++	machine_data->dai.name = "CS4270";
++	machine_data->dai.stream_name = "CS4270";
++
++	machine_data->dai.cpu_dai = fsl_ssi_create_dai(&ssi_info);
++	machine_data->dai.codec_dai = &cs4270_dai; /* The codec_dai we want */
++	machine_data->dai.ops = &mpc8610_hpcd_ops;
++
++	mpc8610_hpcd_machine.dai_link = &machine_data->dai;
++
++	/* Allocate a new audio platform device structure */
++	sound_device = platform_device_alloc("soc-audio", -1);
++	if (!sound_device) {
++		dev_err(&ofdev->dev, "platform device allocation failed\n");
++		ret = -ENOMEM;
++		goto error;
++	}
++
++	machine_data->sound_devdata.machine = &mpc8610_hpcd_machine;
++	machine_data->sound_devdata.codec_dev = &soc_codec_device_cs4270;
++	machine_data->sound_devdata.platform = &fsl_soc_platform;
++
++	sound_device->dev.platform_data = machine_data;
++
++
++	/* Set the platform device and ASoC device to point to each other */
++	platform_set_drvdata(sound_device, &machine_data->sound_devdata);
++
++	machine_data->sound_devdata.dev = &sound_device->dev;
++
++
++	/* Tell ASoC to probe us.  This will call mpc8610_hpcd_machine.probe(),
++	   if it exists. */
++	ret = platform_device_add(sound_device);
++
++	if (ret) {
++		dev_err(&ofdev->dev, "platform device add failed\n");
++		goto error;
++	}
++
++	dev_set_drvdata(&ofdev->dev, sound_device);
++
++	return 0;
++
++error:
++	of_node_put(codec_np);
++	of_node_put(guts_np);
++	of_node_put(dma_np);
++	of_node_put(dma_channel_np);
++
++	if (sound_device)
++		platform_device_unregister(sound_device);
++
++	if (machine_data->dai.cpu_dai)
++		fsl_ssi_destroy_dai(machine_data->dai.cpu_dai);
++
++	if (ssi_info.ssi)
++		iounmap(ssi_info.ssi);
++
++	if (ssi_info.irq)
++		irq_dispose_mapping(ssi_info.irq);
++
++	if (dma_info.dma_channel[0])
++		iounmap(dma_info.dma_channel[0]);
++
++	if (dma_info.dma_channel[1])
++		iounmap(dma_info.dma_channel[1]);
++
++	if (dma_info.dma_irq[0])
++		irq_dispose_mapping(dma_info.dma_irq[0]);
++
++	if (dma_info.dma_irq[1])
++		irq_dispose_mapping(dma_info.dma_irq[1]);
++
++	if (machine_data->guts)
++		iounmap(machine_data->guts);
++
++	kfree(machine_data);
++
++	return ret;
++}
++
++/**
++ * mpc8610_hpcd_remove: remove the OF device
++ *
++ * This function is called when the OF device is removed.
++ */
++static int mpc8610_hpcd_remove(struct of_device *ofdev)
++{
++	struct platform_device *sound_device = dev_get_drvdata(&ofdev->dev);
++	struct mpc8610_hpcd_data *machine_data =
++		sound_device->dev.platform_data;
++
++	platform_device_unregister(sound_device);
++
++	if (machine_data->dai.cpu_dai)
++		fsl_ssi_destroy_dai(machine_data->dai.cpu_dai);
++
++	if (machine_data->ssi)
++		iounmap(machine_data->ssi);
++
++	if (machine_data->dma[0])
++		iounmap(machine_data->dma[0]);
++
++	if (machine_data->dma[1])
++		iounmap(machine_data->dma[1]);
++
++	if (machine_data->dma_irq[0])
++		irq_dispose_mapping(machine_data->dma_irq[0]);
++
++	if (machine_data->dma_irq[1])
++		irq_dispose_mapping(machine_data->dma_irq[1]);
++
++	if (machine_data->guts)
++		iounmap(machine_data->guts);
++
++	kfree(machine_data);
++	sound_device->dev.platform_data = NULL;
++
++	dev_set_drvdata(&ofdev->dev, NULL);
++
++	return 0;
++}
++
++static struct of_device_id mpc8610_hpcd_match[] = {
++	{
++		.compatible = "fsl,mpc8610-ssi",
++	},
++	{}
++};
++MODULE_DEVICE_TABLE(of, mpc8610_hpcd_match);
++
++static struct of_platform_driver mpc8610_hpcd_of_driver = {
++	.owner  	= THIS_MODULE,
++	.name   	= "mpc8610_hpcd",
++	.match_table    = mpc8610_hpcd_match,
++	.probe  	= mpc8610_hpcd_probe,
++	.remove 	= mpc8610_hpcd_remove,
++};
++
++/**
++ * mpc8610_hpcd_init: fabric driver initialization.
++ *
++ * This function is called when this module is loaded.
++ */
++static int __init mpc8610_hpcd_init(void)
++{
++	int ret;
++
++	printk(KERN_INFO "Freescale MPC8610 HPCD ALSA SoC fabric driver\n");
++
++	ret = of_register_platform_driver(&mpc8610_hpcd_of_driver);
++
++	if (ret)
++		printk(KERN_ERR
++			"mpc8610-hpcd: failed to register platform driver\n");
++
++	return ret;
++}
++
++/**
++ * mpc8610_hpcd_exit: fabric driver exit
++ *
++ * This function is called when this driver is unloaded.
++ */
++static void __exit mpc8610_hpcd_exit(void)
++{
++	of_unregister_platform_driver(&mpc8610_hpcd_of_driver);
++}
++
++module_init(mpc8610_hpcd_init);
++module_exit(mpc8610_hpcd_exit);
++
++MODULE_AUTHOR("Timur Tabi <timur@freescale.com>");
++MODULE_DESCRIPTION("Freescale MPC8610 HPCD ALSA SoC fabric driver");
++MODULE_LICENSE("GPL");
+Index: linux-2.6.18/mvl_patches/pro50-1395.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1395.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1395);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

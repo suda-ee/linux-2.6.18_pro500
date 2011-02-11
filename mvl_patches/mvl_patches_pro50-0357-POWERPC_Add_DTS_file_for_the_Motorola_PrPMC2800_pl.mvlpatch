@@ -1,0 +1,561 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Add_DTS_file_for_the_Motorola_PrPMC2800_pl
+# Date: Wed Sep 26 11:17:58 2007
+# MR: 24856
+# From 3f456cc18f63bebdf71d788098c72d7ecd83c9b6 Mon Sep 17 00:00:00 2001
+# From: Mark A. Greer <mgreer@mvista.com>
+# Date: Sat, 12 May 2007 10:57:58 +1000
+# Subject: [PATCH] [POWERPC] Add DTS file for the Motorola PrPMC2800 platform
+# 
+# Add the device tree source file for the prpmc2800 line of processor PMCs.
+# Several of the property values are updated by the bootwrapper but sane
+# defaults have been chosen in case the bootwrapper can't determine the
+# exact processor board variant.  The defaults should allow the kernel
+# to boot despite having non-optimal device tree property values.
+# 
+# Signed-off-by: Mark A. Greer <mgreer@mvista.com>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=357
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From 3f456cc18f63bebdf71d788098c72d7ecd83c9b6 Mon Sep 17 00:00:00 2001
+From: Mark A. Greer <mgreer@mvista.com>
+Date: Sat, 12 May 2007 10:57:58 +1000
+Subject: [PATCH] [POWERPC] Add DTS file for the Motorola PrPMC2800 platform
+
+Add the device tree source file for the prpmc2800 line of processor PMCs.
+Several of the property values are updated by the bootwrapper but sane
+defaults have been chosen in case the bootwrapper can't determine the
+exact processor board variant.  The defaults should allow the kernel
+to boot despite having non-optimal device tree property values.
+
+Signed-off-by: Mark A. Greer <mgreer@mvista.com>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/boot/dts/prpmc2800.dts
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/boot/dts/prpmc2800.dts
+@@ -0,0 +1,315 @@
++/* Device Tree Source for Motorola PrPMC2800
++ *
++ * Author: Mark A. Greer <mgreer@mvista.com>
++ *
++ * 2007 (c) MontaVista, Software, Inc.  This file is licensed under
++ * the terms of the GNU General Public License version 2.  This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ *
++ * Property values that are labeled as "Default" will be updated by bootwrapper
++ * if it can determine the exact PrPMC type.
++ *
++ * To build:
++ *   dtc -I dts -O asm -o prpmc2800.S -b 0 prpmc2800.dts
++ *   dtc -I dts -O dtb -o prpmc2800.dtb -b 0 prpmc2800.dts
++ */
++
++/ {
++	#address-cells = <1>;
++	#size-cells = <1>;
++	model = "PrPMC280/PrPMC2800"; /* Default */
++	compatible = "motorola,PrPMC2800";
++	coherency-off;
++
++	cpus {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		PowerPC,7447 {
++			device_type = "cpu";
++			reg = <0>;
++			clock-frequency = <2bb0b140>;	/* Default (733 MHz) */
++			bus-frequency = <7f28155>;	/* 133.333333 MHz */
++			timebase-frequency = <1fca055>;	/* 33.333333 MHz */
++			i-cache-line-size = <20>;
++			d-cache-line-size = <20>;
++			i-cache-size = <8000>;
++			d-cache-size = <8000>;
++		};
++	};
++
++	memory {
++		device_type = "memory";
++		reg = <00000000 20000000>;	/* Default (512MB) */
++	};
++
++	mv64x60@f1000000 { /* Marvell Discovery */
++		#address-cells = <1>;
++		#size-cells = <1>;
++		#interrupt-cells = <1>;
++		model = "mv64360";			/* Default */
++		compatible = "marvell,mv64x60";
++		clock-frequency = <7f28155>;		/* 133.333333 MHz */
++		reg = <f1000000 00010000>;
++		virtual-reg = <f1000000>;
++		ranges = <88000000 88000000 01000000	/* PCI 0 I/O Space */
++			  80000000 80000000 08000000	/* PCI 0 MEM Space */
++			  a0000000 a0000000 04000000	/* User FLASH */
++			  00000000 f1000000 00010000	/* Bridge's regs */
++			  f2000000 f2000000 00040000>;	/* Integrated SRAM */
++
++		flash@a0000000 {
++			device_type = "rom";
++			compatible = "direct-mapped";
++			reg = <a0000000 4000000>; /* Default (64MB) */
++			probe-type = "CFI";
++			bank-width = <4>;
++			partitions = <00000000 00100000 /* RO */
++				      00100000 00040001 /* RW */
++				      00140000 00400000 /* RO */
++				      00540000 039c0000 /* RO */
++				      03f00000 00100000>; /* RO */
++			partition-names = "FW Image A", "FW Config Data", "Kernel Image", "Filesystem", "FW Image B";
++		};
++
++		mdio {
++			#address-cells = <1>;
++			#size-cells = <0>;
++			device_type = "mdio";
++			compatible = "marvell,mv64x60-mdio";
++			ethernet-phy@1 {
++				device_type = "ethernet-phy";
++				compatible = "broadcom,bcm5421";
++				interrupts = <4c>;	/* GPP 12 */
++				interrupt-parent = <&/mv64x60/pic>;
++				reg = <1>;
++			};
++			ethernet-phy@3 {
++				device_type = "ethernet-phy";
++				compatible = "broadcom,bcm5421";
++				interrupts = <4c>;	/* GPP 12 */
++				interrupt-parent = <&/mv64x60/pic>;
++				reg = <3>;
++			};
++		};
++
++		ethernet@2000 {
++			reg = <2000 2000>;
++			eth0 {
++				device_type = "network";
++				compatible = "marvell,mv64x60-eth";
++				block-index = <0>;
++				interrupts = <20>;
++				interrupt-parent = <&/mv64x60/pic>;
++				phy = <&/mv64x60/mdio/ethernet-phy@1>;
++				local-mac-address = [ 00 00 00 00 00 00 ];
++			};
++			eth1 {
++				device_type = "network";
++				compatible = "marvell,mv64x60-eth";
++				block-index = <1>;
++				interrupts = <21>;
++				interrupt-parent = <&/mv64x60/pic>;
++				phy = <&/mv64x60/mdio/ethernet-phy@3>;
++				local-mac-address = [ 00 00 00 00 00 00 ];
++			};
++		};
++
++		sdma@4000 {
++			device_type = "dma";
++			compatible = "marvell,mv64x60-sdma";
++			reg = <4000 c18>;
++			virtual-reg = <f1004000>;
++			interrupt-base = <0>;
++			interrupts = <24>;
++			interrupt-parent = <&/mv64x60/pic>;
++		};
++
++		sdma@6000 {
++			device_type = "dma";
++			compatible = "marvell,mv64x60-sdma";
++			reg = <6000 c18>;
++			virtual-reg = <f1006000>;
++			interrupt-base = <0>;
++			interrupts = <26>;
++			interrupt-parent = <&/mv64x60/pic>;
++		};
++
++		brg@b200 {
++			compatible = "marvell,mv64x60-brg";
++			reg = <b200 8>;
++			clock-src = <8>;
++			clock-frequency = <7ed6b40>;
++			current-speed = <2580>;
++			bcr = <0>;
++		};
++
++		brg@b208 {
++			compatible = "marvell,mv64x60-brg";
++			reg = <b208 8>;
++			clock-src = <8>;
++			clock-frequency = <7ed6b40>;
++			current-speed = <2580>;
++			bcr = <0>;
++		};
++
++		cunit@f200 {
++			reg = <f200 200>;
++		};
++
++		mpscrouting@b400 {
++			reg = <b400 c>;
++		};
++
++		mpscintr@b800 {
++			reg = <b800 100>;
++			virtual-reg = <f100b800>;
++		};
++
++		mpsc@8000 {
++			device_type = "serial";
++			compatible = "marvell,mpsc";
++			reg = <8000 38>;
++			virtual-reg = <f1008000>;
++			sdma = <&/mv64x60/sdma@4000>;
++			brg = <&/mv64x60/brg@b200>;
++			cunit = <&/mv64x60/cunit@f200>;
++			mpscrouting = <&/mv64x60/mpscrouting@b400>;
++			mpscintr = <&/mv64x60/mpscintr@b800>;
++			block-index = <0>;
++			max_idle = <28>;
++			chr_1 = <0>;
++			chr_2 = <0>;
++			chr_10 = <3>;
++			mpcr = <0>;
++			interrupts = <28>;
++			interrupt-parent = <&/mv64x60/pic>;
++		};
++
++		mpsc@9000 {
++			device_type = "serial";
++			compatible = "marvell,mpsc";
++			reg = <9000 38>;
++			virtual-reg = <f1009000>;
++			sdma = <&/mv64x60/sdma@6000>;
++			brg = <&/mv64x60/brg@b208>;
++			cunit = <&/mv64x60/cunit@f200>;
++			mpscrouting = <&/mv64x60/mpscrouting@b400>;
++			mpscintr = <&/mv64x60/mpscintr@b800>;
++			block-index = <1>;
++			max_idle = <28>;
++			chr_1 = <0>;
++			chr_2 = <0>;
++			chr_10 = <3>;
++			mpcr = <0>;
++			interrupts = <2a>;
++			interrupt-parent = <&/mv64x60/pic>;
++		};
++
++		i2c@c000 {
++			device_type = "i2c";
++			compatible = "marvell,mv64x60-i2c";
++			reg = <c000 20>;
++			virtual-reg = <f100c000>;
++			freq_m = <8>;
++			freq_n = <3>;
++			timeout = <3e8>;		/* 1000 = 1 second */
++			retries = <1>;
++			interrupts = <25>;
++			interrupt-parent = <&/mv64x60/pic>;
++		};
++
++		pic {
++			#interrupt-cells = <1>;
++			#address-cells = <0>;
++			compatible = "marvell,mv64x60-pic";
++			reg = <0000 88>;
++			interrupt-controller;
++		};
++
++		mpp@f000 {
++			compatible = "marvell,mv64x60-mpp";
++			reg = <f000 10>;
++		};
++
++		gpp@f100 {
++			compatible = "marvell,mv64x60-gpp";
++			reg = <f100 20>;
++		};
++
++		pci@80000000 {
++			#address-cells = <3>;
++			#size-cells = <2>;
++			#interrupt-cells = <1>;
++			device_type = "pci";
++			compatible = "marvell,mv64x60-pci";
++			reg = <0cf8 8>;
++			ranges = <01000000 0        0 88000000 0 01000000
++				  02000000 0 80000000 80000000 0 08000000>;
++			bus-range = <0 ff>;
++			clock-frequency = <3EF1480>;
++			interrupt-pci-iack = <0c34>;
++			interrupt-parent = <&/mv64x60/pic>;
++			interrupt-map-mask = <f800 0 0 7>;
++			interrupt-map = <
++				/* IDSEL 0x0a */
++				5000 0 0 1 &/mv64x60/pic 50
++				5000 0 0 2 &/mv64x60/pic 51
++				5000 0 0 3 &/mv64x60/pic 5b
++				5000 0 0 4 &/mv64x60/pic 5d
++
++				/* IDSEL 0x0b */
++				5800 0 0 1 &/mv64x60/pic 5b
++				5800 0 0 2 &/mv64x60/pic 5d
++				5800 0 0 3 &/mv64x60/pic 50
++				5800 0 0 4 &/mv64x60/pic 51
++
++				/* IDSEL 0x0c */
++				6000 0 0 1 &/mv64x60/pic 5b
++				6000 0 0 2 &/mv64x60/pic 5d
++				6000 0 0 3 &/mv64x60/pic 50
++				6000 0 0 4 &/mv64x60/pic 51
++
++				/* IDSEL 0x0d */
++				6800 0 0 1 &/mv64x60/pic 5d
++				6800 0 0 2 &/mv64x60/pic 50
++				6800 0 0 3 &/mv64x60/pic 51
++				6800 0 0 4 &/mv64x60/pic 5b
++			>;
++		};
++
++		cpu-error@0070 {
++			compatible = "marvell,mv64x60-cpu-error";
++			reg = <0070 10 0128 28>;
++			interrupts = <03>;
++			interrupt-parent = <&/mv64x60/pic>;
++		};
++
++		sram-ctrl@0380 {
++			compatible = "marvell,mv64x60-sram-ctrl";
++			reg = <0380 80>;
++			interrupts = <0d>;
++			interrupt-parent = <&/mv64x60/pic>;
++		};
++
++		pci-error@1d40 {
++			compatible = "marvell,mv64x60-pci-error";
++			reg = <1d40 40 0c28 4>;
++			interrupts = <0c>;
++			interrupt-parent = <&/mv64x60/pic>;
++		};
++
++		mem-ctrl@1400 {
++			compatible = "marvell,mv64x60-mem-ctrl";
++			reg = <1400 60>;
++			interrupts = <11>;
++			interrupt-parent = <&/mv64x60/pic>;
++		};
++	};
++
++	chosen {
++		bootargs = "ip=on console=ttyMM0";
++		linux,stdout-path = "/mv64x60@f1000000/mpsc@8000";
++	};
++};
+Index: linux-2.6.18/mvl_patches/pro50-0357.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0357.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(357);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

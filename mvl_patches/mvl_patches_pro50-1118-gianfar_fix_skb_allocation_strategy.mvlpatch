@@ -1,0 +1,459 @@
+#! /usr/bin/env bash
+# Patch: -gianfar_fix_skb_allocation_strategy
+# Date: Thu May 22 12:42:53 2008
+# Source: kernel.org
+# MR: 28238
+# Type: Defect Fix
+# Disposition: backport from 2.6.26-rc1 (815b97c6b8861f2e539c9ecb44c02b7b8ac11ca4)
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# 
+# commit 815b97c6b8861f2e539c9ecb44c02b7b8ac11ca4
+# Author: Andy Fleming <afleming@freescale.com>
+# Date:   Tue Apr 22 17:18:29 2008 -0500
+# 
+#     gianfar: Fix skb allocation strategy
+#     
+#     gianfar was unable to handle failed skb allocation for rx buffers, so
+#     we were spinning until it succeeded.  Actually, it was worse--we were
+#     spinning for a long time, and then silently failing.  Instead, we take
+#     Stephen Hemminger's suggestion to try the allocation earlier, and drop the
+#     packet if it failed.
+#     
+#     We also make a couple of tweaks to how buffer descriptors are set up.
+#     
+#     Signed-off-by: Andy Fleming <afleming@freescale.com>
+#     Signed-off-by: Jeff Garzik <jgarzik@redhat.com>
+# 
+#  drivers/net/gianfar.c |  102 +++++++++++++++++++++++++++++++------------------
+#  1 files changed, 65 insertions(+), 37 deletions(-)
+# 
+# 
+
+PATCHNUM=1118
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: kernel.org
+MR: 28238
+Type: Defect Fix
+Disposition: backport from 2.6.26-rc1 (815b97c6b8861f2e539c9ecb44c02b7b8ac11ca4)
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+
+commit 815b97c6b8861f2e539c9ecb44c02b7b8ac11ca4
+Author: Andy Fleming <afleming@freescale.com>
+Date:   Tue Apr 22 17:18:29 2008 -0500
+
+    gianfar: Fix skb allocation strategy
+    
+    gianfar was unable to handle failed skb allocation for rx buffers, so
+    we were spinning until it succeeded.  Actually, it was worse--we were
+    spinning for a long time, and then silently failing.  Instead, we take
+    Stephen Hemminger's suggestion to try the allocation earlier, and drop the
+    packet if it failed.
+    
+    We also make a couple of tweaks to how buffer descriptors are set up.
+    
+    Signed-off-by: Andy Fleming <afleming@freescale.com>
+    Signed-off-by: Jeff Garzik <jgarzik@redhat.com>
+
+ drivers/net/gianfar.c    |  102 +++++++++++++++++++++++++++++------------------
+ mvl_patches/pro50-1118.c |   16 +++++++
+ 2 files changed, 81 insertions(+), 37 deletions(-)
+
+
+Index: linux-2.6.18/drivers/net/gianfar.c
+===================================================================
+--- linux-2.6.18.orig/drivers/net/gianfar.c
++++ linux-2.6.18/drivers/net/gianfar.c
+@@ -99,7 +99,6 @@
+ #include "gianfar_mii.h"
+ 
+ #define TX_TIMEOUT      (1*HZ)
+-#define SKB_ALLOC_TIMEOUT 1000000
+ #undef BRIEF_GFAR_ERRORS
+ #undef VERBOSE_GFAR_ERRORS
+ 
+@@ -116,7 +115,9 @@ static int gfar_enet_open(struct net_dev
+ static int gfar_start_xmit(struct sk_buff *skb, struct net_device *dev);
+ static void gfar_timeout(struct net_device *dev);
+ static int gfar_close(struct net_device *dev);
+-struct sk_buff *gfar_new_skb(struct net_device *dev, struct rxbd8 *bdp);
++struct sk_buff *gfar_new_skb(struct net_device *dev);
++static void gfar_new_rxbdp(struct net_device *dev, struct rxbd8 *bdp,
++		struct sk_buff *skb);
+ static struct net_device_stats *gfar_get_stats(struct net_device *dev);
+ static int gfar_set_mac_address(struct net_device *dev);
+ static int gfar_change_mtu(struct net_device *dev, int new_mtu);
+@@ -770,14 +771,21 @@ int startup_gfar(struct net_device *dev)
+ 
+ 	rxbdp = priv->rx_bd_base;
+ 	for (i = 0; i < priv->rx_ring_size; i++) {
+-		struct sk_buff *skb = NULL;
++		struct sk_buff *skb;
+ 
+-		rxbdp->status = 0;
++		skb = gfar_new_skb(dev);
+ 
+-		skb = gfar_new_skb(dev, rxbdp);
++		if (!skb) {
++			printk(KERN_ERR "%s: Can't allocate RX buffers\n",
++					dev->name);
++
++			goto err_rxalloc_fail;
++		}
+ 
+ 		priv->rx_skbuff[i] = skb;
+ 
++		gfar_new_rxbdp(dev, rxbdp, skb);
++
+ 		rxbdp++;
+ 	}
+ 
+@@ -903,6 +911,7 @@ rx_irq_fail:
+ tx_irq_fail:
+ 	free_irq(priv->interruptError, dev);
+ err_irq_fail:
++err_rxalloc_fail:	
+ rx_skb_fail:
+ 	free_skb_resources(priv);
+ tx_skb_fail:
+@@ -1318,18 +1327,37 @@ static irqreturn_t gfar_transmit(int irq
+ 	return IRQ_HANDLED;
+ }
+ 
+-struct sk_buff * gfar_new_skb(struct net_device *dev, struct rxbd8 *bdp)
++static void gfar_new_rxbdp(struct net_device *dev, struct rxbd8 *bdp,
++		struct sk_buff *skb)
++{
++	struct gfar_private *priv = netdev_priv(dev);
++	u32 * status_len = (u32 *)bdp;
++	u16 flags;
++
++	bdp->bufPtr = dma_map_single(NULL, skb->data,
++			priv->rx_buffer_size, DMA_FROM_DEVICE);
++
++	flags = RXBD_EMPTY | RXBD_INTERRUPT;
++
++	if (bdp == priv->rx_bd_base + priv->rx_ring_size - 1)
++		flags |= RXBD_WRAP;
++
++	eieio();
++
++	*status_len = (u32)flags << 16;
++}
++
++
++struct sk_buff * gfar_new_skb(struct net_device *dev)
+ {
+ 	unsigned int alignamount;
+ 	struct gfar_private *priv = netdev_priv(dev);
+ 	struct sk_buff *skb = NULL;
+-	unsigned int timeout = SKB_ALLOC_TIMEOUT;
+ 
+ 	/* We have to allocate the skb, so keep trying till we succeed */
+-	while ((!skb) && timeout--)
+-		skb = dev_alloc_skb(priv->rx_buffer_size + RXBUF_ALIGNMENT);
++	skb = netdev_alloc_skb(dev, priv->rx_buffer_size + RXBUF_ALIGNMENT);
+ 
+-	if (NULL == skb)
++	if (!skb)
+ 		return NULL;
+ 
+ 	alignamount = RXBUF_ALIGNMENT -
+@@ -1340,17 +1368,6 @@ struct sk_buff * gfar_new_skb(struct net
+ 	 */
+ 	skb_reserve(skb, alignamount);
+ 
+-	skb->dev = dev;
+-
+-	bdp->bufPtr = dma_map_single(NULL, skb->data,
+-			priv->rx_buffer_size, DMA_FROM_DEVICE);
+-
+-	bdp->length = 0;
+-
+-	/* Mark the buffer empty */
+-	eieio();
+-	bdp->status |= (RXBD_EMPTY | RXBD_INTERRUPT);
+-
+ 	return skb;
+ }
+ 
+@@ -1535,10 +1552,31 @@ int gfar_clean_rx_ring(struct net_device
+ 	bdp = priv->cur_rx;
+ 
+ 	while (!((bdp->status & RXBD_EMPTY) || (--rx_work_limit < 0))) {
++		struct sk_buff *newskb;
+ 		rmb();
++
++		/* Add another skb for the future */
++		newskb = gfar_new_skb(dev);
++
+ 		skb = priv->rx_skbuff[priv->skb_currx];
+ 
+-		if ((bdp->status & RXBD_LAST) && !(bdp->status & RXBD_ERR)) {
++		/* We drop the frame if we failed to allocate a new buffer */
++		if (unlikely(!newskb || !(bdp->status & RXBD_LAST) ||
++				 bdp->status & RXBD_ERR)) {
++			count_errors(bdp->status, priv);
++
++			if (unlikely(!newskb))
++				newskb = skb;
++
++			if (skb) {
++				dma_unmap_single(&priv->dev->dev,
++						bdp->bufPtr,
++						priv->rx_buffer_size,
++						DMA_FROM_DEVICE);
++
++				dev_kfree_skb_any(skb);
++			}
++		} else {
+ 			/* Increment the number of packets */
+ 			priv->stats.rx_packets++;
+ 			howmany++;
+@@ -1549,23 +1587,14 @@ int gfar_clean_rx_ring(struct net_device
+ 			gfar_process_frame(dev, skb, pkt_len);
+ 
+ 			priv->stats.rx_bytes += pkt_len;
+-		} else {
+-			count_errors(bdp->status, priv);
+-
+-			if (skb)
+-				dev_kfree_skb_any(skb);
+-
+-			priv->rx_skbuff[priv->skb_currx] = NULL;
+ 		}
+ 
+ 		dev->last_rx = jiffies;
+ 
+-		/* Clear the status flags for this buffer */
+-		bdp->status &= ~RXBD_STATS;
++		priv->rx_skbuff[priv->skb_currx] = newskb;
+ 
+-		/* Add another skb for the future */
+-		skb = gfar_new_skb(dev, bdp);
+-		priv->rx_skbuff[priv->skb_currx] = skb;
++		/* Setup the new bdp */
++		gfar_new_rxbdp(dev, bdp, newskb);
+ 
+ 		/* Update to the next pointer */
+ 		if (bdp->status & RXBD_WRAP)
+@@ -1575,9 +1604,8 @@ int gfar_clean_rx_ring(struct net_device
+ 
+ 		/* update to point at the next skb */
+ 		priv->skb_currx =
+-		    (priv->skb_currx +
+-		     1) & RX_RING_MOD_MASK(priv->rx_ring_size);
+-
++		    (priv->skb_currx + 1) &
++		    RX_RING_MOD_MASK(priv->rx_ring_size);
+ 	}
+ 
+ 	/* Update the current rxbd pointer to be the next one */
+Index: linux-2.6.18/mvl_patches/pro50-1118.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1118.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1118);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

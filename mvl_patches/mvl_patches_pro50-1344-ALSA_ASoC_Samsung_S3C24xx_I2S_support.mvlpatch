@@ -1,0 +1,731 @@
+#! /usr/bin/env bash
+# Patch: -ALSA_ASoC_Samsung_S3C24xx_I2S_support
+# Date: Mon Jul 21 10:28:32 2008
+# MR: 26835
+# Disposition: Backport from 2.6.22-rc1
+# Adjustments:
+# 
+# From c1422a6658ef6101fc5a979021487c732cb177a1 Mon Sep 17 00:00:00 2001
+# From: Ben Dooks <ben@simtec.co.uk>
+# Date: Wed, 14 Feb 2007 13:17:49 +0100
+# Subject: [PATCH] [ALSA] ASoC Samsung S3C24xx I2S support
+# 
+# This patch by Ben Dooks from Simtec Electronics adds ASoC I2S support
+# for the Samsung S3C24xx CPU.
+# 
+# Signed-off-by: Ben Dooks <ben@simtec.co.uk>
+# Signed-off-by: Graeme Gregory <gg@opensource.wolfsonmicro.com>
+# Signed-off-by: Liam Girdwood <lg@opensource.wolfsonmicro.com>
+# Signed-off-by: Takashi Iwai <tiwai@suse.de>
+# Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+
+PATCHNUM=1344
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26835
+Disposition: Backport from 2.6.22-rc1
+Adjustments:
+
+From c1422a6658ef6101fc5a979021487c732cb177a1 Mon Sep 17 00:00:00 2001
+From: Ben Dooks <ben@simtec.co.uk>
+Date: Wed, 14 Feb 2007 13:17:49 +0100
+Subject: [PATCH] [ALSA] ASoC Samsung S3C24xx I2S support
+
+This patch by Ben Dooks from Simtec Electronics adds ASoC I2S support
+for the Samsung S3C24xx CPU.
+
+Signed-off-by: Ben Dooks <ben@simtec.co.uk>
+Signed-off-by: Graeme Gregory <gg@opensource.wolfsonmicro.com>
+Signed-off-by: Liam Girdwood <lg@opensource.wolfsonmicro.com>
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+Index: linux-2.6.18/sound/soc/s3c24xx/s3c24xx-i2s.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/s3c24xx/s3c24xx-i2s.c
+@@ -0,0 +1,439 @@
++/*
++ * s3c24xx-i2s.c  --  ALSA Soc Audio Layer
++ *
++ * (c) 2006 Wolfson Microelectronics PLC.
++ * Graeme Gregory graeme.gregory@wolfsonmicro.com or linux@wolfsonmicro.com
++ *
++ * (c) 2004-2005 Simtec Electronics
++ *	http://armlinux.simtec.co.uk/
++ *	Ben Dooks <ben@simtec.co.uk>
++ *
++ *  This program is free software; you can redistribute  it and/or modify it
++ *  under  the terms of  the GNU General  Public License as published by the
++ *  Free Software Foundation;  either version 2 of the  License, or (at your
++ *  option) any later version.
++ *
++ *
++ *  Revision history
++ *    11th Dec 2006   Merged with Simtec driver
++ *    10th Nov 2006   Initial version.
++ */
++
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/device.h>
++#include <linux/delay.h>
++#include <linux/clk.h>
++#include <sound/driver.h>
++#include <sound/core.h>
++#include <sound/pcm.h>
++#include <sound/pcm_params.h>
++#include <sound/initval.h>
++#include <sound/soc.h>
++
++#include <asm/hardware.h>
++#include <asm/io.h>
++#include <asm/arch/regs-iis.h>
++#include <asm/arch/regs-gpio.h>
++#include <asm/arch/regs-clock.h>
++#include <asm/arch/audio.h>
++#include <asm/dma.h>
++#include <asm/arch/dma.h>
++
++#include "s3c24xx-pcm.h"
++#include "s3c24xx-i2s.h"
++
++#define S3C24XX_I2S_DEBUG 0
++#if S3C24XX_I2S_DEBUG
++#define DBG(x...) printk(KERN_DEBUG x)
++#else
++#define DBG(x...)
++#endif
++
++static struct s3c2410_dma_client s3c24xx_dma_client_out = {
++	.name = "I2S PCM Stereo out"
++};
++
++static struct s3c2410_dma_client s3c24xx_dma_client_in = {
++	.name = "I2S PCM Stereo in"
++};
++
++static struct s3c24xx_pcm_dma_params s3c24xx_i2s_pcm_stereo_out = {
++	.client		= &s3c24xx_dma_client_out,
++	.channel	= DMACH_I2S_OUT,
++	.dma_addr	= S3C2410_PA_IIS + S3C2410_IISFIFO
++};
++
++static struct s3c24xx_pcm_dma_params s3c24xx_i2s_pcm_stereo_in = {
++	.client		= &s3c24xx_dma_client_in,
++	.channel	= DMACH_I2S_IN,
++	.dma_addr	= S3C2410_PA_IIS + S3C2410_IISFIFO
++};
++
++struct s3c24xx_i2s_info {
++	void __iomem	*regs;
++	struct clk	*iis_clk;
++};
++static struct s3c24xx_i2s_info s3c24xx_i2s;
++
++static void s3c24xx_snd_txctrl(int on)
++{
++	u32 iisfcon;
++	u32 iiscon;
++	u32 iismod;
++
++	DBG("Entered %s\n", __FUNCTION__);
++
++	iisfcon = readl(s3c24xx_i2s.regs + S3C2410_IISFCON);
++	iiscon  = readl(s3c24xx_i2s.regs + S3C2410_IISCON);
++	iismod  = readl(s3c24xx_i2s.regs + S3C2410_IISMOD);
++
++	DBG("r: IISCON: %lx IISMOD: %lx IISFCON: %lx\n", iiscon, iismod, iisfcon);
++
++	if (on) {
++		iisfcon |= S3C2410_IISFCON_TXDMA | S3C2410_IISFCON_TXENABLE;
++		iiscon  |= S3C2410_IISCON_TXDMAEN | S3C2410_IISCON_IISEN;
++		iiscon  &= ~S3C2410_IISCON_TXIDLE;
++		iismod  |= S3C2410_IISMOD_TXMODE;
++
++		writel(iismod,  s3c24xx_i2s.regs + S3C2410_IISMOD);
++		writel(iisfcon, s3c24xx_i2s.regs + S3C2410_IISFCON);
++		writel(iiscon,  s3c24xx_i2s.regs + S3C2410_IISCON);
++	} else {
++		/* note, we have to disable the FIFOs otherwise bad things
++		 * seem to happen when the DMA stops. According to the
++		 * Samsung supplied kernel, this should allow the DMA
++		 * engine and FIFOs to reset. If this isn't allowed, the
++		 * DMA engine will simply freeze randomly.
++		 */
++
++		iisfcon &= ~S3C2410_IISFCON_TXENABLE;
++		iisfcon &= ~S3C2410_IISFCON_TXDMA;
++		iiscon  |=  S3C2410_IISCON_TXIDLE;
++		iiscon  &= ~S3C2410_IISCON_TXDMAEN;
++		iismod  &= ~S3C2410_IISMOD_TXMODE;
++
++		writel(iiscon,  s3c24xx_i2s.regs + S3C2410_IISCON);
++		writel(iisfcon, s3c24xx_i2s.regs + S3C2410_IISFCON);
++		writel(iismod,  s3c24xx_i2s.regs + S3C2410_IISMOD);
++	}
++
++	DBG("w: IISCON: %lx IISMOD: %lx IISFCON: %lx\n", iiscon, iismod, iisfcon);
++}
++
++static void s3c24xx_snd_rxctrl(int on)
++{
++	u32 iisfcon;
++	u32 iiscon;
++	u32 iismod;
++
++	DBG("Entered %s\n", __FUNCTION__);
++
++	iisfcon = readl(s3c24xx_i2s.regs + S3C2410_IISFCON);
++	iiscon  = readl(s3c24xx_i2s.regs + S3C2410_IISCON);
++	iismod  = readl(s3c24xx_i2s.regs + S3C2410_IISMOD);
++
++	DBG("r: IISCON: %lx IISMOD: %lx IISFCON: %lx\n", iiscon, iismod, iisfcon);
++
++	if (on) {
++		iisfcon |= S3C2410_IISFCON_RXDMA | S3C2410_IISFCON_RXENABLE;
++		iiscon  |= S3C2410_IISCON_RXDMAEN | S3C2410_IISCON_IISEN;
++		iiscon  &= ~S3C2410_IISCON_RXIDLE;
++		iismod  |= S3C2410_IISMOD_RXMODE;
++
++		writel(iismod,  s3c24xx_i2s.regs + S3C2410_IISMOD);
++		writel(iisfcon, s3c24xx_i2s.regs + S3C2410_IISFCON);
++		writel(iiscon,  s3c24xx_i2s.regs + S3C2410_IISCON);
++	} else {
++		/* note, we have to disable the FIFOs otherwise bad things
++		 * seem to happen when the DMA stops. According to the
++		 * Samsung supplied kernel, this should allow the DMA
++		 * engine and FIFOs to reset. If this isn't allowed, the
++		 * DMA engine will simply freeze randomly.
++		 */
++
++        iisfcon &= ~S3C2410_IISFCON_RXENABLE;
++        iisfcon &= ~S3C2410_IISFCON_RXDMA;
++        iiscon  |= S3C2410_IISCON_RXIDLE;
++        iiscon  &= ~S3C2410_IISCON_RXDMAEN;
++		iismod  &= ~S3C2410_IISMOD_RXMODE;
++
++		writel(iisfcon, s3c24xx_i2s.regs + S3C2410_IISFCON);
++		writel(iiscon,  s3c24xx_i2s.regs + S3C2410_IISCON);
++		writel(iismod,  s3c24xx_i2s.regs + S3C2410_IISMOD);
++	}
++
++	DBG("w: IISCON: %lx IISMOD: %lx IISFCON: %lx\n", iiscon, iismod, iisfcon);
++}
++
++/*
++ * Wait for the LR signal to allow synchronisation to the L/R clock
++ * from the codec. May only be needed for slave mode.
++ */
++static int s3c24xx_snd_lrsync(void)
++{
++	u32 iiscon;
++	unsigned long timeout = jiffies + msecs_to_jiffies(5);
++
++	DBG("Entered %s\n", __FUNCTION__);
++
++	while (1) {
++		iiscon = readl(s3c24xx_i2s.regs + S3C2410_IISCON);
++		if (iiscon & S3C2410_IISCON_LRINDEX)
++			break;
++
++		if (timeout < jiffies)
++			return -ETIMEDOUT;
++	}
++
++	return 0;
++}
++
++/*
++ * Check whether CPU is the master or slave
++ */
++static inline int s3c24xx_snd_is_clkmaster(void)
++{
++	DBG("Entered %s\n", __FUNCTION__);
++
++	return (readl(s3c24xx_i2s.regs + S3C2410_IISMOD) & S3C2410_IISMOD_SLAVE) ? 0:1;
++}
++
++/*
++ * Set S3C24xx I2S DAI format
++ */
++static int s3c24xx_i2s_set_fmt(struct snd_soc_cpu_dai *cpu_dai,
++		unsigned int fmt)
++{
++	u32 iismod;
++
++	DBG("Entered %s\n", __FUNCTION__);
++
++	iismod = readl(s3c24xx_i2s.regs + S3C2410_IISMOD);
++	DBG("hw_params r: IISMOD: %lx \n", iismod);
++
++	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
++	case SND_SOC_DAIFMT_CBM_CFM:
++		iismod |= S3C2410_IISMOD_SLAVE;
++		break;
++	case SND_SOC_DAIFMT_CBS_CFS:
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	switch (fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
++	case SND_SOC_DAIFMT_LEFT_J:
++		iismod |= S3C2410_IISMOD_MSB;
++		break;
++	case SND_SOC_DAIFMT_I2S:
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	writel(iismod, s3c24xx_i2s.regs + S3C2410_IISMOD);
++	DBG("hw_params w: IISMOD: %lx \n", iismod);
++	return 0;
++}
++
++static int s3c24xx_i2s_hw_params(struct snd_pcm_substream *substream,
++				struct snd_pcm_hw_params *params)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	u32 iismod;
++
++	DBG("Entered %s\n", __FUNCTION__);
++
++	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
++		rtd->dai->cpu_dai->dma_data = &s3c24xx_i2s_pcm_stereo_out;
++	else
++		rtd->dai->cpu_dai->dma_data = &s3c24xx_i2s_pcm_stereo_in;
++
++	/* Working copies of register */
++	iismod = readl(s3c24xx_i2s.regs + S3C2410_IISMOD);
++	DBG("hw_params r: IISMOD: %lx\n", iismod);
++
++	switch (params_format(params)) {
++	case SNDRV_PCM_FORMAT_S8:
++		break;
++	case SNDRV_PCM_FORMAT_S16_LE:
++		iismod |= S3C2410_IISMOD_16BIT;
++		break;
++	}
++
++	writel(iismod, s3c24xx_i2s.regs + S3C2410_IISMOD);
++	DBG("hw_params w: IISMOD: %lx\n", iismod);
++	return 0;
++}
++
++static int s3c24xx_i2s_trigger(struct snd_pcm_substream *substream, int cmd)
++{
++	int ret = 0;
++
++	DBG("Entered %s\n", __FUNCTION__);
++
++	switch (cmd) {
++	case SNDRV_PCM_TRIGGER_START:
++	case SNDRV_PCM_TRIGGER_RESUME:
++	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
++		if (!s3c24xx_snd_is_clkmaster()) {
++			ret = s3c24xx_snd_lrsync();
++			if (ret)
++				goto exit_err;
++		}
++
++		if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
++			s3c24xx_snd_rxctrl(1);
++		else
++			s3c24xx_snd_txctrl(1);
++		break;
++	case SNDRV_PCM_TRIGGER_STOP:
++	case SNDRV_PCM_TRIGGER_SUSPEND:
++	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
++		if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
++			s3c24xx_snd_rxctrl(0);
++		else
++			s3c24xx_snd_txctrl(0);
++		break;
++	default:
++		ret = -EINVAL;
++		break;
++	}
++
++exit_err:
++	return ret;
++}
++
++/*
++ * Set S3C24xx Clock source
++ */
++static int s3c24xx_i2s_set_sysclk(struct snd_soc_cpu_dai *cpu_dai,
++	int clk_id, unsigned int freq, int dir)
++{
++	u32 iismod = readl(s3c24xx_i2s.regs + S3C2410_IISMOD);
++
++	DBG("Entered %s\n", __FUNCTION__);
++
++	iismod &= ~S3C2440_IISMOD_MPLL;
++
++	switch (clk_id) {
++	case S3C24XX_CLKSRC_PCLK:
++		break;
++	case S3C24XX_CLKSRC_MPLL:
++		iismod |= S3C2440_IISMOD_MPLL;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	writel(iismod, s3c24xx_i2s.regs + S3C2410_IISMOD);
++	return 0;
++}
++
++/*
++ * Set S3C24xx Clock dividers
++ */
++static int s3c24xx_i2s_set_clkdiv(struct snd_soc_cpu_dai *cpu_dai,
++	int div_id, int div)
++{
++	u32 reg;
++
++	DBG("Entered %s\n", __FUNCTION__);
++
++	switch (div_id) {
++	case S3C24XX_DIV_MCLK:
++		reg = readl(s3c24xx_i2s.regs + S3C2410_IISMOD) & ~S3C2410_IISMOD_FS_MASK;
++		writel(reg | div, s3c24xx_i2s.regs + S3C2410_IISMOD);
++		break;
++	case S3C24XX_DIV_BCLK:
++		reg = readl(s3c24xx_i2s.regs + S3C2410_IISMOD) & ~(S3C2410_IISMOD_384FS);
++		writel(reg | div, s3c24xx_i2s.regs + S3C2410_IISMOD);
++		break;
++	case S3C24XX_DIV_PRESCALER:
++		writel(div, s3c24xx_i2s.regs + S3C2410_IISPSR);
++		reg = readl(s3c24xx_i2s.regs + S3C2410_IISCON);
++		writel(reg | S3C2410_IISCON_PSCEN, s3c24xx_i2s.regs + S3C2410_IISCON);
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++/*
++ * To avoid duplicating clock code, allow machine driver to
++ * get the clockrate from here.
++ */
++u32 s3c24xx_i2s_get_clockrate(void)
++{
++	return clk_get_rate(s3c24xx_i2s.iis_clk);
++}
++EXPORT_SYMBOL_GPL(s3c24xx_i2s_get_clockrate);
++
++static int s3c24xx_i2s_probe(struct platform_device *pdev)
++{
++	DBG("Entered %s\n", __FUNCTION__);
++
++	s3c24xx_i2s.regs = ioremap(S3C2410_PA_IIS, 0x100);
++	if (s3c24xx_i2s.regs == NULL)
++		return -ENXIO;
++
++	s3c24xx_i2s.iis_clk=clk_get(&pdev->dev, "iis");
++	if (s3c24xx_i2s.iis_clk == NULL) {
++		DBG("failed to get iis_clock\n");
++		return -ENODEV;
++	}
++	clk_enable(s3c24xx_i2s.iis_clk);
++
++	/* Configure the I2S pins in correct mode */
++	s3c2410_gpio_cfgpin(S3C2410_GPE0, S3C2410_GPE0_I2SLRCK);
++	s3c2410_gpio_cfgpin(S3C2410_GPE1, S3C2410_GPE1_I2SSCLK);
++	s3c2410_gpio_cfgpin(S3C2410_GPE2, S3C2410_GPE2_CDCLK);
++	s3c2410_gpio_cfgpin(S3C2410_GPE3, S3C2410_GPE3_I2SSDI);
++	s3c2410_gpio_cfgpin(S3C2410_GPE4, S3C2410_GPE4_I2SSDO);
++
++	writel(S3C2410_IISCON_IISEN, s3c24xx_i2s.regs + S3C2410_IISCON);
++
++	s3c24xx_snd_txctrl(0);
++	s3c24xx_snd_rxctrl(0);
++
++	return 0;
++}
++
++#define S3C24XX_I2S_RATES \
++	(SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_11025 | SNDRV_PCM_RATE_16000 | \
++	SNDRV_PCM_RATE_22050 | SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_44100 | \
++	SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_88200 | SNDRV_PCM_RATE_96000)
++
++struct snd_soc_cpu_dai s3c24xx_i2s_dai = {
++	.name = "s3c24xx-i2s",
++	.id = 0,
++	.type = SND_SOC_DAI_I2S,
++	.probe = s3c24xx_i2s_probe,
++	.playback = {
++		.channels_min = 2,
++		.channels_max = 2,
++		.rates = S3C24XX_I2S_RATES,
++		.formats = SNDRV_PCM_FMTBIT_S8 | SNDRV_PCM_FMTBIT_S16_LE,},
++	.capture = {
++		.channels_min = 2,
++		.channels_max = 2,
++		.rates = S3C24XX_I2S_RATES,
++		.formats = SNDRV_PCM_FMTBIT_S8 | SNDRV_PCM_FMTBIT_S16_LE,},
++	.ops = {
++		.trigger = s3c24xx_i2s_trigger,
++		.hw_params = s3c24xx_i2s_hw_params,},
++	.dai_ops = {
++		.set_fmt = s3c24xx_i2s_set_fmt,
++		.set_clkdiv = s3c24xx_i2s_set_clkdiv,
++		.set_sysclk = s3c24xx_i2s_set_sysclk,
++	},
++};
++EXPORT_SYMBOL_GPL(s3c24xx_i2s_dai);
++
++/* Module information */
++MODULE_AUTHOR("Ben Dooks, <ben@simtec.co.uk>");
++MODULE_DESCRIPTION("s3c24xx I2S SoC Interface");
++MODULE_LICENSE("GPL");
+Index: linux-2.6.18/sound/soc/s3c24xx/s3c24xx-i2s.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/s3c24xx/s3c24xx-i2s.h
+@@ -0,0 +1,35 @@
++/*
++ * s3c24xx-i2s.c  --  ALSA Soc Audio Layer
++ *
++ * Copyright 2005 Wolfson Microelectronics PLC.
++ * Author: Graeme Gregory
++ *         graeme.gregory@wolfsonmicro.com or linux@wolfsonmicro.com
++ *
++ *  This program is free software; you can redistribute  it and/or modify it
++ *  under  the terms of  the GNU General  Public License as published by the
++ *  Free Software Foundation;  either version 2 of the  License, or (at your
++ *  option) any later version.
++ *
++ *  Revision history
++ *    10th Nov 2006   Initial version.
++ */
++
++#ifndef S3C24XXI2S_H_
++#define S3C24XXI2S_H_
++
++/* clock sources */
++#define S3C24XX_CLKSRC_PCLK 0
++#define S3C24XX_CLKSRC_MPLL 1
++
++/* Clock dividers */
++#define S3C24XX_DIV_MCLK	0
++#define S3C24XX_DIV_BCLK	1
++#define S3C24XX_DIV_PRESCALER	2
++
++/* prescaler */
++#define S3C24XX_PRESCALE(a,b) \
++	(((a - 1) << S3C2410_IISPSR_INTSHIFT) | ((b - 1) << S3C2410_IISPSR_EXTSHFIT))
++
++u32 s3c24xx_i2s_get_clockrate(void);
++
++#endif /*S3C24XXI2S_H_*/
+Index: linux-2.6.18/mvl_patches/pro50-1344.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1344.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1344);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

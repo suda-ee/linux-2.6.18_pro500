@@ -1,0 +1,488 @@
+#! /usr/bin/env bash
+# Patch: -ARM_4108_2_Allow_multiple_GIC_interrupt_controllers_in_a_system
+# Date: Wed Apr 30 11:10:03 2008
+# MR: 26915
+# Added pt_regs argument to do_bad_IRQ, generic_handle_irq and gic_handle_cascade_irq functions as part of back port fixups to MontaVista Pro 5.0 linux-2.6.18 kernel.
+# commit b3a1bde4db9889feb116330bff21214811c940e4
+# Author: Catalin Marinas <catalin.marinas@arm.com>
+# Date:   Wed Feb 14 19:14:56 2007 +0100
+# 
+#     [ARM] 4108/2:  Allow multiple GIC interrupt controllers in a system
+#     
+#     The current implementation only assumes one GIC to be present in the
+#     system. However, there are platforms with more than one cascaded interrupt
+#     controllers (RealView/EB MPCore for example).
+#     
+#     Signed-off-by: Catalin Marinas <catalin.marinas@arm.com>
+#     Signed-off-by: Russell King <rmk+kernel@arm.linux.org.uk>
+# 
+
+PATCHNUM=1095
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26915
+Added pt_regs argument to do_bad_IRQ, generic_handle_irq and gic_handle_cascade_irq functions as part of back port fixups to MontaVista Pro 5.0 linux-2.6.18 kernel.
+commit b3a1bde4db9889feb116330bff21214811c940e4
+Author: Catalin Marinas <catalin.marinas@arm.com>
+Date:   Wed Feb 14 19:14:56 2007 +0100
+
+    [ARM] 4108/2:  Allow multiple GIC interrupt controllers in a system
+    
+    The current implementation only assumes one GIC to be present in the
+    system. However, there are platforms with more than one cascaded interrupt
+    controllers (RealView/EB MPCore for example).
+    
+    Signed-off-by: Catalin Marinas <catalin.marinas@arm.com>
+    Signed-off-by: Russell King <rmk+kernel@arm.linux.org.uk>
+
+diff --git a/arch/arm/common/gic.c b/arch/arm/common/gic.c
+index 09b9d1b..4deece5 100644
+Index: linux-2.6.18/arch/arm/common/gic.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/common/gic.c
++++ linux-2.6.18/arch/arm/common/gic.c
+@@ -14,7 +14,9 @@
+  *
+  * o There is one CPU Interface per CPU, which sends interrupts sent
+  *   by the Distributor, and interrupts generated locally, to the
+- *   associated CPU.
++ *   associated CPU. The base address of the CPU interface is usually
++ *   aliased so that the same address points to different chips depending
++ *   on the CPU it is accessed from.
+  *
+  * Note that IRQs 0-31 are special - they are local to each CPU.
+  * As such, the enable set/clear, pending set/clear and active bit
+@@ -31,10 +33,38 @@
+ #include <asm/mach/irq.h>
+ #include <asm/hardware/gic.h>
+ 
+-static void __iomem *gic_dist_base;
+-static void __iomem *gic_cpu_base;
+ static DEFINE_SPINLOCK(irq_controller_lock);
+ 
++struct gic_chip_data {
++	unsigned int irq_offset;
++	void __iomem *dist_base;
++	void __iomem *cpu_base;
++};
++
++#ifndef MAX_GIC_NR
++#define MAX_GIC_NR	1
++#endif
++
++static struct gic_chip_data gic_data[MAX_GIC_NR];
++
++static inline void __iomem *gic_dist_base(unsigned int irq)
++{
++	struct gic_chip_data *gic_data = get_irq_chip_data(irq);
++	return gic_data->dist_base;
++}
++
++static inline void __iomem *gic_cpu_base(unsigned int irq)
++{
++	struct gic_chip_data *gic_data = get_irq_chip_data(irq);
++	return gic_data->cpu_base;
++}
++
++static inline unsigned int gic_irq(unsigned int irq)
++{
++	struct gic_chip_data *gic_data = get_irq_chip_data(irq);
++	return irq - gic_data->irq_offset;
++}
++
+ /*
+  * Routines to acknowledge, disable and enable interrupts
+  *
+@@ -55,8 +85,8 @@ static void gic_ack_irq(unsigned int irq
+ 	u32 mask = 1 << (irq % 32);
+ 
+ 	spin_lock(&irq_controller_lock);
+-	writel(mask, gic_dist_base + GIC_DIST_ENABLE_CLEAR + (irq / 32) * 4);
+-	writel(irq, gic_cpu_base + GIC_CPU_EOI);
++	writel(mask, gic_dist_base(irq) + GIC_DIST_ENABLE_CLEAR + (gic_irq(irq) / 32) * 4);
++	writel(gic_irq(irq), gic_cpu_base(irq) + GIC_CPU_EOI);
+ 	spin_unlock(&irq_controller_lock);
+ }
+ 
+@@ -65,7 +95,7 @@ static void gic_mask_irq(unsigned int ir
+ 	u32 mask = 1 << (irq % 32);
+ 
+ 	spin_lock(&irq_controller_lock);
+-	writel(mask, gic_dist_base + GIC_DIST_ENABLE_CLEAR + (irq / 32) * 4);
++	writel(mask, gic_dist_base(irq) + GIC_DIST_ENABLE_CLEAR + (gic_irq(irq) / 32) * 4);
+ 	spin_unlock(&irq_controller_lock);
+ }
+ 
+@@ -74,14 +104,14 @@ static void gic_unmask_irq(unsigned int 
+ 	u32 mask = 1 << (irq % 32);
+ 
+ 	spin_lock(&irq_controller_lock);
+-	writel(mask, gic_dist_base + GIC_DIST_ENABLE_SET + (irq / 32) * 4);
++	writel(mask, gic_dist_base(irq) + GIC_DIST_ENABLE_SET + (gic_irq(irq) / 32) * 4);
+ 	spin_unlock(&irq_controller_lock);
+ }
+ 
+ #ifdef CONFIG_SMP
+ static void gic_set_cpu(unsigned int irq, cpumask_t mask_val)
+ {
+-	void __iomem *reg = gic_dist_base + GIC_DIST_TARGET + (irq & ~3);
++	void __iomem *reg = gic_dist_base(irq) + GIC_DIST_TARGET + (gic_irq(irq) & ~3);
+ 	unsigned int shift = (irq % 4) * 8;
+ 	unsigned int cpu = first_cpu(mask_val);
+ 	u32 val;
+@@ -95,6 +125,37 @@ static void gic_set_cpu(unsigned int irq
+ }
+ #endif
+ 
++static void fastcall gic_handle_cascade_irq(unsigned int irq,
++					    struct irq_desc *desc, struct pt_regs *regs)
++{
++	struct gic_chip_data *chip_data = get_irq_data(irq);
++	struct irq_chip *chip = get_irq_chip(irq);
++	unsigned int cascade_irq;
++	unsigned long status;
++
++	/* primary controller ack'ing */
++	chip->ack(irq);
++
++	spin_lock(&irq_controller_lock);
++	status = readl(chip_data->cpu_base + GIC_CPU_INTACK);
++	spin_unlock(&irq_controller_lock);
++
++	cascade_irq = (status & 0x3ff);
++	if (cascade_irq > 1020)
++		goto out;
++	if (cascade_irq < 32 || cascade_irq >= NR_IRQS) {
++		do_bad_IRQ(cascade_irq, desc, regs);
++		goto out;
++	}
++
++	cascade_irq += chip_data->irq_offset;
++	generic_handle_irq(cascade_irq, regs);
++
++ out:
++	/* primary controller unmasking */
++	chip->unmask(irq);
++}
++
+ static struct irq_chip gic_chip = {
+ 	.name		= "GIC",
+ 	.ack		= gic_ack_irq,
+@@ -105,15 +166,29 @@ static struct irq_chip gic_chip = {
+ #endif
+ };
+ 
+-void __init gic_dist_init(void __iomem *base)
++void __init gic_cascade_irq(unsigned int gic_nr, unsigned int irq)
++{
++	if (gic_nr >= MAX_GIC_NR)
++		BUG();
++	if (set_irq_data(irq, &gic_data[gic_nr]) != 0)
++		BUG();
++	set_irq_chained_handler(irq, gic_handle_cascade_irq);
++}
++
++void __init gic_dist_init(unsigned int gic_nr, void __iomem *base,
++			  unsigned int irq_start)
+ {
+ 	unsigned int max_irq, i;
+ 	u32 cpumask = 1 << smp_processor_id();
+ 
++	if (gic_nr >= MAX_GIC_NR)
++		BUG();
++
+ 	cpumask |= cpumask << 8;
+ 	cpumask |= cpumask << 16;
+ 
+-	gic_dist_base = base;
++	gic_data[gic_nr].dist_base = base;
++	gic_data[gic_nr].irq_offset = (irq_start - 1) & ~31;
+ 
+ 	writel(0, base + GIC_DIST_CTRL);
+ 
+@@ -158,8 +233,9 @@ void __init gic_dist_init(void __iomem *
+ 	/*
+ 	 * Setup the Linux IRQ subsystem.
+ 	 */
+-	for (i = 29; i < max_irq; i++) {
++	for (i = irq_start; i < gic_data[gic_nr].irq_offset + max_irq; i++) {
+ 		set_irq_chip(i, &gic_chip);
++		set_irq_chip_data(i, &gic_data[gic_nr]);
+ 		set_irq_handler(i, do_level_IRQ);
+ 		set_irq_flags(i, IRQF_VALID | IRQF_PROBE);
+ 	}
+@@ -167,9 +243,13 @@ void __init gic_dist_init(void __iomem *
+ 	writel(1, base + GIC_DIST_CTRL);
+ }
+ 
+-void __cpuinit gic_cpu_init(void __iomem *base)
++void __cpuinit gic_cpu_init(unsigned int gic_nr, void __iomem *base)
+ {
+-	gic_cpu_base = base;
++	if (gic_nr >= MAX_GIC_NR)
++		BUG();
++
++	gic_data[gic_nr].cpu_base = base;
++
+ 	writel(0xf0, base + GIC_CPU_PRIMASK);
+ 	writel(1, base + GIC_CPU_CTRL);
+ }
+@@ -179,6 +259,7 @@ void gic_raise_softirq(cpumask_t cpumask
+ {
+ 	unsigned long map = *cpus_addr(cpumask);
+ 
+-	writel(map << 16 | irq, gic_dist_base + GIC_DIST_SOFTINT);
++	/* this always happens on GIC0 */
++	writel(map << 16 | irq, gic_data[0].dist_base + GIC_DIST_SOFTINT);
+ }
+ #endif
+Index: linux-2.6.18/arch/arm/mach-realview/platsmp.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-realview/platsmp.c
++++ linux-2.6.18/arch/arm/mach-realview/platsmp.c
+@@ -52,7 +52,7 @@ void __cpuinit platform_secondary_init(u
+ 	 * core (e.g. timer irq), then they will not have been enabled
+ 	 * for us: do so
+ 	 */
+-	gic_cpu_init(__io_address(REALVIEW_GIC_CPU_BASE));
++	gic_cpu_init(0, __io_address(REALVIEW_GIC_CPU_BASE));
+ 
+ 	/*
+ 	 * let the primary processor know we're out of the
+Index: linux-2.6.18/arch/arm/mach-realview/realview_eb.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-realview/realview_eb.c
++++ linux-2.6.18/arch/arm/mach-realview/realview_eb.c
+@@ -143,8 +143,8 @@ static void __init gic_init_irq(void)
+ 	writel(pldctrl, __io_address(REALVIEW_SYS_BASE) + 0xd8);
+ 	writel(0x00000000, __io_address(REALVIEW_SYS_LOCK));
+ #endif
+-	gic_dist_init(__io_address(REALVIEW_GIC_DIST_BASE));
+-	gic_cpu_init(__io_address(REALVIEW_GIC_CPU_BASE));
++	gic_dist_init(0, __io_address(REALVIEW_GIC_DIST_BASE), 29);
++	gic_cpu_init(0, __io_address(REALVIEW_GIC_CPU_BASE));
+ }
+ 
+ static void __init realview_eb_init(void)
+Index: linux-2.6.18/include/asm-arm/hardware/gic.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/hardware/gic.h
++++ linux-2.6.18/include/asm-arm/hardware/gic.h
+@@ -33,8 +33,9 @@
+ #define GIC_DIST_SOFTINT		0xf00
+ 
+ #ifndef __ASSEMBLY__
+-void gic_dist_init(void __iomem *base);
+-void gic_cpu_init(void __iomem *base);
++void gic_dist_init(unsigned int gic_nr, void __iomem *base, unsigned int irq_start);
++void gic_cpu_init(unsigned int gic_nr, void __iomem *base);
++void gic_cascade_irq(unsigned int gic_nr, unsigned int irq);
+ void gic_raise_softirq(cpumask_t cpumask, unsigned int irq);
+ #endif
+ 
+Index: linux-2.6.18/mvl_patches/pro50-1095.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1095.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1095);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

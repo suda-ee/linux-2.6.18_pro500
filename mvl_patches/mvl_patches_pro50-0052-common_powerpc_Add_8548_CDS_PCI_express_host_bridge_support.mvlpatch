@@ -1,0 +1,426 @@
+#! /usr/bin/env bash
+# Patch: -common_powerpc_Add_8548_CDS_PCI_express_host_bridge_support
+# Date: Wed Jun 20 09:52:39 2007
+# MR: 22933
+# From 591b3a705aa98652032ce83de7a5e39517336caa Mon Sep 17 00:00:00 2001
+# From: Andy Fleming <afleming@freescale.com>
+# Date: Thu, 1 Feb 2007 21:56:12 -0600
+# Subject: [PATCH] Add 8548 CDS PCI express host bridge support
+# 
+# Signed-off-by: Roy Zang <tie-fei.zang@freescale.com>
+# Acked-by: Andy Fleming <afleming@freescale.com>
+# 
+#  arch/powerpc/platforms/85xx/mpc85xx_cds.c |   11 ---
+#  arch/powerpc/platforms/85xx/pci.c         |  110 +++++++++++++++++++++++++++++-
+#  2 files changed, 112 insertions(+), 9 deletions(-)
+# 
+
+PATCHNUM=52
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 22933
+From 591b3a705aa98652032ce83de7a5e39517336caa Mon Sep 17 00:00:00 2001
+From: Andy Fleming <afleming@freescale.com>
+Date: Thu, 1 Feb 2007 21:56:12 -0600
+Subject: [PATCH] Add 8548 CDS PCI express host bridge support
+
+Signed-off-by: Roy Zang <tie-fei.zang@freescale.com>
+Acked-by: Andy Fleming <afleming@freescale.com>
+
+ arch/powerpc/platforms/85xx/mpc85xx_cds.c |   11 ---
+ arch/powerpc/platforms/85xx/pci.c         |  110 +++++++++++++++++++++++++++++-
+ mvl_patches/pro50-0052.c                  |   16 ++++
+ 3 files changed, 128 insertions(+), 9 deletions(-)
+
+diff --git a/arch/powerpc/platforms/85xx/mpc85xx_cds.c b/arch/powerpc/platforms/85xx/mpc85xx_cds.c
+index 4232686..89b2677 100644
+Index: linux-2.6.18/arch/powerpc/platforms/85xx/mpc85xx_cds.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/85xx/mpc85xx_cds.c
++++ linux-2.6.18/arch/powerpc/platforms/85xx/mpc85xx_cds.c
+@@ -79,9 +79,9 @@ static int mpc85xx_exclude_device(u_char
+ 		return PCIBIOS_SUCCESSFUL;
+ }
+ 
+-static void __init mpc85xx_cds_pcibios_fixup(void)
++void __init
++mpc85xx_cds_pci_irq_fixup(struct pci_dev *dev)
+ {
+-	struct pci_dev *dev;
+ 	u_char		c;
+ 
+ 	if ((dev = pci_get_device(PCI_VENDOR_ID_VIA,
+@@ -120,11 +120,6 @@ static void __init mpc85xx_cds_pcibios_f
+ 		pci_write_config_byte(dev, PCI_INTERRUPT_LINE, 11);
+ 		pci_dev_put(dev);
+ 	}
+-
+-	/* Now map all the PCI irqs */
+-	dev = NULL;
+-	for_each_pci_dev(dev)
+-		pci_read_irq_line(dev);
+ }
+ 
+ #ifdef CONFIG_PPC_I8259
+@@ -259,7 +254,7 @@ static void __init mpc85xx_cds_setup_arc
+ 	for (np = NULL; (np = of_find_node_by_type(np, "pci")) != NULL;)
+ 		add_bridge(np);
+ 
+-	ppc_md.pcibios_fixup = mpc85xx_cds_pcibios_fixup;
++	ppc_md.pci_irq_fixup = mpc85xx_cds_pci_irq_fixup;
+ 	ppc_md.pci_exclude_device = mpc85xx_exclude_device;
+ #endif
+ }
+Index: linux-2.6.18/arch/powerpc/platforms/85xx/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/85xx/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/85xx/pci.c
+@@ -24,6 +24,7 @@
+ #include <asm/pci-bridge.h>
+ #include <asm/prom.h>
+ #include <sysdev/fsl_soc.h>
++#include <asm/immap_85xx.h>
+ 
+ #undef DEBUG
+ 
+@@ -35,13 +36,108 @@
+ 
+ int mpc85xx_pci2_busno = 0;
+ 
++extern void
++setup_indirect_pcie(struct pci_controller* hose, u32 cfg_addr, u32 cfg_data);
++
+ #ifdef CONFIG_PCI
++struct pcie_outbound_window_regs {
++	uint    pexotar;               /* 0x.0 - PCI Express outbound translation address register */
++	uint    pexotear;              /* 0x.4 - PCI Express outbound translation extended address register */
++	uint    pexowbar;              /* 0x.8 - PCI Express outbound window base address register */
++	char    res1[4];
++	uint    pexowar;               /* 0x.10 - PCI Express outbound window attributes register */
++	char    res2[12];
++};
++
++struct pcie_inbound_window_regs {
++	uint    pexitar;               /* 0x.0 - PCI Express inbound translation address register */
++	char    res1[4];
++	uint    pexiwbar;              /* 0x.8 - PCI Express inbound window base address register */
++	uint    pexiwbear;             /* 0x.c - PCI Express inbound window base extended address register */
++	uint    pexiwar;               /* 0x.10 - PCI Express inbound window attributes register */
++	char    res2[12];
++};
++
++static void __init setup_pcie_atmu(struct pci_controller *hose, struct resource *rsrc)
++{
++	volatile struct ccsr_pex *pcie;
++	volatile struct pcie_outbound_window_regs *pcieow;
++	volatile struct pcie_inbound_window_regs *pcieiw;
++	int i = 0;
++
++	DBG("PCIE memory map start 0x%x, size 0x%x\n", rsrc->start,
++			rsrc->end - rsrc->start + 1);
++	pcie = ioremap(rsrc->start, rsrc->end - rsrc->start + 1);
++
++	/* Disable all windows (except pexowar0 since its ignored) */
++	pcie->pexowar1 = 0;
++	pcie->pexowar2 = 0;
++	pcie->pexowar3 = 0;
++	pcie->pexowar4 = 0;
++	pcie->pexiwar1 = 0;
++	pcie->pexiwar2 = 0;
++	pcie->pexiwar3 = 0;
++
++	pcieow = (struct pcie_outbound_window_regs *)&pcie->pexotar1;
++	pcieiw = (struct pcie_inbound_window_regs *)&pcie->pexitar1;
++
++	/* Setup outbound MEM window */
++	for(i = 0; i < 3; i++)
++		if (hose->mem_resources[i].flags & IORESOURCE_MEM){
++			DBG("PCIE MEM resource start 0x%08x, size 0x%08x.\n",
++				hose->mem_resources[i].start,
++				hose->mem_resources[i].end
++				  - hose->mem_resources[i].start + 1);
++			pcieow->pexotar = (hose->mem_resources[i].start) >> 12
++				& 0x000fffff;
++			pcieow->pexotear = 0;
++			pcieow->pexowbar = (hose->mem_resources[i].start) >> 12
++				& 0x000fffff;
++			/* Enable, Mem R/W */
++			pcieow->pexowar = 0x80044000 |
++				(__ilog2(hose->mem_resources[i].end
++					 - hose->mem_resources[i].start + 1)
++				 - 1);
++			pcieow++;
++		}
++
++	/* Setup outbound IO window */
++	if (hose->io_resource.flags & IORESOURCE_IO){
++		DBG("PCIE IO resource start 0x%08x, size 0x%08x, phy base 0x%08x.\n",
++			hose->io_resource.start,
++			hose->io_resource.end - hose->io_resource.start + 1,
++			hose->io_base_phys);
++		pcieow->pexotar = (hose->io_resource.start) >> 12 & 0x000fffff;
++		pcieow->pexotear = 0;
++		pcieow->pexowbar = (hose->io_base_phys) >> 12 & 0x000fffff;
++		/* Enable, IO R/W */
++		pcieow->pexowar = 0x80088000 | (__ilog2(hose->io_resource.end
++					- hose->io_resource.start + 1) - 1);
++	}
++
++	/* Setup 2G inbound Memory Window @ 0 */
++	pcieiw->pexitar = 0x00000000;
++	pcieiw->pexiwbar = 0x00000000;
++	/* Enable, Prefetch, Local Mem, Snoop R/W, 2G */
++	pcieiw->pexiwar = 0xa0f5501e;
++}
++static void __init
++mpc85xx_setup_pcie(struct pci_controller *hose)
++{
++	u16 temps;
++	early_read_config_word(hose, 0, 0, PCI_COMMAND, &temps);
++	temps |= PCI_COMMAND_SERR | PCI_COMMAND_MASTER | PCI_COMMAND_MEMORY;
++	early_write_config_word(hose, 0, 0, PCI_COMMAND, temps);
++	early_write_config_byte(hose, 0, 0, PCI_LATENCY_TIMER, 0x80);
++}
++
+ int __init add_bridge(struct device_node *dev)
+ {
+ 	int len;
+ 	struct pci_controller *hose;
+ 	struct resource rsrc;
+ 	const int *bus_range;
++	unsigned int temp;
+ 	int primary = 1, has_address = 0;
+ 	phys_addr_t immr = get_immrbase();
+ 
+@@ -77,6 +173,19 @@ int __init add_bridge(struct device_node
+ 		hose->bus_offset = hose->first_busno;
+ 		mpc85xx_pci2_busno = hose->first_busno;
+ 	}
++	/* PEX */
++	if ((rsrc.start & 0xfffff) == 0xa000) {
++#ifdef CONFIG_FSL_PCIE
++		setup_indirect_pcie(hose, immr + 0xa000, immr + 0xa004);
++#endif
++		mpc85xx_setup_pcie(hose);
++		primary = 1;
++		hose->bus_offset = hose->first_busno;
++		/* Setup PEX window registers */
++		setup_pcie_atmu(hose, &rsrc);
++		early_read_config_dword(hose, 0, 0, 0x404, &temp);
++		printk("Reg 0x404 is 0x%x\n",temp);
++	}
+ 
+ 	printk(KERN_INFO "Found MPC85xx PCI host bridge at 0x%016llx. "
+ 	       "Firmware bus number: %d->%d\n",
+@@ -92,5 +201,4 @@ int __init add_bridge(struct device_node
+ 
+ 	return 0;
+ }
+-
+ #endif
+Index: linux-2.6.18/mvl_patches/pro50-0052.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0052.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(52);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

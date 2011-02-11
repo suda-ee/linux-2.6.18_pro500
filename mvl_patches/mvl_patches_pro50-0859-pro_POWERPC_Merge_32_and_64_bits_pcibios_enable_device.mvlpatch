@@ -1,0 +1,471 @@
+#! /usr/bin/env bash
+# Patch: -pro_POWERPC_Merge_32_and_64_bits_pcibios_enable_device
+# Date: Wed Mar  5 11:43:39 2008
+# MR: 26747
+# Disposition: backport from
+# git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# 
+# From 549beb9ba3b03345cbd8e1233825d5b197a3f9f7 Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Thu, 20 Dec 2007 14:54:57 +1100
+# Subject: [PATCH] [POWERPC] Merge 32 and 64 bits pcibios_enable_device
+# 
+# This merge the two implementations, based on the previously
+# fixed up 32 bits one.  The pcibios_enable_device_hook in ppc_md
+# is now available for ppc64 use.  Also remove the new unused
+# "initial" parameter from it and fixup users.
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=859
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26747
+Disposition: backport from
+git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+
+From 549beb9ba3b03345cbd8e1233825d5b197a3f9f7 Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Thu, 20 Dec 2007 14:54:57 +1100
+Subject: [PATCH] [POWERPC] Merge 32 and 64 bits pcibios_enable_device
+
+This merge the two implementations, based on the previously
+fixed up 32 bits one.  The pcibios_enable_device_hook in ppc_md
+is now available for ppc64 use.  Also remove the new unused
+"initial" parameter from it and fixup users.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/kernel/pci-common.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci-common.c
++++ linux-2.6.18/arch/powerpc/kernel/pci-common.c
+@@ -1129,3 +1129,41 @@ void __devinit pcibios_claim_one_bus(str
+ }
+ EXPORT_SYMBOL_GPL(pcibios_claim_one_bus);
+ #endif /* CONFIG_HOTPLUG */
++
++int pcibios_enable_device(struct pci_dev *dev, int mask)
++{
++	u16 cmd, old_cmd;
++	int idx;
++	struct resource *r;
++
++	if (ppc_md.pcibios_enable_device_hook)
++		if (ppc_md.pcibios_enable_device_hook(dev))
++			return -EINVAL;
++
++	pci_read_config_word(dev, PCI_COMMAND, &cmd);
++	old_cmd = cmd;
++	for (idx = 0; idx < PCI_NUM_RESOURCES; idx++) {
++		/* Only set up the requested stuff */
++		if (!(mask & (1 << idx)))
++			continue;
++		r = &dev->resource[idx];
++		if (!(r->flags & (IORESOURCE_IO | IORESOURCE_MEM)))
++			continue;
++		if (r->flags & IORESOURCE_UNSET) {
++			printk(KERN_ERR "PCI: Device %s not available because"
++			       " of resource collisions\n", pci_name(dev));
++			return -EINVAL;
++		}
++		if (r->flags & IORESOURCE_IO)
++			cmd |= PCI_COMMAND_IO;
++		if (r->flags & IORESOURCE_MEM)
++			cmd |= PCI_COMMAND_MEMORY;
++	}
++	if (cmd != old_cmd) {
++		printk("PCI: Enabling device %s (%04x -> %04x)\n",
++		       pci_name(dev), old_cmd, cmd);
++		pci_write_config_word(dev, PCI_COMMAND, cmd);
++	}
++	return 0;
++}
++
+Index: linux-2.6.18/arch/powerpc/kernel/pci_32.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_32.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_32.c
+@@ -529,43 +529,6 @@ pcibios_update_irq(struct pci_dev *dev, 
+ 	/* XXX FIXME - update OF device tree node interrupt property */
+ }
+ 
+-int pcibios_enable_device(struct pci_dev *dev, int mask)
+-{
+-	u16 cmd, old_cmd;
+-	int idx;
+-	struct resource *r;
+-
+-	if (ppc_md.pcibios_enable_device_hook)
+-		if (ppc_md.pcibios_enable_device_hook(dev, 0))
+-			return -EINVAL;
+-		
+-	pci_read_config_word(dev, PCI_COMMAND, &cmd);
+-	old_cmd = cmd;
+-	for (idx = 0; idx < PCI_NUM_RESOURCES; idx++) {
+-		/* Only set up the requested stuff */
+-		if (!(mask & (1 << idx)))
+-			continue;
+-		r = &dev->resource[idx];
+-		if (!(r->flags & (IORESOURCE_IO | IORESOURCE_MEM)))
+-			continue;
+-		if (r->flags & IORESOURCE_UNSET) {
+-			printk(KERN_ERR "PCI: Device %s not available because"
+-			       " of resource collisions\n", pci_name(dev));
+-			return -EINVAL;
+-		}
+-		if (r->flags & IORESOURCE_IO)
+-			cmd |= PCI_COMMAND_IO;
+-		if (r->flags & IORESOURCE_MEM)
+-			cmd |= PCI_COMMAND_MEMORY;
+-	}
+-	if (cmd != old_cmd) {
+-		printk("PCI: Enabling device %s (%04x -> %04x)\n",
+-		       pci_name(dev), old_cmd, cmd);
+-		pci_write_config_word(dev, PCI_COMMAND, cmd);
+-	}
+-	return 0;
+-}
+-
+ static struct pci_controller*
+ pci_bus_to_hose(int bus)
+ {
+Index: linux-2.6.18/arch/powerpc/kernel/pci_64.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_64.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_64.c
+@@ -409,36 +409,6 @@ static int __init pcibios_init(void)
+ 
+ subsys_initcall(pcibios_init);
+ 
+-int pcibios_enable_device(struct pci_dev *dev, int mask)
+-{
+-	u16 cmd, oldcmd;
+-	int i;
+-
+-	pci_read_config_word(dev, PCI_COMMAND, &cmd);
+-	oldcmd = cmd;
+-
+-	for (i = 0; i < PCI_NUM_RESOURCES; i++) {
+-		struct resource *res = &dev->resource[i];
+-
+-		/* Only set up the requested stuff */
+-		if (!(mask & (1<<i)))
+-			continue;
+-
+-		if (res->flags & IORESOURCE_IO)
+-			cmd |= PCI_COMMAND_IO;
+-		if (res->flags & IORESOURCE_MEM)
+-			cmd |= PCI_COMMAND_MEMORY;
+-	}
+-
+-	if (cmd != oldcmd) {
+-		printk(KERN_DEBUG "PCI: Enabling device: (%s), cmd %x\n",
+-		       pci_name(dev), cmd);
+-                /* Enable the appropriate bits in the PCI command register.  */
+-		pci_write_config_word(dev, PCI_COMMAND, cmd);
+-	}
+-	return 0;
+-}
+-
+ #ifdef CONFIG_HOTPLUG
+ 
+ int pcibios_unmap_io_space(struct pci_bus *bus)
+Index: linux-2.6.18/arch/powerpc/platforms/powermac/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/powermac/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/powermac/pci.c
+@@ -1055,8 +1055,7 @@ void __init pmac_pci_init(void)
+ #endif
+ }
+ 
+-int
+-pmac_pci_enable_device_hook(struct pci_dev *dev, int initial)
++int pmac_pci_enable_device_hook(struct pci_dev *dev)
+ {
+ 	struct device_node* node;
+ 	int updatecfg = 0;
+@@ -1098,26 +1097,25 @@ pmac_pci_enable_device_hook(struct pci_d
+ 		updatecfg = 1;
+ 	}
+ 
++	/*
++	 * Fixup various header fields on 32 bits. We don't do that on
++	 * 64 bits as some of these have strange values behind the HT
++	 * bridge and we must not, for example, enable MWI or set the
++	 * cache line size on them.
++	 */
++#ifdef CONFIG_PPC32
+ 	if (updatecfg) {
+ 		u16 cmd;
+ 
+-		/*
+-		 * Make sure PCI is correctly configured
+-		 *
+-		 * We use old pci_bios versions of the function since, by
+-		 * default, gmac is not powered up, and so will be absent
+-		 * from the kernel initial PCI lookup.
+-		 *
+-		 * Should be replaced by 2.4 new PCI mechanisms and really
+-		 * register the device.
+-		 */
+ 		pci_read_config_word(dev, PCI_COMMAND, &cmd);
+ 		cmd |= PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER
+ 			| PCI_COMMAND_INVALIDATE;
+ 		pci_write_config_word(dev, PCI_COMMAND, cmd);
+ 		pci_write_config_byte(dev, PCI_LATENCY_TIMER, 16);
++
+ 		pci_write_config_byte(dev, PCI_CACHE_LINE_SIZE,
+ 				      L1_CACHE_BYTES >> 2);
++#endif
+ 	}
+ 
+ 	return 0;
+Index: linux-2.6.18/arch/powerpc/platforms/powermac/pmac.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/powermac/pmac.h
++++ linux-2.6.18/arch/powerpc/platforms/powermac/pmac.h
+@@ -29,7 +29,7 @@ extern void pmac_ide_init_hwif_ports(hw_
+ extern void pmac_nvram_update(void);
+ extern unsigned char pmac_nvram_read_byte(int addr);
+ extern void pmac_nvram_write_byte(int addr, unsigned char val);
+-extern int pmac_pci_enable_device_hook(struct pci_dev *dev, int initial);
++extern int pmac_pci_enable_device_hook(struct pci_dev *dev);
+ extern void pmac_pcibios_after_init(void);
+ extern int of_show_percpuinfo(struct seq_file *m, int i);
+ 
+Index: linux-2.6.18/include/asm-powerpc/machdep.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/machdep.h
++++ linux-2.6.18/include/asm-powerpc/machdep.h
+@@ -191,12 +191,6 @@ struct machdep_calls {
+ 	/*
+ 	 * optional PCI "hooks"
+ 	 */
+-
+-	/* Called when pci_enable_device() is called (initial=0) or
+-	 * when a device with no assigned resource is found (initial=1).
+-	 * Returns 0 to allow assignment/enabling of the device. */
+-	int  (*pcibios_enable_device_hook)(struct pci_dev *, int initial);
+-
+ 	/* Called in indirect_* to avoid touching devices */
+ 	int (*pci_exclude_device)(struct pci_controller *, unsigned char, unsigned char);
+ 
+@@ -212,6 +206,10 @@ struct machdep_calls {
+ 	/* Called for each PCI bus in the system when it's probed */
+ 	void (*pcibios_fixup_bus)(struct pci_bus *);
+ 
++	/* Called when pci_enable_device() is called. Returns 0 to
++	 * allow assignment/enabling of the device. */
++	int  (*pcibios_enable_device_hook)(struct pci_dev *);
++
+ 	/* Called to shutdown machine specific hardware not already controlled
+ 	 * by other drivers.
+ 	 */
+Index: linux-2.6.18/mvl_patches/pro50-0859.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0859.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(859);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

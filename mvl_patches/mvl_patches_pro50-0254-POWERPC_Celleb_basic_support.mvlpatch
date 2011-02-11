@@ -1,0 +1,915 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Celleb_basic_support
+# Date: Wed Sep 26 11:13:36 2007
+# MR: 24856
+# From c347b7989e4d9e1c23cb5cfba78c63c031b7dcee Mon Sep 17 00:00:00 2001
+# From: Ishizaki Kou <kou.ishizaki@toshiba.co.jp>
+# Date: Fri, 2 Feb 2007 16:47:17 +0900
+# Subject: [PATCH] [POWERPC] Celleb: basic support
+# 
+# This patch adds base support for Celleb platform.
+# 
+# Signed-off-by: Kou Ishizaki <kou.ishizaki@toshiba.co.jp>
+# Acked-by: Arnd Bergmann <arnd.bergmann@de.ibm.com>
+# Acked-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=254
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From c347b7989e4d9e1c23cb5cfba78c63c031b7dcee Mon Sep 17 00:00:00 2001
+From: Ishizaki Kou <kou.ishizaki@toshiba.co.jp>
+Date: Fri, 2 Feb 2007 16:47:17 +0900
+Subject: [PATCH] [POWERPC] Celleb: basic support
+
+This patch adds base support for Celleb platform.
+
+Signed-off-by: Kou Ishizaki <kou.ishizaki@toshiba.co.jp>
+Acked-by: Arnd Bergmann <arnd.bergmann@de.ibm.com>
+Acked-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/Kconfig
++++ linux-2.6.18/arch/powerpc/Kconfig
+@@ -522,6 +522,16 @@ config PPC_PS3
+ 	  This option enables support for the Sony PS3 game console
+ 	  and other platforms using the PS3 hypervisor.
+ 
++config PPC_CELLEB
++	bool "Toshiba's Cell Reference Set 'Celleb' Architecture"
++	depends on PPC_MULTIPLATFORM && PPC64
++	select PPC_CELL
++	select PPC_OF_PLATFORM_PCI
++	select HAS_TXX9_SERIAL
++	select PPC_UDBG_BEAT
++	select USB_OHCI_BIG_ENDIAN_MMIO
++	select USB_EHCI_BIG_ENDIAN_MMIO
++
+ config PPC_NATIVE
+ 	bool
+ 	depends on PPC_MULTIPLATFORM
+@@ -535,6 +545,11 @@ config UDBG_RTAS_CONSOLE
+ 	depends on PPC_RTAS
+ 	default n
+ 
++config PPC_UDBG_BEAT
++	bool "BEAT based debug console"
++	depends on PPC_CELLEB
++	default n
++
+ config XICS
+ 	depends on PPC_PSERIES
+ 	bool
+Index: linux-2.6.18/arch/powerpc/Kconfig.debug
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/Kconfig.debug
++++ linux-2.6.18/arch/powerpc/Kconfig.debug
+@@ -151,6 +151,13 @@ config PPC_EARLY_DEBUG_ISERIES
+ 	  Select this to enable early debugging for legacy iSeries. You need
+ 	  to hit "Ctrl-x Ctrl-x" to see the messages on the console.
+ 
++config PPC_EARLY_DEBUG_BEAT
++	bool "Beat HV Console"
++	depends on PPC_CELLEB
++	select PPC_UDBG_BEAT
++	help
++	  Select this to enable early debugging for Celleb with Beat.
++
+ endchoice
+ 
+ endmenu
+Index: linux-2.6.18/arch/powerpc/boot/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/Makefile
++++ linux-2.6.18/arch/powerpc/boot/Makefile
+@@ -170,6 +170,7 @@ image-$(CONFIG_PPC_PSERIES)		+= zImage.p
+ image-$(CONFIG_PPC_MAPLE)		+= zImage.pseries
+ image-$(CONFIG_PPC_IBM_CELL_BLADE)	+= zImage.pseries
+ image-$(CONFIG_PPC_PS3)			+= zImage.ps3
++image-$(CONFIG_PPC_CELLEB)		+= zImage.pseries
+ image-$(CONFIG_PPC_CHRP)		+= zImage.chrp
+ image-$(CONFIG_PPC_EFIKA)		+= zImage.chrp
+ image-$(CONFIG_PPC_PMAC)		+= zImage.pmac
+Index: linux-2.6.18/arch/powerpc/platforms/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/Makefile
++++ linux-2.6.18/arch/powerpc/platforms/Makefile
+@@ -19,4 +19,5 @@ obj-$(CONFIG_PPC_MAPLE)		+= maple/
+ obj-$(CONFIG_PPC_PASEMI)	+= pasemi/
+ obj-$(CONFIG_PPC_CELL)		+= cell/
+ obj-$(CONFIG_PPC_PS3)		+= ps3/
++obj-$(CONFIG_PPC_CELLEB)	+= celleb/
+ obj-$(CONFIG_EMBEDDED6xx)	+= embedded6xx/
+Index: linux-2.6.18/arch/powerpc/platforms/celleb/Makefile
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/celleb/Makefile
+@@ -0,0 +1,9 @@
++obj-y				+= interrupt.o iommu.o setup.o \
++				   htab.o beat.o pci.o \
++				   scc_epci.o hvCall.o
++
++obj-$(CONFIG_SMP)		+= smp.o
++obj-$(CONFIG_PPC_UDBG_BEAT)	+= udbg_beat.o
++obj-$(CONFIG_USB)		+= scc_uhc.o
++obj-$(CONFIG_HAS_TXX9_SERIAL)	+= scc_sio.o
++obj-$(CONFIG_SPU_BASE)		+= spu_priv1.o
+Index: linux-2.6.18/arch/powerpc/platforms/celleb/beat.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/celleb/beat.c
+@@ -0,0 +1,163 @@
++/*
++ * Simple routines for Celleb/Beat
++ *
++ * (C) Copyright 2006-2007 TOSHIBA CORPORATION
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/err.h>
++#include <linux/rtc.h>
++
++#include <asm/hvconsole.h>
++#include <asm/time.h>
++
++#include "beat_wrapper.h"
++#include "beat.h"
++
++void beat_restart(char *cmd)
++{
++	beat_shutdown_logical_partition(1);
++}
++
++void beat_power_off(void)
++{
++	beat_shutdown_logical_partition(0);
++}
++
++u64 beat_halt_code = 0x1000000000000000UL;
++
++void beat_halt(void)
++{
++	beat_shutdown_logical_partition(beat_halt_code);
++}
++
++int beat_set_rtc_time(struct rtc_time *rtc_time)
++{
++	u64 tim;
++	tim = mktime(rtc_time->tm_year+1900,
++		     rtc_time->tm_mon+1, rtc_time->tm_mday,
++		     rtc_time->tm_hour, rtc_time->tm_min, rtc_time->tm_sec);
++	if (beat_rtc_write(tim))
++		return -1;
++	return 0;
++}
++
++void beat_get_rtc_time(struct rtc_time *rtc_time)
++{
++	u64 tim;
++
++	if (beat_rtc_read(&tim))
++		tim = 0;
++	to_tm(tim, rtc_time);
++	rtc_time->tm_year -= 1900;
++	rtc_time->tm_mon -= 1;
++}
++
++#define	BEAT_NVRAM_SIZE	4096
++
++ssize_t beat_nvram_read(char *buf, size_t count, loff_t *index)
++{
++	unsigned int i;
++	unsigned long len;
++	char *p = buf;
++
++	if (*index >= BEAT_NVRAM_SIZE)
++		return -ENODEV;
++	i = *index;
++	if (i + count > BEAT_NVRAM_SIZE)
++		count = BEAT_NVRAM_SIZE - i;
++
++	for (; count != 0; count -= len) {
++		len = count;
++		if (len > BEAT_NVRW_CNT)
++			len = BEAT_NVRW_CNT;
++		if (beat_eeprom_read(i, len, p)) {
++			return -EIO;
++		}
++
++		p += len;
++		i += len;
++	}
++	*index = i;
++	return p - buf;
++}
++
++ssize_t beat_nvram_write(char *buf, size_t count, loff_t *index)
++{
++	unsigned int i;
++	unsigned long len;
++	char *p = buf;
++
++	if (*index >= BEAT_NVRAM_SIZE)
++		return -ENODEV;
++	i = *index;
++	if (i + count > BEAT_NVRAM_SIZE)
++		count = BEAT_NVRAM_SIZE - i;
++
++	for (; count != 0; count -= len) {
++		len = count;
++		if (len > BEAT_NVRW_CNT)
++			len = BEAT_NVRW_CNT;
++		if (beat_eeprom_write(i, len, p)) {
++			return -EIO;
++		}
++
++		p += len;
++		i += len;
++	}
++	*index = i;
++	return p - buf;
++}
++
++ssize_t beat_nvram_get_size(void)
++{
++	return BEAT_NVRAM_SIZE;
++}
++
++int beat_set_xdabr(unsigned long dabr)
++{
++	if (beat_set_dabr(dabr, DABRX_KERNEL | DABRX_USER))
++		return -1;
++	return 0;
++}
++
++int64_t beat_get_term_char(u64 vterm, u64 *len, u64 *t1, u64 *t2)
++{
++	u64 db[2];
++	s64 ret;
++
++	ret = beat_get_characters_from_console(vterm, len, (u8*)db);
++	if (ret == 0) {
++		*t1 = db[0];
++		*t2 = db[1];
++	}
++	return ret;
++}
++
++int64_t beat_put_term_char(u64 vterm, u64 len, u64 t1, u64 t2)
++{
++	u64 db[2];
++
++	db[0] = t1;
++	db[1] = t2;
++	return beat_put_characters_to_console(vterm, len, (u8*)db);
++}
++
++EXPORT_SYMBOL(beat_get_term_char);
++EXPORT_SYMBOL(beat_put_term_char);
++EXPORT_SYMBOL(beat_halt_code);
+Index: linux-2.6.18/arch/powerpc/platforms/celleb/beat.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/celleb/beat.h
+@@ -0,0 +1,40 @@
++/*
++ * Guest OS Interfaces.
++ *
++ * (C) Copyright 2006 TOSHIBA CORPORATION
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++#ifndef _CELLEB_BEAT_H
++#define _CELLEB_BEAT_H
++
++#define DABRX_KERNEL		(1UL<<1)
++#define DABRX_USER		(1UL<<0)
++
++int64_t beat_get_term_char(uint64_t,uint64_t*,uint64_t*,uint64_t*);
++int64_t beat_put_term_char(uint64_t,uint64_t,uint64_t,uint64_t);
++int64_t beat_repository_encode(int, const char *, uint64_t[4]);
++void beat_restart(char *);
++void beat_power_off(void);
++void beat_halt(void);
++int beat_set_rtc_time(struct rtc_time *);
++void beat_get_rtc_time(struct rtc_time *);
++ssize_t beat_nvram_get_size(void);
++ssize_t beat_nvram_read(char *, size_t, loff_t *);
++ssize_t beat_nvram_write(char *, size_t, loff_t *);
++int beat_set_xdabr(unsigned long);
++
++#endif /* _CELLEB_BEAT_H */
+Index: linux-2.6.18/arch/powerpc/platforms/celleb/setup.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/celleb/setup.c
+@@ -0,0 +1,191 @@
++/*
++ * Celleb setup code
++ *
++ * (C) Copyright 2006-2007 TOSHIBA CORPORATION
++ *
++ * This code is based on arch/powerpc/platforms/cell/setup.c:
++ *  Copyright (C) 1995  Linus Torvalds
++ *  Adapted from 'alpha' version by Gary Thomas
++ *  Modified by Cort Dougan (cort@cs.nmt.edu)
++ *  Modified by PPC64 Team, IBM Corp
++ *  Modified by Cell Team, IBM Deutschland Entwicklung GmbH
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++#undef DEBUG
++
++#include <linux/cpu.h>
++#include <linux/sched.h>
++#include <linux/kernel.h>
++#include <linux/mm.h>
++#include <linux/stddef.h>
++#include <linux/unistd.h>
++#include <linux/reboot.h>
++#include <linux/init.h>
++#include <linux/delay.h>
++#include <linux/irq.h>
++#include <linux/seq_file.h>
++#include <linux/root_dev.h>
++#include <linux/console.h>
++
++#include <asm/mmu.h>
++#include <asm/processor.h>
++#include <asm/io.h>
++#include <asm/kexec.h>
++#include <asm/prom.h>
++#include <asm/machdep.h>
++#include <asm/cputable.h>
++#include <asm/irq.h>
++#include <asm/spu_priv1.h>
++#include <asm/firmware.h>
++#include <asm/of_platform.h>
++
++#include "interrupt.h"
++#include "beat_wrapper.h"
++#include "beat.h"
++#include "pci.h"
++
++static char celleb_machine_type[128] = "Celleb";
++
++static void celleb_show_cpuinfo(struct seq_file *m)
++{
++	struct device_node *root;
++	const char *model = "";
++
++	root = of_find_node_by_path("/");
++	if (root)
++		model = get_property(root, "model", NULL);
++	/* using "CHRP" is to trick anaconda into installing FCx into Celleb */
++	seq_printf(m, "machine\t\t: %s %s\n", celleb_machine_type, model);
++	of_node_put(root);
++}
++
++static int celleb_machine_type_hack(char *ptr)
++{
++	strncpy(celleb_machine_type, ptr, sizeof(celleb_machine_type));
++	celleb_machine_type[sizeof(celleb_machine_type)-1] = 0;
++	return 0;
++}
++
++__setup("celleb_machine_type_hack", celleb_machine_type_hack);
++
++static void celleb_progress(char *s, unsigned short hex)
++{
++	printk("*** %04x : %s\n", hex, s ? s : "");
++}
++
++static void __init celleb_setup_arch(void)
++{
++#ifdef CONFIG_SPU_BASE
++	spu_priv1_ops = &spu_priv1_beat_ops;
++	spu_management_ops = &spu_management_of_ops;
++#endif
++
++#ifdef CONFIG_SMP
++	smp_init_celleb();
++#endif
++
++	/* init to some ~sane value until calibrate_delay() runs */
++	loops_per_jiffy = 50000000;
++
++	if (ROOT_DEV == 0) {
++		printk("No ramdisk, default root is /dev/hda2\n");
++		ROOT_DEV = Root_HDA2;
++	}
++
++#ifdef CONFIG_DUMMY_CONSOLE
++	conswitchp = &dummy_con;
++#endif
++}
++
++static void beat_power_save(void)
++{
++	beat_pause(0);
++}
++
++static int __init celleb_probe(void)
++{
++	unsigned long root = of_get_flat_dt_root();
++
++	if (!of_flat_dt_is_compatible(root, "Beat"))
++		return 0;
++
++	powerpc_firmware_features |= FW_FEATURE_CELLEB_POSSIBLE;
++	hpte_init_beat();
++	return 1;
++}
++
++/*
++ * Cell has no legacy IO; anything calling this function has to
++ * fail or bad things will happen
++ */
++static int celleb_check_legacy_ioport(unsigned int baseport)
++{
++	return -ENODEV;
++}
++
++static void celleb_kexec_cpu_down(int crash, int secondary)
++{
++	beatic_deinit_IRQ();
++}
++
++static struct of_device_id celleb_bus_ids[] = {
++	{ .type = "scc", },
++	{ .type = "ioif", },	/* old style */
++	{},
++};
++
++static int __init celleb_publish_devices(void)
++{
++	if (!machine_is(celleb))
++		return 0;
++
++	/* Publish OF platform devices for southbridge IOs */
++	of_platform_bus_probe(NULL, celleb_bus_ids, NULL);
++
++	return 0;
++}
++device_initcall(celleb_publish_devices);
++
++define_machine(celleb) {
++	.name			= "Cell Reference Set",
++	.probe			= celleb_probe,
++	.setup_arch		= celleb_setup_arch,
++	.show_cpuinfo		= celleb_show_cpuinfo,
++	.restart		= beat_restart,
++	.power_off		= beat_power_off,
++	.halt			= beat_halt,
++	.get_rtc_time		= beat_get_rtc_time,
++	.set_rtc_time		= beat_set_rtc_time,
++	.calibrate_decr		= generic_calibrate_decr,
++	.check_legacy_ioport	= celleb_check_legacy_ioport,
++	.progress		= celleb_progress,
++	.power_save		= beat_power_save,
++	.nvram_size		= beat_nvram_get_size,
++	.nvram_read		= beat_nvram_read,
++	.nvram_write		= beat_nvram_write,
++	.set_dabr		= beat_set_xdabr,
++	.init_IRQ		= beatic_init_IRQ,
++	.get_irq		= beatic_get_irq,
++	.pci_probe_mode 	= celleb_pci_probe_mode,
++	.pci_setup_phb		= celleb_setup_phb,
++#ifdef CONFIG_KEXEC
++	.kexec_cpu_down		= celleb_kexec_cpu_down,
++	.machine_kexec		= default_machine_kexec,
++	.machine_kexec_prepare	= default_machine_kexec_prepare,
++	.machine_crash_shutdown	= default_machine_crash_shutdown,
++#endif
++};
+Index: linux-2.6.18/arch/powerpc/platforms/celleb/smp.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/celleb/smp.c
+@@ -0,0 +1,124 @@
++/*
++ * SMP support for Celleb platform. (Incomplete)
++ *
++ * (C) Copyright 2006 TOSHIBA CORPORATION
++ *
++ * This code is based on arch/powerpc/platforms/cell/smp.c:
++ * Dave Engebretsen, Peter Bergner, and
++ * Mike Corrigan {engebret|bergner|mikec}@us.ibm.com
++ * Plus various changes from other IBM teams...
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++#undef DEBUG
++
++#include <linux/kernel.h>
++#include <linux/smp.h>
++#include <linux/interrupt.h>
++#include <linux/init.h>
++#include <linux/threads.h>
++#include <linux/cpu.h>
++
++#include <asm/irq.h>
++#include <asm/smp.h>
++#include <asm/machdep.h>
++#include <asm/udbg.h>
++
++#include "interrupt.h"
++
++#ifdef DEBUG
++#define DBG(fmt...) udbg_printf(fmt)
++#else
++#define DBG(fmt...)
++#endif
++
++/*
++ * The primary thread of each non-boot processor is recorded here before
++ * smp init.
++ */
++/* static cpumask_t of_spin_map; */
++
++/**
++ * smp_startup_cpu() - start the given cpu
++ *
++ * At boot time, there is nothing to do for primary threads which were
++ * started from Open Firmware.  For anything else, call RTAS with the
++ * appropriate start location.
++ *
++ * Returns:
++ *	0	- failure
++ *	1	- success
++ */
++static inline int __devinit smp_startup_cpu(unsigned int lcpu)
++{
++	return 0;
++}
++
++static void smp_beatic_message_pass(int target, int msg)
++{
++	unsigned int i;
++
++	if (target < NR_CPUS) {
++		beatic_cause_IPI(target, msg);
++	} else {
++		for_each_online_cpu(i) {
++			if (target == MSG_ALL_BUT_SELF
++			    && i == smp_processor_id())
++				continue;
++			beatic_cause_IPI(i, msg);
++		}
++	}
++}
++
++static int __init smp_beatic_probe(void)
++{
++	return cpus_weight(cpu_possible_map);
++}
++
++static void __devinit smp_beatic_setup_cpu(int cpu)
++{
++	beatic_setup_cpu(cpu);
++}
++
++static void __devinit smp_celleb_kick_cpu(int nr)
++{
++	BUG_ON(nr < 0 || nr >= NR_CPUS);
++
++	if (!smp_startup_cpu(nr))
++		return;
++}
++
++static int smp_celleb_cpu_bootable(unsigned int nr)
++{
++	return 1;
++}
++static struct smp_ops_t bpa_beatic_smp_ops = {
++	.message_pass	= smp_beatic_message_pass,
++	.probe		= smp_beatic_probe,
++	.kick_cpu	= smp_celleb_kick_cpu,
++	.setup_cpu	= smp_beatic_setup_cpu,
++	.cpu_bootable	= smp_celleb_cpu_bootable,
++};
++
++/* This is called very early */
++void __init smp_init_celleb(void)
++{
++	DBG(" -> smp_init_celleb()\n");
++
++	smp_ops = &bpa_beatic_smp_ops;
++
++	DBG(" <- smp_init_celleb()\n");
++}
+Index: linux-2.6.18/include/asm-powerpc/firmware.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/firmware.h
++++ linux-2.6.18/include/asm-powerpc/firmware.h
+@@ -43,6 +43,7 @@
+ #define FW_FEATURE_ISERIES	ASM_CONST(0x0000000000200000)
+ #define FW_FEATURE_LPAR		ASM_CONST(0x0000000000400000)
+ #define FW_FEATURE_PS3_LV1	ASM_CONST(0x0000000000800000)
++#define FW_FEATURE_BEAT		ASM_CONST(0x0000000001000000)
+ 
+ #ifndef __ASSEMBLY__
+ 
+@@ -61,6 +62,8 @@ enum {
+ 	FW_FEATURE_ISERIES_ALWAYS = FW_FEATURE_ISERIES | FW_FEATURE_LPAR,
+ 	FW_FEATURE_PS3_POSSIBLE = FW_FEATURE_LPAR | FW_FEATURE_PS3_LV1,
+ 	FW_FEATURE_PS3_ALWAYS = FW_FEATURE_LPAR | FW_FEATURE_PS3_LV1,
++	FW_FEATURE_CELLEB_POSSIBLE = FW_FEATURE_LPAR | FW_FEATURE_BEAT,
++	FW_FEATURE_CELLEB_ALWAYS = FW_FEATURE_LPAR | FW_FEATURE_BEAT,
+ 	FW_FEATURE_NATIVE_POSSIBLE = 0,
+ 	FW_FEATURE_NATIVE_ALWAYS = 0,
+ 	FW_FEATURE_POSSIBLE =
+@@ -73,6 +76,9 @@ enum {
+ #ifdef CONFIG_PPC_PS3
+ 		FW_FEATURE_PS3_POSSIBLE |
+ #endif
++#ifdef CONFIG_PPC_CELLEB
++		FW_FEATURE_CELLEB_POSSIBLE |
++#endif
+ #ifdef CONFIG_PPC_NATIVE
+ 		FW_FEATURE_NATIVE_ALWAYS |
+ #endif
+@@ -87,6 +93,9 @@ enum {
+ #ifdef CONFIG_PPC_PS3
+ 		FW_FEATURE_PS3_ALWAYS &
+ #endif
++#ifdef CONFIG_PPC_CELLEB
++		FW_FEATURE_CELLEB_ALWAYS &
++#endif
+ #ifdef CONFIG_PPC_NATIVE
+ 		FW_FEATURE_NATIVE_ALWAYS &
+ #endif
+Index: linux-2.6.18/include/asm-powerpc/smp.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/smp.h
++++ linux-2.6.18/include/asm-powerpc/smp.h
+@@ -76,6 +76,7 @@ extern cpumask_t cpu_sibling_map[NR_CPUS
+ void smp_init_iSeries(void);
+ void smp_init_pSeries(void);
+ void smp_init_cell(void);
++void smp_init_celleb(void);
+ void smp_setup_cpu_maps(void);
+ 
+ extern int __cpu_disable(void);
+Index: linux-2.6.18/mvl_patches/pro50-0254.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0254.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(254);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

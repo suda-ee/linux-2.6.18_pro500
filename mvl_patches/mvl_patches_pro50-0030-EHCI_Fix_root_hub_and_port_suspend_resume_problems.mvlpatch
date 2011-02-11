@@ -1,0 +1,584 @@
+#! /usr/bin/env bash
+# Patch: -EHCI_Fix_root_hub_and_port_suspend_resume_problems
+# Date: Fri Jun 15 10:08:59 2007
+# MR: 23304
+# Type: Defect Fix
+# Disposition: Backport from 2.6.20-rc1 
+# Description:
+#     Performed correction in the body of the patch file to apply cleanly
+#     by quilt tool. The changes that makes the original patch unapplicable 
+#     are related to the patch: 
+#     From 7d12e780e003f93433d49ce78cfedf4b4c52adc5 Mon Sep 17 00:00:00 2001
+#     From: David Howells <dhowells@redhat.com>
+#     Date: Thu, 5 Oct 2006 14:55:46 +0100
+#     Subject: [PATCH] IRQ: Maintain regs pointer globally rather than passing to IRQ handlers
+#     
+# 
+# From 8c03356a559ced6fa78931f498193f776d67e445 Mon Sep 17 00:00:00 2001
+# From: Alan Stern <stern@rowland.harvard.edu>
+# Date: Thu, 9 Nov 2006 14:42:16 -0500
+# Subject: [PATCH] EHCI: Fix root-hub and port suspend/resume problems
+# 
+# This patch (as738b) fixes numerous problems in the controller/root-hub
+# suspend/resume/remote-wakeup support in ehci-hcd:
+# 
+# 	The bus_resume() routine should wake up only the ports that
+# 	were suspended by bus_suspend().  Ports that were already
+# 	suspended should remain that way.
+# 
+# 	The interrupt mask is used to detect loss of power in the
+# 	bus_resume() routine (if the mask is 0 then power was lost).
+# 	However bus_suspend() always sets the mask to 0.  Instead the
+# 	mask should retain its normal value, with port-change-detect
+# 	interrupts disabled if remote wakeup is turned off.
+# 
+# 	The interrupt mask should be reset to its correct value at the
+# 	end of bus_resume() regardless of whether power was lost.
+# 
+# 	bus_resume() reinitializes the operational registers if power
+# 	was lost.  However those registers are not in the aux power
+# 	well, hence they can lose their values whenever the controller
+# 	is put into D3.  They should always be reinitialized.
+# 
+# 	When a port-change interrupt occurs and the root hub is
+# 	suspended, the interrupt handler should request a root-hub
+# 	resume instead of starting up the controller all by itself.
+# 
+# 	There's no need for the interrupt handler to request a
+# 	root-hub resume every time a suspended port sends a
+# 	remote-wakeup request.
+# 
+# 	The pci_resume() method doesn't need to check for connected
+# 	ports when deciding whether or not to reset the controller.
+# 	It can make that decision based on whether Vaux power was
+# 	maintained.
+# 
+# 	Even when the controller does not need to be reset,
+# 	pci_resume() must undo the effect of pci_suspend() by
+# 	re-enabling the interrupt mask.
+# 
+# 	If power was lost, pci_resume() must not call ehci_run().
+# 	At this point the root hub is still supposed to be suspended,
+# 	not running.  It's enough to rewrite the command register and
+# 	set the configured_flag.
+# 
+# Signed-off-by: Alan Stern <stern@rowland.harvard.edu>
+# Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+
+PATCHNUM=30
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 23304
+Type: Defect Fix
+Disposition: Backport from 2.6.20-rc1 
+Description:
+    Performed correction in the body of the patch file to apply cleanly
+    by quilt tool. The changes that makes the original patch unapplicable 
+    are related to the patch: 
+    From 7d12e780e003f93433d49ce78cfedf4b4c52adc5 Mon Sep 17 00:00:00 2001
+    From: David Howells <dhowells@redhat.com>
+    Date: Thu, 5 Oct 2006 14:55:46 +0100
+    Subject: [PATCH] IRQ: Maintain regs pointer globally rather than passing to IRQ handlers
+    
+
+From 8c03356a559ced6fa78931f498193f776d67e445 Mon Sep 17 00:00:00 2001
+From: Alan Stern <stern@rowland.harvard.edu>
+Date: Thu, 9 Nov 2006 14:42:16 -0500
+Subject: [PATCH] EHCI: Fix root-hub and port suspend/resume problems
+
+This patch (as738b) fixes numerous problems in the controller/root-hub
+suspend/resume/remote-wakeup support in ehci-hcd:
+
+	The bus_resume() routine should wake up only the ports that
+	were suspended by bus_suspend().  Ports that were already
+	suspended should remain that way.
+
+	The interrupt mask is used to detect loss of power in the
+	bus_resume() routine (if the mask is 0 then power was lost).
+	However bus_suspend() always sets the mask to 0.  Instead the
+	mask should retain its normal value, with port-change-detect
+	interrupts disabled if remote wakeup is turned off.
+
+	The interrupt mask should be reset to its correct value at the
+	end of bus_resume() regardless of whether power was lost.
+
+	bus_resume() reinitializes the operational registers if power
+	was lost.  However those registers are not in the aux power
+	well, hence they can lose their values whenever the controller
+	is put into D3.  They should always be reinitialized.
+
+	When a port-change interrupt occurs and the root hub is
+	suspended, the interrupt handler should request a root-hub
+	resume instead of starting up the controller all by itself.
+
+	There's no need for the interrupt handler to request a
+	root-hub resume every time a suspended port sends a
+	remote-wakeup request.
+
+	The pci_resume() method doesn't need to check for connected
+	ports when deciding whether or not to reset the controller.
+	It can make that decision based on whether Vaux power was
+	maintained.
+
+	Even when the controller does not need to be reset,
+	pci_resume() must undo the effect of pci_suspend() by
+	re-enabling the interrupt mask.
+
+	If power was lost, pci_resume() must not call ehci_run().
+	At this point the root hub is still supposed to be suspended,
+	not running.  It's enough to rewrite the command register and
+	set the configured_flag.
+
+Signed-off-by: Alan Stern <stern@rowland.harvard.edu>
+Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+Index: linux-2.6.18/drivers/usb/host/ehci-hcd.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ehci-hcd.c
++++ linux-2.6.18/drivers/usb/host/ehci-hcd.c
+@@ -620,9 +620,8 @@ static irqreturn_t ehci_irq (struct usb_
+ 		unsigned	i = HCS_N_PORTS (ehci->hcs_params);
+ 
+ 		/* resume root hub? */
+-		status = readl (&ehci->regs->command);
+-		if (!(status & CMD_RUN))
+-			writel (status | CMD_RUN, &ehci->regs->command);
++		if (!(readl(&ehci->regs->command) & CMD_RUN))
++			usb_hcd_resume_root_hub(hcd);
+ 
+ 		while (i--) {
+ 			int pstatus = readl (&ehci->regs->port_status [i]);
+@@ -639,7 +638,6 @@ static irqreturn_t ehci_irq (struct usb_
+ 			 */
+ 			ehci->reset_done [i] = jiffies + msecs_to_jiffies (20);
+ 			ehci_dbg (ehci, "port %d remote wakeup\n", i + 1);
+-			usb_hcd_resume_root_hub(hcd);
+ 		}
+ 	}
+ 
+Index: linux-2.6.18/drivers/usb/host/ehci-hub.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ehci-hub.c
++++ linux-2.6.18/drivers/usb/host/ehci-hub.c
+@@ -34,6 +34,7 @@ static int ehci_bus_suspend (struct usb_
+ {
+ 	struct ehci_hcd		*ehci = hcd_to_ehci (hcd);
+ 	int			port;
++	int			mask;
+ 
+ 	if (time_before (jiffies, ehci->next_statechange))
+ 		msleep(5);
+@@ -51,14 +52,25 @@ static int ehci_bus_suspend (struct usb_
+ 		ehci->reclaim_ready = 1;
+ 	ehci_work(ehci, NULL);
+ 
+-	/* suspend any active/unsuspended ports, maybe allow wakeup */
++	/* Unlike other USB host controller types, EHCI doesn't have
++	 * any notion of "global" or bus-wide suspend.  The driver has
++	 * to manually suspend all the active unsuspended ports, and
++	 * then manually resume them in the bus_resume() routine.
++	 */
++	ehci->bus_suspended = 0;
+ 	while (port--) {
+ 		u32 __iomem	*reg = &ehci->regs->port_status [port];
+ 		u32		t1 = readl (reg) & ~PORT_RWC_BITS;
+ 		u32		t2 = t1;
+ 
+-		if ((t1 & PORT_PE) && !(t1 & PORT_OWNER))
++		/* keep track of which ports we suspend */
++		if ((t1 & PORT_PE) && !(t1 & PORT_OWNER) &&
++				!(t1 & PORT_SUSPEND)) {
+ 			t2 |= PORT_SUSPEND;
++			set_bit(port, &ehci->bus_suspended);
++		}
++
++		/* enable remote wakeup on all ports */
+ 		if (device_may_wakeup(&hcd->self.root_hub->dev))
+ 			t2 |= PORT_WKOC_E|PORT_WKDISC_E|PORT_WKCONN_E;
+ 		else
+@@ -76,6 +88,13 @@ static int ehci_bus_suspend (struct usb_
+ 	ehci_halt (ehci);
+ 	hcd->state = HC_STATE_SUSPENDED;
+ 
++	/* allow remote wakeup */
++	mask = INTR_MASK;
++	if (!device_may_wakeup(&hcd->self.root_hub->dev))
++		mask &= ~STS_PCD;
++	writel(mask, &ehci->regs->intr_enable);
++	readl(&ehci->regs->intr_enable);
++
+ 	ehci->next_statechange = jiffies + msecs_to_jiffies(10);
+ 	spin_unlock_irq (&ehci->lock);
+ 	return 0;
+@@ -88,7 +107,6 @@ static int ehci_bus_resume (struct usb_h
+ 	struct ehci_hcd		*ehci = hcd_to_ehci (hcd);
+ 	u32			temp;
+ 	int			i;
+-	int			intr_enable;
+ 
+ 	if (time_before (jiffies, ehci->next_statechange))
+ 		msleep(5);
+@@ -100,31 +118,30 @@ static int ehci_bus_resume (struct usb_h
+ 	 * the last user of the controller, not reset/pm hardware keeping
+ 	 * state we gave to it.
+ 	 */
++	temp = readl(&ehci->regs->intr_enable);
++	ehci_dbg(ehci, "resume root hub%s\n", temp ? "" : " after power loss");
+ 
+-	/* re-init operational registers in case we lost power */
+-	if (readl (&ehci->regs->intr_enable) == 0) {
+-		/* at least some APM implementations will try to deliver
+-		 * IRQs right away, so delay them until we're ready.
+-		 */
+-		intr_enable = 1;
+-		writel (0, &ehci->regs->segment);
+-		writel (ehci->periodic_dma, &ehci->regs->frame_list);
+-		writel ((u32)ehci->async->qh_dma, &ehci->regs->async_next);
+-	} else
+-		intr_enable = 0;
+-	ehci_dbg(ehci, "resume root hub%s\n",
+-			intr_enable ? " after power loss" : "");
++	/* at least some APM implementations will try to deliver
++	 * IRQs right away, so delay them until we're ready.
++	 */
++	writel(0, &ehci->regs->intr_enable);
++
++	/* re-init operational registers */
++	writel(0, &ehci->regs->segment);
++	writel(ehci->periodic_dma, &ehci->regs->frame_list);
++	writel((u32) ehci->async->qh_dma, &ehci->regs->async_next);
+ 
+ 	/* restore CMD_RUN, framelist size, and irq threshold */
+ 	writel (ehci->command, &ehci->regs->command);
+ 
+-	/* take ports out of suspend */
++	/* manually resume the ports we suspended during bus_suspend() */
+ 	i = HCS_N_PORTS (ehci->hcs_params);
+ 	while (i--) {
+ 		temp = readl (&ehci->regs->port_status [i]);
+ 		temp &= ~(PORT_RWC_BITS
+ 			| PORT_WKOC_E | PORT_WKDISC_E | PORT_WKCONN_E);
+-		if (temp & PORT_SUSPEND) {
++		if (test_bit(i, &ehci->bus_suspended) &&
++				(temp & PORT_SUSPEND)) {
+ 			ehci->reset_done [i] = jiffies + msecs_to_jiffies (20);
+ 			temp |= PORT_RESUME;
+ 		}
+@@ -134,11 +151,12 @@ static int ehci_bus_resume (struct usb_h
+ 	mdelay (20);
+ 	while (i--) {
+ 		temp = readl (&ehci->regs->port_status [i]);
+-		if ((temp & PORT_SUSPEND) == 0)
+-			continue;
+-		temp &= ~(PORT_RWC_BITS | PORT_RESUME);
+-		writel (temp, &ehci->regs->port_status [i]);
+-		ehci_vdbg (ehci, "resumed port %d\n", i + 1);
++		if (test_bit(i, &ehci->bus_suspended) &&
++				(temp & PORT_SUSPEND)) {
++			temp &= ~(PORT_RWC_BITS | PORT_RESUME);
++			writel (temp, &ehci->regs->port_status [i]);
++			ehci_vdbg (ehci, "resumed port %d\n", i + 1);
++		}
+ 	}
+ 	(void) readl (&ehci->regs->command);
+ 
+@@ -157,8 +175,7 @@ static int ehci_bus_resume (struct usb_h
+ 	hcd->state = HC_STATE_RUNNING;
+ 
+ 	/* Now we can safely re-enable irqs */
+-	if (intr_enable)
+-		writel (INTR_MASK, &ehci->regs->intr_enable);
++	writel(INTR_MASK, &ehci->regs->intr_enable);
+ 
+ 	spin_unlock_irq (&ehci->lock);
+ 	return 0;
+Index: linux-2.6.18/drivers/usb/host/ehci-pci.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ehci-pci.c
++++ linux-2.6.18/drivers/usb/host/ehci-pci.c
+@@ -257,9 +257,7 @@ static int ehci_pci_suspend(struct usb_h
+ static int ehci_pci_resume(struct usb_hcd *hcd)
+ {
+ 	struct ehci_hcd		*ehci = hcd_to_ehci(hcd);
+-	unsigned		port;
+ 	struct pci_dev		*pdev = to_pci_dev(hcd->self.controller);
+-	int			retval = -EINVAL;
+ 
+ 	// maybe restore FLADJ
+ 
+@@ -269,27 +267,19 @@ static int ehci_pci_resume(struct usb_hc
+ 	/* Mark hardware accessible again as we are out of D3 state by now */
+ 	set_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+ 
+-	/* If CF is clear, we lost PCI Vaux power and need to restart.  */
+-	if (readl(&ehci->regs->configured_flag) != FLAG_CF)
+-		goto restart;
+-
+-	/* If any port is suspended (or owned by the companion),
+-	 * we know we can/must resume the HC (and mustn't reset it).
+-	 * We just defer that to the root hub code.
+-	 */
+-	for (port = HCS_N_PORTS(ehci->hcs_params); port > 0; ) {
+-		u32	status;
+-		port--;
+-		status = readl(&ehci->regs->port_status [port]);
+-		if (!(status & PORT_POWER))
+-			continue;
+-		if (status & (PORT_SUSPEND | PORT_RESUME | PORT_OWNER)) {
+-			usb_hcd_resume_root_hub(hcd);
+-			return 0;
+-		}
++	/* If CF is still set, we maintained PCI Vaux power.
++	 * Just undo the effect of ehci_pci_suspend().
++	 */
++	if (readl(&ehci->regs->configured_flag) == FLAG_CF) {
++		int	mask = INTR_MASK;
++
++		if (!device_may_wakeup(&hcd->self.root_hub->dev))
++			mask &= ~STS_PCD;
++		writel(mask, &ehci->regs->intr_enable);
++		readl(&ehci->regs->intr_enable);
++		return 0;
+ 	}
+ 
+-restart:
+ 	ehci_dbg(ehci, "lost power, restarting\n");
+ 	usb_root_hub_lost_power(hcd->self.root_hub);
+ 
+@@ -307,13 +297,15 @@ restart:
+ 	ehci_work(ehci, NULL);
+ 	spin_unlock_irq(&ehci->lock);
+ 
+-	/* restart; khubd will disconnect devices */
+-	retval = ehci_run(hcd);
+-
+ 	/* here we "know" root ports should always stay powered */
+ 	ehci_port_power(ehci, 1);
+ 
+-	return retval;
++	writel(ehci->command, &ehci->regs->command);
++	writel(FLAG_CF, &ehci->regs->configured_flag);
++	readl(&ehci->regs->command);	/* unblock posted writes */
++
++	hcd->state = HC_STATE_SUSPENDED;
++	return 0;
+ }
+ #endif
+ 
+Index: linux-2.6.18/drivers/usb/host/ehci.h
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ehci.h
++++ linux-2.6.18/drivers/usb/host/ehci.h
+@@ -74,6 +74,7 @@ struct ehci_hcd {			/* one per controlle
+ 
+ 	/* per root hub port */
+ 	unsigned long		reset_done [EHCI_MAX_ROOT_PORTS];
++	unsigned long		bus_suspended;
+ 
+ 	/* per-HC memory pools (could be per-bus, but ...) */
+ 	struct dma_pool		*qh_pool;	/* qh per active urb */
+Index: linux-2.6.18/mvl_patches/pro50-0030.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0030.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(30);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

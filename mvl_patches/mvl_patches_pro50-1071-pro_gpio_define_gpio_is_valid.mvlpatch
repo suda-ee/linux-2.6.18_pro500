@@ -1,0 +1,374 @@
+#! /usr/bin/env bash
+# Patch: -pro_gpio_define_gpio_is_valid
+# Date: Fri Apr 25 11:55:12 2008
+# Source: kernel.org
+# MR: 27564
+# Type: Enhancement
+# Disposition: backport from the -mm tree
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# [PRO] gpio: define gpio_is_valid
+# 
+# Introduce a gpio_is_valid() predicate; use it in gpiolib.
+# 
+# Signed-off-by: Guennadi Liakhovetski <g.liakhovetski@pengutronix.de>
+#     [ use inline function; follow the gpio_* naming convention;
+#       work without gpiolib; all programming interfaces need docs ]
+# Signed-off-by: David Brownell <dbrownell@users.sourceforge.net>
+# Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+# 
+#  Documentation/gpio.txt     |   10 ++++++++++
+#  drivers/gpio/gpiolib.c     |   14 +++++++-------
+#  include/asm-generic/gpio.h |   12 ++++++++++++
+#  3 files changed, 29 insertions(+), 7 deletions(-)
+# 
+
+PATCHNUM=1071
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: kernel.org
+MR: 27564
+Type: Enhancement
+Disposition: backport from the -mm tree
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+[PRO] gpio: define gpio_is_valid
+
+Introduce a gpio_is_valid() predicate; use it in gpiolib.
+
+Signed-off-by: Guennadi Liakhovetski <g.liakhovetski@pengutronix.de>
+    [ use inline function; follow the gpio_* naming convention;
+      work without gpiolib; all programming interfaces need docs ]
+Signed-off-by: David Brownell <dbrownell@users.sourceforge.net>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+
+ Documentation/gpio.txt     |   10 ++++++++++
+ drivers/gpio/gpiolib.c     |   14 +++++++-------
+ include/asm-generic/gpio.h |   12 ++++++++++++
+ mvl_patches/pro50-1071.c   |   16 ++++++++++++++++
+ 4 files changed, 45 insertions(+), 7 deletions(-)
+
+Index: linux-2.6.18/Documentation/gpio.txt
+===================================================================
+--- linux-2.6.18.orig/Documentation/gpio.txt
++++ linux-2.6.18/Documentation/gpio.txt
+@@ -93,6 +93,16 @@ type of GPIO controller, and on one part
+ The numbers need not be contiguous; either of those platforms could also
+ use numbers 2000-2063 to identify GPIOs in a bank of I2C GPIO expanders.
+ 
++If you want to initialize a structure with an invalid GPIO number, use
++some negative number (perhaps "-EINVAL"); that will never be valid.  To
++test if a number could reference a GPIO, you may use this predicate:
++
++	int gpio_is_valid(int number);
++
++A number that's not valid will be rejected by calls which may request
++or free GPIOs (see below).  Other numbers may also be rejected; for
++example, a number might be valid but unused on a given board.
++
+ Whether a platform supports multiple GPIO controllers is currently a
+ platform-specific implementation issue.
+ 
+Index: linux-2.6.18/drivers/gpio/gpiolib.c
+===================================================================
+--- linux-2.6.18.orig/drivers/gpio/gpiolib.c
++++ linux-2.6.18/drivers/gpio/gpiolib.c
+@@ -99,7 +99,7 @@ int gpiochip_add(struct gpio_chip *chip)
+ 	 * dynamic allocation.  We don't currently support that.
+ 	 */
+ 
+-	if (chip->base < 0 || (chip->base  + chip->ngpio) >= ARCH_NR_GPIOS) {
++	if (chip->base < 0 || !gpio_is_valid(chip->base  + chip->ngpio)) {
+ 		status = -EINVAL;
+ 		goto fail;
+ 	}
+@@ -174,7 +174,7 @@ int gpio_request(unsigned gpio, const ch
+ 
+ 	spin_lock_irqsave(&gpio_lock, flags);
+ 
+-	if (gpio >= ARCH_NR_GPIOS)
++	if (!gpio_is_valid(gpio))
+ 		goto done;
+ 	desc = &gpio_desc[gpio];
+ 	if (desc->chip == NULL)
+@@ -209,7 +209,7 @@ void gpio_free(unsigned gpio)
+ 	unsigned long		flags;
+ 	struct gpio_desc	*desc;
+ 
+-	if (gpio >= ARCH_NR_GPIOS) {
++	if (!gpio_is_valid(gpio)) {
+ 		WARN_ON(extra_checks);
+ 		return;
+ 	}
+@@ -245,7 +245,7 @@ const char *gpiochip_is_requested(struct
+ {
+ 	unsigned gpio = chip->base + offset;
+ 
+-	if (gpio >= ARCH_NR_GPIOS || gpio_desc[gpio].chip != chip)
++	if (!gpio_is_valid(gpio) || gpio_desc[gpio].chip != chip)
+ 		return NULL;
+ 	if (test_bit(FLAG_REQUESTED, &gpio_desc[gpio].flags) == 0)
+ 		return NULL;
+@@ -276,7 +276,7 @@ int gpio_direction_input(unsigned gpio)
+ 
+ 	spin_lock_irqsave(&gpio_lock, flags);
+ 
+-	if (gpio >= ARCH_NR_GPIOS)
++	if (!gpio_is_valid(gpio))
+ 		goto fail;
+ 	chip = desc->chip;
+ 	if (!chip || !chip->get || !chip->direction_input)
+@@ -314,7 +314,7 @@ int gpio_direction_output(unsigned gpio,
+ 
+ 	spin_lock_irqsave(&gpio_lock, flags);
+ 
+-	if (gpio >= ARCH_NR_GPIOS)
++	if (!gpio_is_valid(gpio))
+ 		goto fail;
+ 	chip = desc->chip;
+ 	if (!chip || !chip->set || !chip->direction_output)
+@@ -544,7 +544,7 @@ static int gpiolib_show(struct seq_file 
+ 
+ 	/* REVISIT this isn't locked against gpio_chip removal ... */
+ 
+-	for (gpio = 0; gpio < ARCH_NR_GPIOS; gpio++) {
++	for (gpio = 0; gpio_is_valid(gpio); gpio++) {
+ 		if (chip == gpio_desc[gpio].chip)
+ 			continue;
+ 		chip = gpio_desc[gpio].chip;
+Index: linux-2.6.18/include/asm-generic/gpio.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-generic/gpio.h
++++ linux-2.6.18/include/asm-generic/gpio.h
+@@ -16,6 +16,12 @@
+ #define ARCH_NR_GPIOS		256
+ #endif
+ 
++static inline int gpio_is_valid(int number)
++{
++	/* only some non-negative numbers are valid */
++	return ((unsigned)number) < ARCH_NR_GPIOS;
++}
++
+ struct seq_file;
+ struct module;
+ 
+@@ -102,6 +108,12 @@ extern int __gpio_cansleep(unsigned gpio
+ 
+ #else
+ 
++static inline int gpio_is_valid(int number)
++{
++	/* only non-negative numbers are valid */
++	return number >= 0;
++}
++
+ /* platforms that don't directly support access to GPIOs through I2C, SPI,
+  * or other blocking infrastructure can use these wrappers.
+  */
+Index: linux-2.6.18/mvl_patches/pro50-1071.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1071.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1071);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

@@ -1,0 +1,388 @@
+#! /usr/bin/env bash
+# Patch: -MVL_Use_resource_size_t_for_serial_port_IO_addresses
+# Date: Wed Sep 26 11:18:37 2007
+# MR: 24856
+# Adjustments:
+#     early_uart_console_switch() changes have been added,
+#     also some other minor modifications have been made.
+# From 4f640efb3170dbcf99a37a3cc99060647b95428c Mon Sep 17 00:00:00 2001
+# From: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+# Date: Mon, 23 Jul 2007 18:43:44 -0700
+# Subject: [PATCH] Use resource_size_t for serial port IO addresses
+# 
+# At present, various parts of the serial code use unsigned long to define
+# resource addresses.  This is a problem, because some 32-bit platforms have
+# physical addresses larger than 32-bits, and have mmio serial uarts located
+# above the 4GB point.
+# 
+# This patch changes the type of mapbase in both struct uart_port and struct
+# plat_serial8250_port to resource_size_t, which can be configured to be 64
+# bits on such platforms.  The mapbase in serial_struct can't safely be
+# changed, because that structure is user visible.
+# 
+# Signed-off-by: David Gibson <dwg@au1.ibm.com>
+# Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+# Cc: Russell King <rmk@arm.linux.org.uk>
+# Cc: Paul Mackerras <paulus@samba.org>
+# Cc: Jason Wessel <jason.wessel@windriver.com>
+# Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+# Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+PATCHNUM=376
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+Adjustments:
+    early_uart_console_switch() changes have been added,
+    also some other minor modifications have been made.
+From 4f640efb3170dbcf99a37a3cc99060647b95428c Mon Sep 17 00:00:00 2001
+From: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+Date: Mon, 23 Jul 2007 18:43:44 -0700
+Subject: [PATCH] Use resource_size_t for serial port IO addresses
+
+At present, various parts of the serial code use unsigned long to define
+resource addresses.  This is a problem, because some 32-bit platforms have
+physical addresses larger than 32-bits, and have mmio serial uarts located
+above the 4GB point.
+
+This patch changes the type of mapbase in both struct uart_port and struct
+plat_serial8250_port to resource_size_t, which can be configured to be 64
+bits on such platforms.  The mapbase in serial_struct can't safely be
+changed, because that structure is user visible.
+
+Signed-off-by: David Gibson <dwg@au1.ibm.com>
+Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+Cc: Russell King <rmk@arm.linux.org.uk>
+Cc: Paul Mackerras <paulus@samba.org>
+Cc: Jason Wessel <jason.wessel@windriver.com>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+Index: linux-2.6.18/drivers/serial/8250.c
+===================================================================
+--- linux-2.6.18.orig/drivers/serial/8250.c
++++ linux-2.6.18/drivers/serial/8250.c
+@@ -2439,8 +2439,9 @@ static int __devinit serial8250_probe(st
+ 		ret = serial8250_register_port(&port);
+ 		if (ret < 0) {
+ 			dev_err(&dev->dev, "unable to register port at index %d "
+-				"(IO%lx MEM%lx IRQ%d): %d\n", i,
+-				p->iobase, p->mapbase, p->irq, ret);
++				"(IO%lx MEM%llx IRQ%d): %d\n", i,
++				p->iobase, (unsigned long long)p->mapbase,
++				p->irq, ret);
+ 		}
+ 	}
+ 	return 0;
+Index: linux-2.6.18/drivers/serial/8250_early.c
+===================================================================
+--- linux-2.6.18.orig/drivers/serial/8250_early.c
++++ linux-2.6.18/drivers/serial/8250_early.c
+@@ -145,8 +145,9 @@ static int __init parse_options(struct e
+ 		port->mapbase = simple_strtoul(options + 5, &options, 0);
+ 		port->membase = ioremap(port->mapbase, mapsize);
+ 		if (!port->membase) {
+-			printk(KERN_ERR "%s: Couldn't ioremap 0x%lx\n",
+-				__FUNCTION__, port->mapbase);
++			printk(KERN_ERR "%s: Couldn't ioremap 0x%llx\n",
++				__FUNCTION__,
++			       (unsigned long long)port->mapbase);
+ 			return -ENOMEM;
+ 		}
+ 		mmio = 1;
+@@ -168,9 +169,10 @@ static int __init parse_options(struct e
+ 			device->baud);
+ 	}
+ 
+-	printk(KERN_INFO "Early serial console at %s 0x%lx (options '%s')\n",
++	printk(KERN_INFO "Early serial console at %s 0x%llx (options '%s')\n",
+ 		mmio ? "MMIO" : "I/O port",
+-		mmio ? port->mapbase : (unsigned long) port->iobase,
++		mmio ? (unsigned long long) port->mapbase
++	             : (unsigned long long) port->iobase,
+ 		device->options);
+ 	return 0;
+ }
+@@ -236,10 +238,10 @@ static int __init early_uart_console_swi
+ 	mmio = (port->iotype == UPIO_MEM);
+ 	line = serial8250_start_console(port, device->options);
+ 	if (line < 0)
+-		printk("No ttyS device at %s 0x%lx for console\n",
++		printk("No ttyS device at %s 0x%llx for console\n",
+ 			mmio ? "MMIO" : "I/O port",
+-			mmio ? port->mapbase :
+-			    (unsigned long) port->iobase);
++			mmio ? (unsigned long long)port->mapbase :
++			    (unsigned long long) port->iobase);
+ 
+ 	unregister_console(&early_uart_console);
+ 	if (mmio)
+Index: linux-2.6.18/drivers/serial/serial_core.c
+===================================================================
+--- linux-2.6.18.orig/drivers/serial/serial_core.c
++++ linux-2.6.18/drivers/serial/serial_core.c
+@@ -640,7 +640,7 @@ static int uart_get_info(struct uart_sta
+ 	tmp.hub6	    = port->hub6;
+ 	tmp.io_type         = port->iotype;
+ 	tmp.iomem_reg_shift = port->regshift;
+-	tmp.iomem_base      = (void *)port->mapbase;
++	tmp.iomem_base      = (void *)(unsigned long)port->mapbase;
+ 
+ 	if (copy_to_user(retinfo, &tmp, sizeof(*retinfo)))
+ 		return -EFAULT;
+@@ -1675,10 +1675,11 @@ static int uart_line_info(char *buf, str
+ 		return 0;
+ 
+ 	mmio = port->iotype >= UPIO_MEM;
+-	ret = sprintf(buf, "%d: uart:%s %s%08lX irq:%d",
++	ret = sprintf(buf, "%d: uart:%s %s%08llX irq:%d",
+ 			port->line, uart_type(port),
+ 			mmio ? "mmio:0x" : "port:",
+-			mmio ? port->mapbase : (unsigned long) port->iobase,
++			mmio ? (unsigned long long)port->mapbase
++		             : (unsigned long long) port->iobase,
+ 			port->irq);
+ 	if (port->iotype == UPIO_MEM)
+ 		ret += sprintf(buf+ret, " membase 0x%08lX",
+@@ -2053,8 +2054,8 @@ uart_report_port(struct uart_driver *drv
+ 	case UPIO_AU:
+ 	case UPIO_TSI:
+ 		snprintf(address, sizeof(address),
+-			"MMIO map 0x%lx mem 0x%lx", port->mapbase,
+-			(unsigned long) port->membase);
++			 "MMIO map 0x%llx mem 0x%lx", (unsigned long long)port->mapbase,
++			 (unsigned long) port->membase);
+ 		break;
+ 	default:
+ 		strlcpy(address, "*unknown*", sizeof(address));
+Index: linux-2.6.18/include/linux/serial_8250.h
+===================================================================
+--- linux-2.6.18.orig/include/linux/serial_8250.h
++++ linux-2.6.18/include/linux/serial_8250.h
+@@ -20,7 +20,7 @@
+ struct plat_serial8250_port {
+ 	unsigned long	iobase;		/* io base address */
+ 	void __iomem	*membase;	/* ioremap cookie or NULL */
+-	unsigned long	mapbase;	/* resource base */
++	resource_size_t	mapbase;	/* resource base */
+ 	unsigned int	irq;		/* interrupt number */
+ 	unsigned int	uartclk;	/* UART clock rate */
+ 	unsigned char	regshift;	/* register shift */
+Index: linux-2.6.18/include/linux/serial_core.h
+===================================================================
+--- linux-2.6.18.orig/include/linux/serial_core.h
++++ linux-2.6.18/include/linux/serial_core.h
+@@ -272,7 +272,7 @@ struct uart_port {
+ 	const struct uart_ops	*ops;
+ 	unsigned int		custom_divisor;
+ 	unsigned int		line;			/* port index */
+-	unsigned long		mapbase;		/* for ioremap */
++	resource_size_t		mapbase;		/* for ioremap */
+ 	struct device		*dev;			/* parent device */
+ 	unsigned char		hub6;			/* this should be in the 8250 driver */
+ 	unsigned char		unused[3];
+Index: linux-2.6.18/mvl_patches/pro50-0376.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0376.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(376);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

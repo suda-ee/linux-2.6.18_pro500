@@ -1,0 +1,471 @@
+#! /usr/bin/env bash
+# Patch: -implement_a_general_integer_log2_facility_in_the_kernel
+# Date: Wed Jun 11 14:52:01 2008
+# Source: David Howells <dhowells@redhat.com>
+# 	backport from 2.6.20-rc1 (f0d1b0b30d250a07627ad8b9fbbb5c7cc08422e8)
+# MR: 27582
+# Type: Enhancement
+# Disposition: local
+# Signed-off-by: Gennadiy Kurtsman <gkurtsman@ru.mvista.com>
+# Description:
+# 
+# NOTE: This is partial backport (include/linux/kernel.h and include/linux/log2.h
+# have been taken)
+# 
+# commit f0d1b0b30d250a07627ad8b9fbbb5c7cc08422e8
+# Author: David Howells <dhowells@redhat.com>
+# Date:   12/08/2006 01:37:49 PM
+# 
+#     [PATCH] LOG2: Implement a general integer log2 facility in the kernel
+#     
+#     This facility provides three entry points:
+#     
+#         ilog2()               Log base 2 of unsigned long
+#         ilog2_u32()    Log base 2 of u32
+#         ilog2_u64()    Log base 2 of u64
+#     
+#     These facilities can either be used inside functions on dynamic data:
+#     
+#         int do_something(long q)
+#         {
+#                ...;
+#                y = ilog2(x)
+#                ...;
+#         }
+#     
+#     Or can be used to statically initialise global variables with constant values:
+#     
+#         unsigned n = ilog2(27);
+#     
+#     When performing static initialisation, the compiler will report "error:
+#     initializer element is not constant" if asked to take a log of zero or of
+#     something not reducible to a constant.  They treat negative numbers as
+#     unsigned.
+#     
+#     When not dealing with a constant, they fall back to using fls() which permits
+#     them to use arch-specific log calculation instructions - such as BSR on
+#     x86/x86_64 or SCAN on FRV - if available.
+#     
+#     [akpm@osdl.org: MMC fix]
+#     Signed-off-by: David Howells <dhowells@redhat.com>
+#     Cc: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+#     Cc: Paul Mackerras <paulus@samba.org>
+#     Cc: Herbert Xu <herbert@gondor.apana.org.au>
+#     Cc: David Howells <dhowells@redhat.com>
+#     Cc: Wojtek Kaniewski <wojtekka@toxygen.net>
+#     Signed-off-by: Andrew Morton <akpm@osdl.org>
+#     Signed-off-by: Linus Torvalds <torvalds@osdl.org>
+# 
+
+PATCHNUM=1223
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: David Howells <dhowells@redhat.com>
+	backport from 2.6.20-rc1 (f0d1b0b30d250a07627ad8b9fbbb5c7cc08422e8)
+MR: 27582
+Type: Enhancement
+Disposition: local
+Signed-off-by: Gennadiy Kurtsman <gkurtsman@ru.mvista.com>
+Description:
+
+NOTE: This is partial backport (include/linux/kernel.h and include/linux/log2.h
+have been taken)
+
+commit f0d1b0b30d250a07627ad8b9fbbb5c7cc08422e8
+Author: David Howells <dhowells@redhat.com>
+Date:   12/08/2006 01:37:49 PM
+
+    [PATCH] LOG2: Implement a general integer log2 facility in the kernel
+    
+    This facility provides three entry points:
+    
+        ilog2()               Log base 2 of unsigned long
+        ilog2_u32()    Log base 2 of u32
+        ilog2_u64()    Log base 2 of u64
+    
+    These facilities can either be used inside functions on dynamic data:
+    
+        int do_something(long q)
+        {
+               ...;
+               y = ilog2(x)
+               ...;
+        }
+    
+    Or can be used to statically initialise global variables with constant values:
+    
+        unsigned n = ilog2(27);
+    
+    When performing static initialisation, the compiler will report "error:
+    initializer element is not constant" if asked to take a log of zero or of
+    something not reducible to a constant.  They treat negative numbers as
+    unsigned.
+    
+    When not dealing with a constant, they fall back to using fls() which permits
+    them to use arch-specific log calculation instructions - such as BSR on
+    x86/x86_64 or SCAN on FRV - if available.
+    
+    [akpm@osdl.org: MMC fix]
+    Signed-off-by: David Howells <dhowells@redhat.com>
+    Cc: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+    Cc: Paul Mackerras <paulus@samba.org>
+    Cc: Herbert Xu <herbert@gondor.apana.org.au>
+    Cc: David Howells <dhowells@redhat.com>
+    Cc: Wojtek Kaniewski <wojtekka@toxygen.net>
+    Signed-off-by: Andrew Morton <akpm@osdl.org>
+    Signed-off-by: Linus Torvalds <torvalds@osdl.org>
+
+Index: linux-2.6.18/include/linux/kernel.h
+===================================================================
+--- linux-2.6.18.orig/include/linux/kernel.h
++++ linux-2.6.18/include/linux/kernel.h
+@@ -13,6 +13,7 @@
+ #include <linux/types.h>
+ #include <linux/compiler.h>
+ #include <linux/bitops.h>
++#include <linux/log2.h>
+ #include <asm/byteorder.h>
+ #include <asm/bug.h>
+ 
+Index: linux-2.6.18/include/linux/log2.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/include/linux/log2.h
+@@ -0,0 +1,131 @@
++/* Integer base 2 logarithm calculation
++ *
++ * Copyright (C) 2006 Red Hat, Inc. All Rights Reserved.
++ * Written by David Howells (dhowells@redhat.com)
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */
++
++#ifndef _LINUX_LOG2_H
++#define _LINUX_LOG2_H
++
++#include <linux/types.h>
++#include <linux/bitops.h>
++
++/*
++ * deal with unrepresentable constant logarithms
++ */
++extern __attribute__((const, noreturn))
++int ____ilog2_NaN(void);
++
++/*
++ * non-constant log of base 2 calculators
++ * - the arch may override these in asm/bitops.h if they can be implemented
++ *   more efficiently than using fls() and fls64()
++ * - the arch is not required to handle n==0 if implementing the fallback
++ */
++#ifndef CONFIG_ARCH_HAS_ILOG2_U32
++static inline __attribute__((const))
++int __ilog2_u32(u32 n)
++{
++	return fls(n) - 1;
++}
++#endif
++
++#ifndef CONFIG_ARCH_HAS_ILOG2_U64
++static inline __attribute__((const))
++int __ilog2_u64(u64 n)
++{
++	return fls64(n) - 1;
++}
++#endif
++
++/**
++ * ilog2 - log of base 2 of 32-bit or a 64-bit unsigned value
++ * @n - parameter
++ *
++ * constant-capable log of base 2 calculation
++ * - this can be used to initialise global variables from constant data, hence
++ *   the massive ternary operator construction
++ *
++ * selects the appropriately-sized optimised version depending on sizeof(n)
++ */
++#define ilog2(n)				\
++(						\
++	__builtin_constant_p(n) ? (		\
++		(n) < 1 ? ____ilog2_NaN() :	\
++		(n) & (1ULL << 63) ? 63 :	\
++		(n) & (1ULL << 62) ? 62 :	\
++		(n) & (1ULL << 61) ? 61 :	\
++		(n) & (1ULL << 60) ? 60 :	\
++		(n) & (1ULL << 59) ? 59 :	\
++		(n) & (1ULL << 58) ? 58 :	\
++		(n) & (1ULL << 57) ? 57 :	\
++		(n) & (1ULL << 56) ? 56 :	\
++		(n) & (1ULL << 55) ? 55 :	\
++		(n) & (1ULL << 54) ? 54 :	\
++		(n) & (1ULL << 53) ? 53 :	\
++		(n) & (1ULL << 52) ? 52 :	\
++		(n) & (1ULL << 51) ? 51 :	\
++		(n) & (1ULL << 50) ? 50 :	\
++		(n) & (1ULL << 49) ? 49 :	\
++		(n) & (1ULL << 48) ? 48 :	\
++		(n) & (1ULL << 47) ? 47 :	\
++		(n) & (1ULL << 46) ? 46 :	\
++		(n) & (1ULL << 45) ? 45 :	\
++		(n) & (1ULL << 44) ? 44 :	\
++		(n) & (1ULL << 43) ? 43 :	\
++		(n) & (1ULL << 42) ? 42 :	\
++		(n) & (1ULL << 41) ? 41 :	\
++		(n) & (1ULL << 40) ? 40 :	\
++		(n) & (1ULL << 39) ? 39 :	\
++		(n) & (1ULL << 38) ? 38 :	\
++		(n) & (1ULL << 37) ? 37 :	\
++		(n) & (1ULL << 36) ? 36 :	\
++		(n) & (1ULL << 35) ? 35 :	\
++		(n) & (1ULL << 34) ? 34 :	\
++		(n) & (1ULL << 33) ? 33 :	\
++		(n) & (1ULL << 32) ? 32 :	\
++		(n) & (1ULL << 31) ? 31 :	\
++		(n) & (1ULL << 30) ? 30 :	\
++		(n) & (1ULL << 29) ? 29 :	\
++		(n) & (1ULL << 28) ? 28 :	\
++		(n) & (1ULL << 27) ? 27 :	\
++		(n) & (1ULL << 26) ? 26 :	\
++		(n) & (1ULL << 25) ? 25 :	\
++		(n) & (1ULL << 24) ? 24 :	\
++		(n) & (1ULL << 23) ? 23 :	\
++		(n) & (1ULL << 22) ? 22 :	\
++		(n) & (1ULL << 21) ? 21 :	\
++		(n) & (1ULL << 20) ? 20 :	\
++		(n) & (1ULL << 19) ? 19 :	\
++		(n) & (1ULL << 18) ? 18 :	\
++		(n) & (1ULL << 17) ? 17 :	\
++		(n) & (1ULL << 16) ? 16 :	\
++		(n) & (1ULL << 15) ? 15 :	\
++		(n) & (1ULL << 14) ? 14 :	\
++		(n) & (1ULL << 13) ? 13 :	\
++		(n) & (1ULL << 12) ? 12 :	\
++		(n) & (1ULL << 11) ? 11 :	\
++		(n) & (1ULL << 10) ? 10 :	\
++		(n) & (1ULL <<  9) ?  9 :	\
++		(n) & (1ULL <<  8) ?  8 :	\
++		(n) & (1ULL <<  7) ?  7 :	\
++		(n) & (1ULL <<  6) ?  6 :	\
++		(n) & (1ULL <<  5) ?  5 :	\
++		(n) & (1ULL <<  4) ?  4 :	\
++		(n) & (1ULL <<  3) ?  3 :	\
++		(n) & (1ULL <<  2) ?  2 :	\
++		(n) & (1ULL <<  1) ?  1 :	\
++		(n) & (1ULL <<  0) ?  0 :	\
++		____ilog2_NaN()			\
++				   ) :		\
++	(sizeof(n) <= 4) ?			\
++	__ilog2_u32(n) :			\
++	__ilog2_u64(n)				\
++ )
++
++#endif /* _LINUX_LOG2_H */
+Index: linux-2.6.18/mvl_patches/pro50-1223.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1223.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1223);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

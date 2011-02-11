@@ -1,0 +1,476 @@
+#! /usr/bin/env bash
+# Patch: -MVL_POWERPC_Remove_PCI_e_errata_for_MPC8641_silicon_ve
+# Date: Fri Oct 26 08:38:54 2007
+# Source: Kernel.org
+# MR: 25195
+# Type: Enhancement
+# Disposition: merged from Kernel.org
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# From bf7c036fb48a6176635f2e7b749d7398728d4b7d Mon Sep 17 00:00:00 2001
+# From: Zhang Wei <wei.zhang@freescale.com>
+# Date: Tue, 22 May 2007 11:38:26 +0800
+# Subject: [PATCH] [POWERPC] Remove PCI-e errata for MPC8641 silicon ver 1.0
+# 
+# Remove errata for PCI-e support of Rev 1.0 of MPC8641 since its considered
+# obselete and is not production level silicon from Freescale.
+# 
+# Signed-off-by: Zhang Wei <wei.zhang@freescale.com>
+# Acked-by: Roy Zang <tie-fei.zang@freescale.com>
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+# NOTE: A released version of this patch already exits in our tree. That
+# version of the patch did not completely remove the code since the 8548
+# was still using it. This patch removes the bits used by the 8548 which
+# will be corrected by a follow-on patch.
+# 
+
+PATCHNUM=505
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Kernel.org
+MR: 25195
+Type: Enhancement
+Disposition: merged from Kernel.org
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+From bf7c036fb48a6176635f2e7b749d7398728d4b7d Mon Sep 17 00:00:00 2001
+From: Zhang Wei <wei.zhang@freescale.com>
+Date: Tue, 22 May 2007 11:38:26 +0800
+Subject: [PATCH] [POWERPC] Remove PCI-e errata for MPC8641 silicon ver 1.0
+
+Remove errata for PCI-e support of Rev 1.0 of MPC8641 since its considered
+obselete and is not production level silicon from Freescale.
+
+Signed-off-by: Zhang Wei <wei.zhang@freescale.com>
+Acked-by: Roy Zang <tie-fei.zang@freescale.com>
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+NOTE: A released version of this patch already exits in our tree. That
+version of the patch did not completely remove the code since the 8548
+was still using it. This patch removes the bits used by the 8548 which
+will be corrected by a follow-on patch.
+
+Index: linux-2.6.18/arch/powerpc/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/Kconfig
++++ linux-2.6.18/arch/powerpc/Kconfig
+@@ -412,10 +412,6 @@ config SBUS
+ config FSL_SOC
+ 	bool
+ 
+-config FSL_PCIE
+-	bool
+-	depends on MPC85xx_CDS
+-
+ # Yes MCA RS/6000s exist but Linux-PPC does not currently support any
+ config MCA
+ 	bool
+Index: linux-2.6.18/arch/powerpc/platforms/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/Kconfig
++++ linux-2.6.18/arch/powerpc/platforms/Kconfig
+@@ -31,7 +31,6 @@ config PPC_86xx
+ 	bool "Freescale 86xx"
+ 	depends on 6xx
+ 	select FSL_SOC
+-	select FSL_PCIE
+ 	select ALTIVEC
+ 	help
+ 	  The Freescale E600 SoCs have 74xx cores.
+Index: linux-2.6.18/arch/powerpc/sysdev/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/Makefile
++++ linux-2.6.18/arch/powerpc/sysdev/Makefile
+@@ -9,7 +9,6 @@ obj-$(CONFIG_PPC_DCR_NATIVE)	+= dcr-low.
+ obj-$(CONFIG_U3_DART)		+= dart_iommu.o
+ obj-$(CONFIG_MMIO_NVRAM)	+= mmio_nvram.o
+ obj-$(CONFIG_FSL_SOC)		+= fsl_soc.o
+-obj-$(CONFIG_FSL_PCIE)		+= fsl_pcie.o
+ obj-$(CONFIG_TSI108_BRIDGE)	+= tsi108_pci.o tsi108_dev.o
+ obj-$(CONFIG_QUICC_ENGINE)	+= qe_lib/
+ mv64x60-$(CONFIG_PCI)		+= mv64x60_pci.o
+Index: linux-2.6.18/arch/powerpc/sysdev/fsl_pcie.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/fsl_pcie.c
++++ /dev/null
+@@ -1,173 +0,0 @@
+-/*
+- * PCIe Indirect Support
+- *
+- * Copyright (C) 1998 Gabriel Paubert.
+- *
+- * Copyright (C) 2007 Freescale Semiconductor, Inc
+- *
+- * This program is free software; you can redistribute it and/or
+- * modify it under the terms of the GNU General Public License
+- * as published by the Free Software Foundation; either version
+- * 2 of the License, or (at your option) any later version.
+- *
+- * "Temporary" MPC8548 Errata file -
+- * The standard indirect_pci code should work with future silicon versions.
+- */
+-
+-#include <linux/kernel.h>
+-#include <linux/pci.h>
+-#include <linux/delay.h>
+-#include <linux/string.h>
+-#include <linux/init.h>
+-#include <linux/bootmem.h>
+-
+-#include <asm/io.h>
+-#include <asm/prom.h>
+-#include <asm/pci-bridge.h>
+-#include <asm/machdep.h>
+-
+-#define PCI_CFG_OUT out_be32
+-
+-/* ERRATA PCI-Ex 14 PCIE Controller timeout */
+-#define PCIE_FIX		out_be32(hose->cfg_addr+0x10, 0x0400ffff)
+-
+-
+-static int
+-indirect_read_config_pcie(struct pci_bus *bus, unsigned int devfn, int offset,
+-		     int len, u32 *val)
+-{
+-	struct pci_controller *hose = bus->sysdata;
+-	volatile void __iomem *cfg_data;
+-	u32 temp;
+-	u32 link_training_stat;
+-
+-	if (ppc_md.pci_exclude_device)
+-		if (ppc_md.pci_exclude_device(hose, bus->number, devfn))
+-			return PCIBIOS_DEVICE_NOT_FOUND;
+-
+-	/* Possible artifact of CDCpp50937 needs further investigation */
+-	if (devfn != 0x0 && (bus->number == 0xff || bus->number == 0x3))
+-		return PCIBIOS_DEVICE_NOT_FOUND;
+-
+-	PCI_CFG_OUT(hose->cfg_addr, 0x80000000 | 0x4 << 24
+-		| (hose->first_busno << 16) | (0x4 & 0xfc));
+-	link_training_stat = in_le32(hose->cfg_data);
+-	if ((link_training_stat & 0x5f) < 0x16)  /* Training failure */
+-		return PCIBIOS_DEVICE_NOT_FOUND;
+-
+-	PCIE_FIX;
+-	PCI_CFG_OUT(hose->cfg_addr,
+-			(0x80000000 | ((offset & 0xf00) << 16) |
+-			 (bus->number << 16)
+-			 | (devfn << 8) | ((offset & 0xfc) )));
+-
+-	/*
+-	 * Note: the caller has already checked that offset is
+-	 * suitably aligned and that len is 1, 2 or 4.
+-	 */
+-	/* ERRATA PCI-Ex 12 - Configuration Address/Data Alignment */
+-	cfg_data = hose->cfg_data;
+-	PCIE_FIX;
+-	temp = in_le32(cfg_data);
+-	switch (len) {
+-	case 1:
+-		*val = (temp >> (((offset & 3))*8)) & 0xff;
+-		break;
+-	case 2:
+-		*val = (temp >> (((offset & 3))*8)) & 0xffff;
+-		break;
+-	default:
+-		*val = temp;
+-		break;
+-	}
+-	return PCIBIOS_SUCCESSFUL;
+-}
+-
+-static int
+-indirect_write_config_pcie(struct pci_bus *bus, unsigned int devfn, int offset,
+-		      int len, u32 val)
+-{
+-	struct pci_controller *hose = bus->sysdata;
+-	volatile void __iomem *cfg_data;
+-	u32 temp;
+-	u32 link_training_stat;
+-
+-	if (ppc_md.pci_exclude_device)
+-		if (ppc_md.pci_exclude_device(hose, bus->number, devfn))
+-			return PCIBIOS_DEVICE_NOT_FOUND;
+-
+-	/* Possible artifact of CDCpp50937 needs further investigation */
+-	if (devfn != 0x0 && (bus->number == 0xff || bus->number == 0x3))
+-		return PCIBIOS_DEVICE_NOT_FOUND;
+-
+-	PCI_CFG_OUT(hose->cfg_addr, 0x80000000 | 0x4 << 24
+-		| (hose->first_busno << 16) | (0x4 & 0xfc));
+-	link_training_stat = in_le32(hose->cfg_data);
+-	if ((link_training_stat & 0x5f) < 0x16)  /* Training failure */
+-		return PCIBIOS_DEVICE_NOT_FOUND;
+-
+-	PCIE_FIX;
+-	PCI_CFG_OUT(hose->cfg_addr,
+-			(0x80000000 | ((offset & 0xf00) << 16) |
+-			 (bus->number << 16)
+-			 | (devfn << 8) | ((offset & 0xfc) )));
+-
+-	/*
+-	 * Note: the caller has already checked that offset is
+-	 * suitably aligned and that len is 1, 2 or 4.
+-	 */
+-	/* ERRATA PCI-Ex 12 - Configuration Address/Data Alignment */
+-	cfg_data = hose->cfg_data;
+-	switch (len) {
+-	case 1:
+-		PCIE_FIX;
+-		temp = in_le32(cfg_data);
+-		temp = (temp & ~(0xff << ((offset & 3) * 8))) |
+-			(val << ((offset & 3) * 8));
+-		PCIE_FIX;
+-		out_le32(cfg_data, temp);
+-		break;
+-	case 2:
+-		PCIE_FIX;
+-		temp = in_le32(cfg_data);
+-		temp = (temp & ~(0xffff << ((offset & 3) * 8)));
+-		temp |= (val << ((offset & 3) * 8)) ;
+-		PCIE_FIX;
+-		out_le32(cfg_data, temp);
+-		break;
+-	default:
+-		PCIE_FIX;
+-		out_le32(cfg_data, val);
+-		break;
+-	}
+-	PCIE_FIX;
+-	return PCIBIOS_SUCCESSFUL;
+-}
+-
+-static struct pci_ops indirect_pcie_ops = {
+-	indirect_read_config_pcie,
+-	indirect_write_config_pcie
+-};
+-
+-void __init
+-setup_indirect_pcie_nomap(struct pci_controller* hose, void __iomem * cfg_addr,
+-	void __iomem * cfg_data)
+-{
+-	hose->cfg_addr = cfg_addr;
+-	hose->cfg_data = cfg_data;
+-	hose->ops = &indirect_pcie_ops;
+-}
+-
+-void __init
+-setup_indirect_pcie(struct pci_controller* hose, u32 cfg_addr, u32 cfg_data)
+-{
+-	unsigned long base = cfg_addr & PAGE_MASK;
+-	void __iomem *mbase, *addr, *data;
+-
+-	mbase = ioremap(base, PAGE_SIZE);
+-	addr = mbase + (cfg_addr & ~PAGE_MASK);
+-	if ((cfg_data & PAGE_MASK) != base)
+-		mbase = ioremap(cfg_data & PAGE_MASK, PAGE_SIZE);
+-	data = mbase + (cfg_data & ~PAGE_MASK);
+-	setup_indirect_pcie_nomap(hose, addr, data);
+-}
+Index: linux-2.6.18/mvl_patches/pro50-0505.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0505.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(505);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

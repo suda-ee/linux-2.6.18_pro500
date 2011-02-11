@@ -1,0 +1,415 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_pci_32_add_64_bit_phys_addr_support
+# Date: Fri Oct 26 08:34:58 2007
+# Source: MontaVista Software, Inc.
+# MR: 24856
+# Type: Enhancement
+# Disposition: submitted to linuxppc-dev
+# Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+# Description:
+#     Currently pci_32 doesn't support 64-bit physical addresses, while
+#     PowerPC440 platform has PCI space typically mapped above 4GB range.
+#     The patch adds 64-bit physical address support to 32-bit PCI code
+#     in order to bring-up PCI on 44x platform without otherwise changing
+#     the code.
+# 
+
+PATCHNUM=454
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: MontaVista Software, Inc.
+MR: 24856
+Type: Enhancement
+Disposition: submitted to linuxppc-dev
+Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+Description:
+    Currently pci_32 doesn't support 64-bit physical addresses, while
+    PowerPC440 platform has PCI space typically mapped above 4GB range.
+    The patch adds 64-bit physical address support to 32-bit PCI code
+    in order to bring-up PCI on 44x platform without otherwise changing
+    the code.
+
+Index: linux-2.6.18/arch/powerpc/kernel/pci_32.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/pci_32.c
++++ linux-2.6.18/arch/powerpc/kernel/pci_32.c
+@@ -108,7 +108,7 @@ pcibios_fixup_resources(struct pci_dev *
+ {
+ 	struct pci_controller* hose = (struct pci_controller *)dev->sysdata;
+ 	int i;
+-	unsigned long offset;
++	resource_size_t offset;
+ 
+ 	if (!hose) {
+ 		printk(KERN_ERR "No hose for PCI dev %s!\n", pci_name(dev));
+@@ -118,7 +118,7 @@ pcibios_fixup_resources(struct pci_dev *
+ 		struct resource *res = dev->resource + i;
+ 		if (!res->flags)
+ 			continue;
+-		if (res->end == 0xffffffff) {
++		if (res->end == (resource_size_t) -1) {
+ 			DBG("PCI:%s Resource %d [%016llx-%016llx] is unassigned\n",
+ 			    pci_name(dev), i, (u64)res->start, (u64)res->end);
+ 			res->end -= res->start;
+@@ -151,7 +151,7 @@ DECLARE_PCI_FIXUP_HEADER(PCI_ANY_ID,		PC
+ void pcibios_resource_to_bus(struct pci_dev *dev, struct pci_bus_region *region,
+ 			struct resource *res)
+ {
+-	unsigned long offset = 0;
++	resource_size_t offset = 0;
+ 	struct pci_controller *hose = dev->sysdata;
+ 
+ 	if (hose && res->flags & IORESOURCE_IO)
+@@ -166,7 +166,7 @@ EXPORT_SYMBOL(pcibios_resource_to_bus);
+ void pcibios_bus_to_resource(struct pci_dev *dev, struct resource *res,
+ 			     struct pci_bus_region *region)
+ {
+-	unsigned long offset = 0;
++	resource_size_t offset = 0;
+ 	struct pci_controller *hose = dev->sysdata;
+ 
+ 	if (hose && res->flags & IORESOURCE_IO)
+@@ -338,7 +338,7 @@ static int __init
+ pci_relocate_bridge_resource(struct pci_bus *bus, int i)
+ {
+ 	struct resource *res, *pr, *conflict;
+-	unsigned long try, size;
++	resource_size_t try, size;
+ 	int j;
+ 	struct pci_bus *parent = bus->parent;
+ 
+@@ -443,7 +443,7 @@ update_bridge_base(struct pci_bus *bus, 
+ 	u8 io_base_lo, io_limit_lo;
+ 	u16 mem_base, mem_limit;
+ 	u16 cmd;
+-	unsigned long start, end, off;
++	resource_size_t start, end, off;
+ 	struct pci_dev *dev = bus->self;
+ 	struct pci_controller *hose = dev->sysdata;
+ 
+@@ -905,16 +905,28 @@ pci_device_from_OF_node(struct device_no
+ }
+ EXPORT_SYMBOL(pci_device_from_OF_node);
+ 
++
++static inline u64 pci_get_range64(u32 *r)
++{
++	return (((u64)r[0] << 32) | r[1]);
++}
++
++
+ void __init
+ pci_process_bridge_OF_ranges(struct pci_controller *hose,
+ 			   struct device_node *dev, int primary)
+ {
+ 	static unsigned int static_lc_ranges[256] __initdata;
+ 	const unsigned int *dt_ranges;
+-	unsigned int *lc_ranges, *ranges, *prev, size;
++	unsigned int *lc_ranges, *ranges, *prev;
+ 	int rlen = 0, orig_rlen;
+ 	int memno = 0;
+ 	struct resource *res;
++	u32 prev_pci_space, pci_space;
++	u64 prev_pci_addr, pci_addr;
++	u64 prev_size, size;
++	phys_addr_t cpu_phys_addr;
++	
+ 	int np, na = of_n_addr_cells(dev);
+ 	np = na + 5;
+ 
+@@ -941,11 +953,18 @@ pci_process_bridge_OF_ranges(struct pci_
+ 	prev = NULL;
+ 	while ((rlen -= np * sizeof(unsigned int)) >= 0) {
+ 		if (prev) {
+-			if (prev[0] == ranges[0] && prev[1] == ranges[1] &&
+-				(prev[2] + prev[na+4]) == ranges[2] &&
+-				(prev[na+2] + prev[na+4]) == ranges[na+2]) {
+-				prev[na+4] += ranges[na+4];
++			prev_pci_space = prev[0];
++			prev_pci_addr = pci_get_range64(&prev[1]);
++			prev_size = pci_get_range64(&prev[na+3]);
++			pci_space = ranges[0];
++			pci_addr = pci_get_range64(&ranges[1]);
++			if ((prev_pci_space == pci_space) && 
++			    ((prev_pci_addr + prev_size) == pci_addr)) {
++				size = pci_get_range64(&ranges[na+3]);
++				prev_size += size;
+ 				ranges[0] = 0;
++				prev[na+3] = (u32)((prev_size >> 32) & 0xffffffff);
++				prev[na+4] = (u32)(prev_size & 0xffffffff);
+ 				ranges += np;
+ 				continue;
+ 			}
+@@ -966,21 +985,22 @@ pci_process_bridge_OF_ranges(struct pci_
+ 	rlen = orig_rlen;
+ 	while (ranges && (rlen -= np * sizeof(unsigned int)) >= 0) {
+ 		res = NULL;
+-		size = ranges[na+4];
+-		switch ((ranges[0] >> 24) & 0x3) {
++		size = pci_get_range64(&ranges[na+3]);
++		pci_space = ranges[0] >> 24;
++		switch (pci_space & 0x3) {
+ 		case 1:		/* I/O space */
+ 			if (ranges[2] != 0)
+ 				break;
+-			hose->io_base_phys = ranges[na+2];
++			hose->io_base_phys = of_translate_address(dev, &ranges[3]);
+ 			/* limit I/O space to 16MB */
+ 			if (size > 0x01000000)
+ 				size = 0x01000000;
+-			hose->io_base_virt = ioremap(ranges[na+2], size);
++			hose->io_base_virt = ioremap(hose->io_base_phys, size);
+ 			if (primary)
+ 				isa_io_base = (unsigned long) hose->io_base_virt;
+ 			res = &hose->io_resource;
+ 			res->flags = IORESOURCE_IO;
+-			res->start = ranges[2];
++			res->start = pci_get_range64(&ranges[1]);
+ 			DBG("PCI: IO 0x%llx -> 0x%llx\n",
+ 			    (u64)res->start, (u64)res->start + size - 1);
+ 			break;
+@@ -995,14 +1015,16 @@ pci_process_bridge_OF_ranges(struct pci_
+ 			}
+ 			while (memno < 3 && hose->mem_resources[memno].flags)
+ 				++memno;
++			pci_addr = pci_get_range64(&ranges[1]);
++			cpu_phys_addr = of_translate_address(dev, &ranges[3]);
+ 			if (memno == 0)
+-				hose->pci_mem_offset = ranges[na+2] - ranges[2];
++				hose->pci_mem_offset = (u64)cpu_phys_addr - pci_addr;
+ 			if (memno < 3) {
+ 				res = &hose->mem_resources[memno];
+ 				res->flags = IORESOURCE_MEM;
+ 				if(ranges[0] & 0x40000000)
+ 					res->flags |= IORESOURCE_PREFETCH;
+-				res->start = ranges[na+2];
++				res->start = cpu_phys_addr;
+ 				DBG("PCI: MEM[%d] 0x%llx -> 0x%llx\n", memno,
+ 				    (u64)res->start, (u64)res->start + size - 1);
+ 			}
+@@ -1156,7 +1178,7 @@ check_for_io_childs(struct pci_bus *bus,
+ 
+ 		for (i=0; i<PCI_NUM_RESOURCES; i++) {
+ 			struct resource *r;
+-			unsigned long r_size;
++			resource_size_t r_size;
+ 
+ 			if (dev->class >> 8 == PCI_CLASS_BRIDGE_PCI
+ 			    && i >= PCI_BRIDGE_RESOURCES)
+@@ -1352,8 +1374,8 @@ common_swizzle(struct pci_dev *dev, unsi
+ 	return PCI_SLOT(dev->devfn);
+ }
+ 
+-unsigned long resource_fixup(struct pci_dev * dev, struct resource * res,
+-			     unsigned long start, unsigned long size)
++resource_size_t resource_fixup(struct pci_dev * dev, struct resource * res,
++			     resource_size_t start, resource_size_t size)
+ {
+ 	return start;
+ }
+Index: linux-2.6.18/mvl_patches/pro50-0454.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0454.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(454);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

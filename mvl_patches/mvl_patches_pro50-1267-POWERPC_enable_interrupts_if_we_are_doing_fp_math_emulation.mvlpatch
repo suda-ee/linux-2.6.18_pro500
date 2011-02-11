@@ -1,0 +1,328 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_enable_interrupts_if_we_are_doing_fp_math_emulation
+# Date: Mon Jul  7 12:44:53 2008
+# Source: http://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-2.6.22.y.git
+# MR: 25006
+# Type: Defect Fix
+# Disposition: merged from kernel.org
+# Signed-off-by: Amit Chaudhary <achaudha@in.mvista.com>
+# Description:
+# 
+# This patch fixes the problem that occurs when emulating a FP math
+# instruction.
+# 
+# commit  04903a30a327513b97c1271fc6bc4dad6502d1b8
+# Author: Kumar Gala <galak@kernel.crashing.org>
+# Date:   Wed, 7 Feb 2007 07:13:32 +0000
+# 
+# Anytime we are emulating an instruction we are going to be doing some form of
+# get_user() to get the instruction image to decode.  Since get_user() might
+# sleep we need to ensure we have interrupts enabled or we might see something
+# like:
+# 
+# Debug: sleeping function called from invalid context at arch/powerpc/kernel/traps.c:697
+# in_atomic():0, irqs_disabled():1
+# Call Trace:
+# [D6023EB0] [C0007F84] show_stack+0x58/0x174 (unreliable)
+# [D6023EE0] [C0022C34] __might_sleep+0xbc/0xd0
+# [D6023EF0] [C000D158] program_check_exception+0x1d8/0x4fc
+# [D6023F40] [C000E744] ret_from_except_full+0x0/0x4c
+# 
+#    Exception: 700 at 0x102a7100
+#    LR = 0xdb9ef04
+# 
+# However, we want to ensure that interrupts are disabled when handling a trap
+# exception that might be used for a kernel breakpoint.  This is why ProgramCheck
+# is marked as EXC_XFER_STD instead of EXC_XFER_EE.
+# 
+
+PATCHNUM=1267
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: http://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-2.6.22.y.git
+MR: 25006
+Type: Defect Fix
+Disposition: merged from kernel.org
+Signed-off-by: Amit Chaudhary <achaudha@in.mvista.com>
+Description:
+
+This patch fixes the problem that occurs when emulating a FP math
+instruction.
+
+commit  04903a30a327513b97c1271fc6bc4dad6502d1b8
+Author: Kumar Gala <galak@kernel.crashing.org>
+Date:   Wed, 7 Feb 2007 07:13:32 +0000
+
+Anytime we are emulating an instruction we are going to be doing some form of
+get_user() to get the instruction image to decode.  Since get_user() might
+sleep we need to ensure we have interrupts enabled or we might see something
+like:
+
+Debug: sleeping function called from invalid context at arch/powerpc/kernel/traps.c:697
+in_atomic():0, irqs_disabled():1
+Call Trace:
+[D6023EB0] [C0007F84] show_stack+0x58/0x174 (unreliable)
+[D6023EE0] [C0022C34] __might_sleep+0xbc/0xd0
+[D6023EF0] [C000D158] program_check_exception+0x1d8/0x4fc
+[D6023F40] [C000E744] ret_from_except_full+0x0/0x4c
+
+   Exception: 700 at 0x102a7100
+   LR = 0xdb9ef04
+
+However, we want to ensure that interrupts are disabled when handling a trap
+exception that might be used for a kernel breakpoint.  This is why ProgramCheck
+is marked as EXC_XFER_STD instead of EXC_XFER_EE.
+
+Index: linux-2.6.18/arch/powerpc/kernel/traps.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/traps.c
++++ linux-2.6.18/arch/powerpc/kernel/traps.c
+@@ -825,20 +825,7 @@ void __kprobes program_check_exception(s
+ 	extern int do_mathemu(struct pt_regs *regs);
+ 
+ 	/* We can now get here via a FP Unavailable exception if the core
+-	 * has no FPU, in that case no reason flags will be set */
+-#ifdef CONFIG_MATH_EMULATION
+-	/* (reason & REASON_ILLEGAL) would be the obvious thing here,
+-	 * but there seems to be a hardware bug on the 405GP (RevD)
+-	 * that means ESR is sometimes set incorrectly - either to
+-	 * ESR_DST (!?) or 0.  In the process of chasing this with the
+-	 * hardware people - not sure if it can happen on any illegal
+-	 * instruction or only on FP instructions, whether there is a
+-	 * pattern to occurences etc. -dgibson 31/Mar/2003 */
+-	if (!(reason & REASON_TRAP) && do_mathemu(regs) == 0) {
+-		emulate_single_step(regs);
+-		return;
+-	}
+-#endif /* CONFIG_MATH_EMULATION */
++	 * has no FPU, in that case the reason flags will be 0 */
+ 
+ 	if (reason & REASON_FP) {
+ 		/* IEEE FP exception */
+@@ -862,6 +849,20 @@ void __kprobes program_check_exception(s
+ 
+ 	local_irq_enable();
+ 
++#ifdef CONFIG_MATH_EMULATION
++	/* (reason & REASON_ILLEGAL) would be the obvious thing here,
++	 * but there seems to be a hardware bug on the 405GP (RevD)
++	 * that means ESR is sometimes set incorrectly - either to
++	 * ESR_DST (!?) or 0.  In the process of chasing this with the
++	 * hardware people - not sure if it can happen on any illegal
++	 * instruction or only on FP instructions, whether there is a
++	 * pattern to occurences etc. -dgibson 31/Mar/2003 */
++	if (do_mathemu(regs) == 0) {
++		emulate_single_step(regs);
++		return;
++	}
++#endif /* CONFIG_MATH_EMULATION */
++
+ 	/* Try to emulate it if we should. */
+ 	if (reason & (REASON_ILLEGAL | REASON_PRIVILEGED)) {
+ 		switch (emulate_instruction(regs)) {
+Index: linux-2.6.18/mvl_patches/pro50-1267.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1267.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1267);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

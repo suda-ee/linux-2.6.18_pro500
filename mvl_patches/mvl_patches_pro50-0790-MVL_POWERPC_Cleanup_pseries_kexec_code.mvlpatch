@@ -1,0 +1,443 @@
+#! /usr/bin/env bash
+# Patch: -MVL_POWERPC_Cleanup_pseries_kexec_code
+# Date: Wed Mar  5 11:40:08 2008
+# MR: 26747
+# Adjustmnets:
+#     Minor changes to arch/powerpc/platforms/pseries/setup.c
+#     to make it apply with no fuzz.
+# 
+# From dce623e0827e8d0ad60ce7f385c3394bf1b0bae0 Mon Sep 17 00:00:00 2001
+# From: Michael Ellerman <michael@ellerman.id.au>
+# Date: Thu, 8 Feb 2007 18:33:55 +1100
+# Subject: [PATCH] [POWERPC] Cleanup pseries kexec code
+# 
+# Move all the pseries kexec code into one file, platforms/pseries/kexec.c
+# Provide helpers for setting up ppc_md.kexec_cpu_down, so that we don't
+# have to have #ifdef CONFIG_KEXEC in setup.c
+# 
+# Move the initialisation of the ppc_md kexec callbacks into an init routine.
+# This is well and truly early enough to cause no change in behaviour, we
+# can't kexec until userspace has given us a kernel to kexec into.
+# 
+# Signed-off-by: Michael Ellerman <michael@ellerman.id.au>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=790
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26747
+Adjustmnets:
+    Minor changes to arch/powerpc/platforms/pseries/setup.c
+    to make it apply with no fuzz.
+
+From dce623e0827e8d0ad60ce7f385c3394bf1b0bae0 Mon Sep 17 00:00:00 2001
+From: Michael Ellerman <michael@ellerman.id.au>
+Date: Thu, 8 Feb 2007 18:33:55 +1100
+Subject: [PATCH] [POWERPC] Cleanup pseries kexec code
+
+Move all the pseries kexec code into one file, platforms/pseries/kexec.c
+Provide helpers for setting up ppc_md.kexec_cpu_down, so that we don't
+have to have #ifdef CONFIG_KEXEC in setup.c
+
+Move the initialisation of the ppc_md kexec callbacks into an init routine.
+This is well and truly early enough to cause no change in behaviour, we
+can't kexec until userspace has given us a kernel to kexec into.
+
+Signed-off-by: Michael Ellerman <michael@ellerman.id.au>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/platforms/pseries/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/pseries/Makefile
++++ linux-2.6.18/arch/powerpc/platforms/pseries/Makefile
+@@ -9,6 +9,7 @@ obj-$(CONFIG_SMP)	+= smp.o
+ obj-$(CONFIG_XICS)	+= xics.o
+ obj-$(CONFIG_SCANLOG)	+= scanlog.o
+ obj-$(CONFIG_EEH)	+= eeh.o eeh_cache.o eeh_driver.o eeh_event.o
++obj-$(CONFIG_KEXEC)	+= kexec.o
+ 
+ obj-$(CONFIG_HOTPLUG_CPU)	+= hotplug-cpu.o
+ 
+Index: linux-2.6.18/arch/powerpc/platforms/pseries/kexec.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/pseries/kexec.c
+@@ -0,0 +1,72 @@
++/*
++ *  Copyright 2006 Michael Ellerman, IBM Corporation
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */
++
++#include <asm/machdep.h>
++#include <asm/page.h>
++#include <asm/firmware.h>
++#include <asm/kexec.h>
++#include <asm/mpic.h>
++
++#include "pseries.h"
++#include "xics.h"
++#include "plpar_wrappers.h"
++
++static void pseries_kexec_cpu_down(int crash_shutdown, int secondary)
++{
++	/* Don't risk a hypervisor call if we're crashing */
++	if (firmware_has_feature(FW_FEATURE_SPLPAR) && !crash_shutdown) {
++		unsigned long addr;
++
++		addr = __pa(get_slb_shadow());
++		if (unregister_slb_shadow(hard_smp_processor_id(), addr))
++			printk("SLB shadow buffer deregistration of "
++			       "cpu %u (hw_cpu_id %d) failed\n",
++			       smp_processor_id(),
++			       hard_smp_processor_id());
++
++		addr = __pa(get_lppaca());
++		if (unregister_vpa(hard_smp_processor_id(), addr)) {
++			printk("VPA deregistration of cpu %u (hw_cpu_id %d) "
++					"failed\n", smp_processor_id(),
++					hard_smp_processor_id());
++		}
++	}
++}
++
++static void pseries_kexec_cpu_down_mpic(int crash_shutdown, int secondary)
++{
++	pseries_kexec_cpu_down(crash_shutdown, secondary);
++	mpic_teardown_this_cpu(secondary);
++}
++
++void __init setup_kexec_cpu_down_mpic(void)
++{
++	ppc_md.kexec_cpu_down = pseries_kexec_cpu_down_mpic;
++}
++
++static void pseries_kexec_cpu_down_xics(int crash_shutdown, int secondary)
++{
++	pseries_kexec_cpu_down(crash_shutdown, secondary);
++	xics_teardown_cpu(secondary);
++}
++
++void __init setup_kexec_cpu_down_xics(void)
++{
++	ppc_md.kexec_cpu_down = pseries_kexec_cpu_down_xics;
++}
++
++static int __init pseries_kexec_setup(void)
++{
++	ppc_md.machine_kexec = default_machine_kexec;
++	ppc_md.machine_kexec_prepare = default_machine_kexec_prepare;
++	ppc_md.machine_crash_shutdown = default_machine_crash_shutdown;
++
++	return 0;
++}
++__initcall(pseries_kexec_setup);
+Index: linux-2.6.18/arch/powerpc/platforms/pseries/pseries.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/pseries/pseries.h
++++ linux-2.6.18/arch/powerpc/platforms/pseries/pseries.h
+@@ -25,4 +25,12 @@ static inline smp_init_pseries_mpic(void
+ static inline smp_init_pseries_xics(void) { };
+ #endif
+ 
++#ifdef CONFIG_KEXEC
++extern void setup_kexec_cpu_down_xics(void);
++extern void setup_kexec_cpu_down_mpic(void);
++#else
++static inline setup_kexec_cpu_down_xics(void) { };
++static inline setup_kexec_cpu_down_mpic(void) { };
++#endif
++
+ #endif /* _PSERIES_PSERIES_H */
+Index: linux-2.6.18/arch/powerpc/platforms/pseries/setup.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/pseries/setup.c
++++ linux-2.6.18/arch/powerpc/platforms/pseries/setup.c
+@@ -55,7 +55,6 @@
+ #include <asm/dma.h>
+ #include <asm/machdep.h>
+ #include <asm/irq.h>
+-#include <asm/kexec.h>
+ #include <asm/time.h>
+ #include <asm/nvram.h>
+ #include "xics.h"
+@@ -220,42 +219,6 @@ static void pseries_lpar_enable_pmcs(voi
+ 		get_lppaca()->pmcregs_in_use = 1;
+ }
+ 
+-#ifdef CONFIG_KEXEC
+-static void pseries_kexec_cpu_down(int crash_shutdown, int secondary)
+-{
+-	/* Don't risk a hypervisor call if we're crashing */
+-	if (firmware_has_feature(FW_FEATURE_SPLPAR) && !crash_shutdown) {
+-		unsigned long addr;
+-
+-		addr = __pa(get_slb_shadow());
+-		if (unregister_slb_shadow(hard_smp_processor_id(), addr))
+-			printk("SLB shadow buffer deregistration of "
+-			       "cpu %u (hw_cpu_id %d) failed\n",
+-			       smp_processor_id(),
+-			       hard_smp_processor_id());
+-
+-		addr = __pa(get_lppaca());
+-		if (unregister_vpa(hard_smp_processor_id(), addr)) {
+-			printk("VPA deregistration of cpu %u (hw_cpu_id %d) "
+-					"failed\n", smp_processor_id(),
+-					hard_smp_processor_id());
+-		}
+-	}
+-}
+-
+-static void pseries_kexec_cpu_down_mpic(int crash_shutdown, int secondary)
+-{
+-	pseries_kexec_cpu_down(crash_shutdown, secondary);
+-	mpic_teardown_this_cpu(secondary);
+-}
+-
+-static void pseries_kexec_cpu_down_xics(int crash_shutdown, int secondary)
+-{
+-	pseries_kexec_cpu_down(crash_shutdown, secondary);
+-	xics_teardown_cpu(secondary);
+-}
+-#endif /* CONFIG_KEXEC */
+-
+ static void __init pseries_discover_pic(void)
+ {
+ 	struct device_node *np;
+@@ -268,16 +231,12 @@ static void __init pseries_discover_pic(
+ 			pSeries_mpic_node = of_node_get(np);
+ 			ppc_md.init_IRQ       = pseries_mpic_init_IRQ;
+ 			ppc_md.get_irq        = mpic_get_irq;
+-#ifdef CONFIG_KEXEC
+-			ppc_md.kexec_cpu_down = pseries_kexec_cpu_down_mpic;
+-#endif
++			setup_kexec_cpu_down_mpic();
+ 			smp_init_pseries_mpic();
+ 			return;
+ 		} else if (strstr(typep, "ppc-xicp")) {
+ 			ppc_md.init_IRQ       = xics_init_IRQ;
+-#ifdef CONFIG_KEXEC
+-			ppc_md.kexec_cpu_down = pseries_kexec_cpu_down_xics;
+-#endif
++			setup_kexec_cpu_down_xics();
+ 			smp_init_pseries_xics();
+ 			return;
+ 		}
+@@ -524,9 +483,4 @@ define_machine(pseries) {
+ 	.progress		= rtas_progress,
+ 	.system_reset_exception = pSeries_system_reset_exception,
+ 	.machine_check_exception = pSeries_machine_check_exception,
+-#ifdef CONFIG_KEXEC
+-	.machine_kexec		= default_machine_kexec,
+-	.machine_kexec_prepare	= default_machine_kexec_prepare,
+-	.machine_crash_shutdown	= default_machine_crash_shutdown,
+-#endif
+ };
+Index: linux-2.6.18/mvl_patches/pro50-0790.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0790.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(790);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

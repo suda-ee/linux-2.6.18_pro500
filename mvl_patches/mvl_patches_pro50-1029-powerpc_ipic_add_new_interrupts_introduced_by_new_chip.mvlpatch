@@ -1,0 +1,504 @@
+#! /usr/bin/env bash
+# Patch: -powerpc_ipic_add_new_interrupts_introduced_by_new_chip
+# Date: Fri Apr 25 11:50:31 2008
+# Source: kernel.org
+# MR: 27333
+# Type: Enhancement
+# Disposition: backport from 2.6.25-rc1 (f03ca957faa4d51f3a9c52c1ad5ea61a0978c637)
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# 
+# commit f03ca957faa4d51f3a9c52c1ad5ea61a0978c637
+# Author: Li Yang <leoli@freescale.com>
+# Date:   Fri Oct 19 19:38:43 2007 +0800
+# 
+#     [POWERPC] ipic: add new interrupts introduced by new chip
+#     
+#     These interrupts are introduced by the latest Freescale SoC
+#     such as MPC837x.
+#     
+#     Signed-off-by: Li Yang <leoli@freescale.com>
+#     Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# 
+#  arch/powerpc/sysdev/ipic.c |  138 ++++++++++++++++++++++++++++++++++++++++++--
+#  arch/powerpc/sysdev/ipic.h |    7 +-
+#  include/asm-powerpc/ipic.h |   12 ++--
+#  3 files changed, 143 insertions(+), 14 deletions(-)
+# 
+
+PATCHNUM=1029
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: kernel.org
+MR: 27333
+Type: Enhancement
+Disposition: backport from 2.6.25-rc1 (f03ca957faa4d51f3a9c52c1ad5ea61a0978c637)
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+
+commit f03ca957faa4d51f3a9c52c1ad5ea61a0978c637
+Author: Li Yang <leoli@freescale.com>
+Date:   Fri Oct 19 19:38:43 2007 +0800
+
+    [POWERPC] ipic: add new interrupts introduced by new chip
+    
+    These interrupts are introduced by the latest Freescale SoC
+    such as MPC837x.
+    
+    Signed-off-by: Li Yang <leoli@freescale.com>
+    Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+
+ arch/powerpc/sysdev/ipic.c |  138 +++++++++++++++++++++++++++++++++++++++++++--
+ arch/powerpc/sysdev/ipic.h |    7 --
+ include/asm-powerpc/ipic.h |   12 ++-
+ mvl_patches/pro50-1029.c   |   16 +++++
+ 4 files changed, 159 insertions(+), 14 deletions(-)
+
+Index: linux-2.6.18/arch/powerpc/sysdev/ipic.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/ipic.c
++++ linux-2.6.18/arch/powerpc/sysdev/ipic.c
+@@ -33,6 +33,30 @@ static struct ipic * primary_ipic;
+ static DEFINE_RAW_SPINLOCK(ipic_lock);
+ 
+ static struct ipic_info ipic_info[] = {
++	[1] = {
++		.pend	= IPIC_SIPNR_H,
++		.mask	= IPIC_SIMSR_H,
++		.prio	= IPIC_SIPRR_C,
++		.force	= IPIC_SIFCR_H,
++		.bit	= 16,
++		.prio_mask = 0,
++	},
++	[2] = {
++		.pend	= IPIC_SIPNR_H,
++		.mask	= IPIC_SIMSR_H,
++		.prio	= IPIC_SIPRR_C,
++		.force	= IPIC_SIFCR_H,
++		.bit	= 17,
++		.prio_mask = 1,
++	},
++	[4] = {
++		.pend	= IPIC_SIPNR_H,
++		.mask	= IPIC_SIMSR_H,
++		.prio	= IPIC_SIPRR_C,
++		.force	= IPIC_SIFCR_H,
++		.bit	= 19,
++		.prio_mask = 3,
++	},
+ 	[9] = {
+ 		.pend	= IPIC_SIPNR_H,
+ 		.mask	= IPIC_SIMSR_H,
+@@ -57,6 +81,22 @@ static struct ipic_info ipic_info[] = {
+ 		.bit	= 26,
+ 		.prio_mask = 2,
+ 	},
++	[12] = {
++		.pend	= IPIC_SIPNR_H,
++		.mask	= IPIC_SIMSR_H,
++		.prio	= IPIC_SIPRR_D,
++		.force	= IPIC_SIFCR_H,
++		.bit	= 27,
++		.prio_mask = 3,
++	},
++	[13] = {
++		.pend	= IPIC_SIPNR_H,
++		.mask	= IPIC_SIMSR_H,
++		.prio	= IPIC_SIPRR_D,
++		.force	= IPIC_SIFCR_H,
++		.bit	= 28,
++		.prio_mask = 4,
++	},
+ 	[14] = {
+ 		.pend	= IPIC_SIPNR_H,
+ 		.mask	= IPIC_SIMSR_H,
+@@ -201,6 +241,46 @@ static struct ipic_info ipic_info[] = {
+ 		.bit	= 7,
+ 		.prio_mask = 7,
+ 	},
++	[42] = {
++		.pend	= IPIC_SIPNR_H,
++		.mask	= IPIC_SIMSR_H,
++		.prio	= IPIC_SIPRR_B,
++		.force	= IPIC_SIFCR_H,
++		.bit	= 10,
++		.prio_mask = 2,
++	},
++	[44] = {
++		.pend	= IPIC_SIPNR_H,
++		.mask	= IPIC_SIMSR_H,
++		.prio	= IPIC_SIPRR_B,
++		.force	= IPIC_SIFCR_H,
++		.bit	= 12,
++		.prio_mask = 4,
++	},
++	[45] = {
++		.pend	= IPIC_SIPNR_H,
++		.mask	= IPIC_SIMSR_H,
++		.prio	= IPIC_SIPRR_B,
++		.force	= IPIC_SIFCR_H,
++		.bit	= 13,
++		.prio_mask = 5,
++	},
++	[46] = {
++		.pend	= IPIC_SIPNR_H,
++		.mask	= IPIC_SIMSR_H,
++		.prio	= IPIC_SIPRR_B,
++		.force	= IPIC_SIFCR_H,
++		.bit	= 14,
++		.prio_mask = 6,
++	},
++	[47] = {
++		.pend	= IPIC_SIPNR_H,
++		.mask	= IPIC_SIMSR_H,
++		.prio	= IPIC_SIPRR_B,
++		.force	= IPIC_SIFCR_H,
++		.bit	= 15,
++		.prio_mask = 7,
++	},
+ 	[48] = {
+ 		.pend	= IPIC_SEPNR,
+ 		.mask	= IPIC_SEMSR,
+@@ -336,6 +416,20 @@ static struct ipic_info ipic_info[] = {
+ 		.force	= IPIC_SIFCR_L,
+ 		.bit	= 16,
+ 	},
++	[81] = {
++		.pend	= IPIC_SIPNR_L,
++		.mask	= IPIC_SIMSR_L,
++		.prio	= 0,
++		.force	= IPIC_SIFCR_L,
++		.bit	= 17,
++	},
++	[82] = {
++		.pend	= IPIC_SIPNR_L,
++		.mask	= IPIC_SIMSR_L,
++		.prio	= 0,
++		.force	= IPIC_SIFCR_L,
++		.bit	= 18,
++	},
+ 	[84] = {
+ 		.pend	= IPIC_SIPNR_L,
+ 		.mask	= IPIC_SIMSR_L,
+@@ -350,6 +444,34 @@ static struct ipic_info ipic_info[] = {
+ 		.force	= IPIC_SIFCR_L,
+ 		.bit	= 21,
+ 	},
++	[86] = {
++		.pend	= IPIC_SIPNR_L,
++		.mask	= IPIC_SIMSR_L,
++		.prio	= 0,
++		.force	= IPIC_SIFCR_L,
++		.bit	= 22,
++	},
++	[87] = {
++		.pend	= IPIC_SIPNR_L,
++		.mask	= IPIC_SIMSR_L,
++		.prio	= 0,
++		.force	= IPIC_SIFCR_L,
++		.bit	= 23,
++	},
++	[88] = {
++		.pend	= IPIC_SIPNR_L,
++		.mask	= IPIC_SIMSR_L,
++		.prio	= 0,
++		.force	= IPIC_SIFCR_L,
++		.bit	= 24,
++	},
++	[89] = {
++		.pend	= IPIC_SIPNR_L,
++		.mask	= IPIC_SIMSR_L,
++		.prio	= 0,
++		.force	= IPIC_SIFCR_L,
++		.bit	= 25,
++	},
+ 	[90] = {
+ 		.pend	= IPIC_SIPNR_L,
+ 		.mask	= IPIC_SIMSR_L,
+@@ -595,6 +717,10 @@ void __init ipic_init(struct device_node
+ 	 * configure SICFR accordingly */
+ 	if (flags & IPIC_SPREADMODE_GRP_A)
+ 		temp |= SICFR_IPSA;
++	if (flags & IPIC_SPREADMODE_GRP_B)
++		temp |= SICFR_IPSB;
++	if (flags & IPIC_SPREADMODE_GRP_C)
++		temp |= SICFR_IPSC;
+ 	if (flags & IPIC_SPREADMODE_GRP_D)
+ 		temp |= SICFR_IPSD;
+ 	if (flags & IPIC_SPREADMODE_MIX_A)
+@@ -602,7 +728,7 @@ void __init ipic_init(struct device_node
+ 	if (flags & IPIC_SPREADMODE_MIX_B)
+ 		temp |= SICFR_MPSB;
+ 
+-	ipic_write(ipic->regs, IPIC_SICNR, temp);
++	ipic_write(ipic->regs, IPIC_SICFR, temp);
+ 
+ 	/* handle MCP route */
+ 	temp = 0;
+@@ -672,10 +798,12 @@ void ipic_set_highest_priority(unsigned 
+ 
+ void ipic_set_default_priority(void)
+ {
+-	ipic_write(primary_ipic->regs, IPIC_SIPRR_A, IPIC_SIPRR_A_DEFAULT);
+-	ipic_write(primary_ipic->regs, IPIC_SIPRR_D, IPIC_SIPRR_D_DEFAULT);
+-	ipic_write(primary_ipic->regs, IPIC_SMPRR_A, IPIC_SMPRR_A_DEFAULT);
+-	ipic_write(primary_ipic->regs, IPIC_SMPRR_B, IPIC_SMPRR_B_DEFAULT);
++	ipic_write(primary_ipic->regs, IPIC_SIPRR_A, IPIC_PRIORITY_DEFAULT);
++	ipic_write(primary_ipic->regs, IPIC_SIPRR_B, IPIC_PRIORITY_DEFAULT);
++	ipic_write(primary_ipic->regs, IPIC_SIPRR_C, IPIC_PRIORITY_DEFAULT);
++	ipic_write(primary_ipic->regs, IPIC_SIPRR_D, IPIC_PRIORITY_DEFAULT);
++	ipic_write(primary_ipic->regs, IPIC_SMPRR_A, IPIC_PRIORITY_DEFAULT);
++	ipic_write(primary_ipic->regs, IPIC_SMPRR_B, IPIC_PRIORITY_DEFAULT);
+ }
+ 
+ void ipic_enable_mcp(enum ipic_mcp_irq mcp_irq)
+Index: linux-2.6.18/arch/powerpc/sysdev/ipic.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/ipic.h
++++ linux-2.6.18/arch/powerpc/sysdev/ipic.h
+@@ -23,13 +23,12 @@
+ #define IPIC_IRQ_EXT7 23
+ 
+ /* Default Priority Registers */
+-#define IPIC_SIPRR_A_DEFAULT 0x05309770
+-#define IPIC_SIPRR_D_DEFAULT 0x05309770
+-#define IPIC_SMPRR_A_DEFAULT 0x05309770
+-#define IPIC_SMPRR_B_DEFAULT 0x05309770
++#define IPIC_PRIORITY_DEFAULT 0x05309770
+ 
+ /* System Global Interrupt Configuration Register */
+ #define	SICFR_IPSA	0x00010000
++#define	SICFR_IPSB	0x00020000
++#define	SICFR_IPSC	0x00040000
+ #define	SICFR_IPSD	0x00080000
+ #define	SICFR_MPSA	0x00200000
+ #define	SICFR_MPSB	0x00400000
+Index: linux-2.6.18/include/asm-powerpc/ipic.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/ipic.h
++++ linux-2.6.18/include/asm-powerpc/ipic.h
+@@ -20,11 +20,13 @@
+ 
+ /* Flags when we init the IPIC */
+ #define IPIC_SPREADMODE_GRP_A	0x00000001
+-#define IPIC_SPREADMODE_GRP_D	0x00000002
+-#define IPIC_SPREADMODE_MIX_A	0x00000004
+-#define IPIC_SPREADMODE_MIX_B	0x00000008
+-#define IPIC_DISABLE_MCP_OUT	0x00000010
+-#define IPIC_IRQ0_MCP		0x00000020
++#define IPIC_SPREADMODE_GRP_B	0x00000002
++#define IPIC_SPREADMODE_GRP_C	0x00000004
++#define IPIC_SPREADMODE_GRP_D	0x00000008
++#define IPIC_SPREADMODE_MIX_A	0x00000010
++#define IPIC_SPREADMODE_MIX_B	0x00000020
++#define IPIC_DISABLE_MCP_OUT	0x00000040
++#define IPIC_IRQ0_MCP		0x00000080
+ 
+ /* IPIC registers offsets */
+ #define IPIC_SICFR	0x00	/* System Global Interrupt Configuration Register */
+Index: linux-2.6.18/mvl_patches/pro50-1029.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1029.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1029);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

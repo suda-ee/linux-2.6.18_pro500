@@ -1,0 +1,411 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_prevent_fdt_from_being_overwritten_rev
+# Date: Wed Sep 26 11:12:22 2007
+# Source: MontaVista Software, Inc.
+# MR: 24856
+# Type: Integration
+# Disposition: local
+# Remove the following:
+# Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+# Description:
+#     Removes the functionality provided by the
+#     common_powerpc_prevent_fdt_from_being_overwritten.patch
+#     (MR: 20036), since this stuff has been made differently in the community.
+# 
+
+PATCHNUM=219
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: MontaVista Software, Inc.
+MR: 24856
+Type: Integration
+Disposition: local
+Remove the following:
+Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+Description:
+    Removes the functionality provided by the
+    common_powerpc_prevent_fdt_from_being_overwritten.patch
+    (MR: 20036), since this stuff has been made differently in the community.
+
+Index: linux-2.6.18/arch/powerpc/boot/main.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/main.c
++++ linux-2.6.18/arch/powerpc/boot/main.c
+@@ -169,7 +169,7 @@ static int is_elf32(void *hdr)
+ 	return 1;
+ }
+ 
+-static void get_elfheader(void)
++static void prep_kernel(unsigned long *a1, unsigned long *a2)
+ {
+ 	int len;
+ 
+@@ -184,16 +184,13 @@ static void get_elfheader(void)
+ 	} else
+ 		memcpy(elfheader, (const void *)vmlinuz.addr,
+ 		       sizeof(elfheader));
+-}
+-
+-static void prep_kernel(unsigned long *a1, unsigned long *a2)
+-{
+-	int len;
+ 
+ 	if (!is_elf64(elfheader) && !is_elf32(elfheader)) {
+ 		printf("Error: not a valid PPC32 or PPC64 ELF file!\n\r");
+ 		exit();
+ 	}
++	if (platform_ops.image_hdr)
++		platform_ops.image_hdr(elfheader);
+ 
+ 	/* We need to alloc the memsize plus the file offset since gzip
+ 	 * will expand the header (file offset), then the kernel, then
+@@ -300,9 +297,7 @@ void start(unsigned long a1, unsigned lo
+ 	memset(&dt_ops, 0, sizeof(dt_ops));
+ 	memset(&console_ops, 0, sizeof(console_ops));
+ 
+-	get_elfheader();
+-
+-	if (platform_init(promptr, elfheader, _dtb_start, _dtb_end))
++	if (platform_init(promptr, _dtb_start, _dtb_end))
+ 		exit();
+ 	if (console_ops.open && (console_ops.open() < 0))
+ 		exit();
+Index: linux-2.6.18/arch/powerpc/boot/of.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/of.c
++++ linux-2.6.18/arch/powerpc/boot/of.c
+@@ -194,6 +194,20 @@ static void *of_try_claim(u32 size)
+ 	return (void *)addr;
+ }
+ 
++static void of_image_hdr(const void *hdr)
++{
++	const Elf64_Ehdr *elf64 = hdr;
++
++	if (elf64->e_ident[EI_CLASS] == ELFCLASS64) {
++		/*
++		 * Maintain a "magic" minimum address. This keeps some older
++		 * firmware platforms running.
++		 */
++		if (claim_base < PROG_START)
++			claim_base = PROG_START;
++	}
++}
++
+ static void of_exit(void)
+ {
+ 	call_prom("exit", 0, 0);
+@@ -242,11 +256,9 @@ static void of_console_write(char *buf, 
+ 	call_prom("write", 3, 1, of_stdout_handle, buf, len);
+ }
+ 
+-int platform_init(void *promptr, const void *elfhdr, char *dt_blob_start,
+-		char *dt_blob_end)
++int platform_init(void *promptr, char *dt_blob_start, char *dt_blob_end)
+ {
+-	const Elf64_Ehdr *elf64 = elfhdr;
+-
++	platform_ops.image_hdr = of_image_hdr;
+ 	platform_ops.malloc = of_try_claim;
+ 	platform_ops.exit = of_exit;
+ 
+@@ -258,14 +270,5 @@ int platform_init(void *promptr, const v
+ 	console_ops.write = of_console_write;
+ 
+ 	prom = (int (*)(void *))promptr;
+-
+-	if (elf64->e_ident[EI_CLASS] == ELFCLASS64) {
+-		/*
+-		 * Maintain a "magic" minimum address. This keeps some older
+-		 * firmware platforms running.
+-		 */
+-		if (claim_base < PROG_START)
+-			claim_base = PROG_START;
+-	}
+ 	return 0;
+ }
+Index: linux-2.6.18/arch/powerpc/boot/ops.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/ops.h
++++ linux-2.6.18/arch/powerpc/boot/ops.h
+@@ -20,6 +20,7 @@
+ /* Platform specific operations */
+ struct platform_ops {
+ 	void	(*fixups)(void);
++	void	(*image_hdr)(const void *);
+ 	void *	(*malloc)(u32 size);
+ 	void	(*free)(void *ptr);
+ 	void *	(*realloc)(void *ptr, unsigned long size);
+@@ -58,8 +59,7 @@ struct serial_console_data {
+ 	void		(*close)(void);
+ };
+ 
+-int platform_init(void *promptr, const void *elfhdr, char *dt_blob_start,
+-		char *dt_blob_end);
++int platform_init(void *promptr, char *dt_blob_start, char *dt_blob_end);
+ int ft_init(void *dt_blob, unsigned int max_size, unsigned int max_find_device);
+ int serial_console_init(void);
+ int ns16550_console_init(void *devp, struct serial_console_data *scdp);
+Index: linux-2.6.18/arch/powerpc/boot/sandpoint.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/sandpoint.c
++++ linux-2.6.18/arch/powerpc/boot/sandpoint.c
+@@ -12,8 +12,6 @@
+ #include <stdarg.h>
+ #include <stddef.h>
+ #include "types.h"
+-#include "elf.h"
+-#include "page.h"
+ #include "string.h"
+ #include "stdio.h"
+ #include "io.h"
+@@ -141,40 +139,17 @@ static void sandpoint_reset(void)
+ 
+ #define	HEAP_SIZE	(16*MB)
+ 
+-int platform_init(void *promptr, const void *elfhdr, char *dt_blob_start,
+-		char *dt_blob_end)
++int platform_init(void *promptr, char *dt_blob_start, char *dt_blob_end)
+ {
+-	const Elf32_Ehdr *elf32 = elfhdr;
+-	Elf32_Phdr *elf32ph = (Elf32_Phdr *)((unsigned long)elf32
+-		+ elf32->e_phoff);
+-	char *heap_start, *dtb;
+ 	int dt_size = dt_blob_end - dt_blob_start;
+ 
+ 	if (dt_size <= 0) /* No fdt */
+ 		goto err_out;
+ 
+-	if (elf32->e_ident[EI_CLASS] != ELFCLASS32)
++	if ((unsigned)simple_alloc_init(_end, HEAP_SIZE, 2*KB, 16) > (32*MB))
+ 		goto err_out;
+ 
+-	/* Start heap after end of the zImage or end of the kernel,
+-	 * whichever is higher.  That's so things allocated by
+-	 * simple_alloc won't overwrite any part of the zImage or
+-	 * get overwritten when the early kernel code relocates
+-	 * the kernel to 0.
+-	 */
+-	heap_start = (char *)_ALIGN(elf32ph->p_memsz + elf32ph->p_offset, 4096);
+-	heap_start = max(heap_start, (char *)_end);
+-
+-	if ((unsigned)simple_alloc_init(heap_start, HEAP_SIZE, 2*KB, 16)
+-			> (32*MB))
+-		goto err_out;
+-
+-	/* Relocate dtb to safe area past end of zImage & kernel */
+-	dtb = malloc(dt_size);
+-	if (!dtb)
+-		goto err_out;
+-	memmove(dtb, dt_blob_start, dt_size);
+-	if (ft_init(dtb, dt_size, 16))
++	if (ft_init(dt_blob_start, dt_size, 16))
+ 		goto err_out;
+ 
+ 	platform_ops.fixups = sandpoint_fixups;
+Index: linux-2.6.18/mvl_patches/pro50-0219.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0219.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(219);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

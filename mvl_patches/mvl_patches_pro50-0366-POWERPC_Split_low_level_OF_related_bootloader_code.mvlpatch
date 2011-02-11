@@ -1,0 +1,762 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Split_low_level_OF_related_bootloader_code
+# Date: Wed Sep 26 11:18:17 2007
+# MR: 24856
+# From 2e6016133755eb3cc44e8efab92573d23ed75888 Mon Sep 17 00:00:00 2001
+# From: David Gibson <david@gibson.dropbear.id.au>
+# Date: Wed, 13 Jun 2007 14:52:54 +1000
+# Subject: [PATCH] [POWERPC] Split low-level OF-related bootloader code into separate files
+# 
+# Currently, all OF-related code in the bootloader is contained in of.c.
+# of.c also provides the platform specific things necessary to boot on
+# an OF platform.
+# 
+# However, there are platforms (such as PReP) which can include an OF
+# implementation, but are not bootable as pure OF systems.  For use by
+# such platforms, this patch splits out the low-level parts of the OF
+# code (call_prom() and various wrappers thereof) into a new oflib.c
+# file.  In addition, the code related to bootwrapper console output via
+# OF are moved to a new ofconsole.c file.  Both these files are included
+# in the wrapper.a library where they can be used by both full-OF and
+# partial OF platforms.
+# 
+# Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=366
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From 2e6016133755eb3cc44e8efab92573d23ed75888 Mon Sep 17 00:00:00 2001
+From: David Gibson <david@gibson.dropbear.id.au>
+Date: Wed, 13 Jun 2007 14:52:54 +1000
+Subject: [PATCH] [POWERPC] Split low-level OF-related bootloader code into separate files
+
+Currently, all OF-related code in the bootloader is contained in of.c.
+of.c also provides the platform specific things necessary to boot on
+an OF platform.
+
+However, there are platforms (such as PReP) which can include an OF
+implementation, but are not bootable as pure OF systems.  For use by
+such platforms, this patch splits out the low-level parts of the OF
+code (call_prom() and various wrappers thereof) into a new oflib.c
+file.  In addition, the code related to bootwrapper console output via
+OF are moved to a new ofconsole.c file.  Both these files are included
+in the wrapper.a library where they can be used by both full-OF and
+partial OF platforms.
+
+Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/boot/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/Makefile
++++ linux-2.6.18/arch/powerpc/boot/Makefile
+@@ -53,7 +53,7 @@ $(addprefix $(obj)/,$(zlib) gunzip_util.
+ 
+ src-wlib := string.S crt0.S stdio.c main.c flatdevtree.c flatdevtree_misc.c \
+ 		ns16550.c serial.c simple_alloc.c div64.S util.S \
+-		gunzip_util.c elf_util.c $(zlib) devtree.c \
++		gunzip_util.c elf_util.c $(zlib) devtree.c oflib.c ofconsole.c \
+ 		44x.c ebony.c mv64x60.c mpsc.c mv64x60_i2c.c
+ src-plat := of.c cuboot-83xx.c cuboot-85xx.c holly.c \
+ 		cuboot-ebony.c treeboot-ebony.c prpmc2800.c
+Index: linux-2.6.18/arch/powerpc/boot/of.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/of.c
++++ linux-2.6.18/arch/powerpc/boot/of.c
+@@ -15,8 +15,7 @@
+ #include "page.h"
+ #include "ops.h"
+ 
+-typedef void *ihandle;
+-typedef void *phandle;
++#include "of.h"
+ 
+ extern char _end[];
+ 
+@@ -25,154 +24,10 @@ extern char _end[];
+ #define RAM_END		(512<<20)	/* Fixme: use OF */
+ #define	ONE_MB		0x100000
+ 
+-int (*prom) (void *);
+ 
+ 
+ static unsigned long claim_base;
+ 
+-static int call_prom(const char *service, int nargs, int nret, ...)
+-{
+-	int i;
+-	struct prom_args {
+-		const char *service;
+-		int nargs;
+-		int nret;
+-		unsigned int args[12];
+-	} args;
+-	va_list list;
+-
+-	args.service = service;
+-	args.nargs = nargs;
+-	args.nret = nret;
+-
+-	va_start(list, nret);
+-	for (i = 0; i < nargs; i++)
+-		args.args[i] = va_arg(list, unsigned int);
+-	va_end(list);
+-
+-	for (i = 0; i < nret; i++)
+-		args.args[nargs+i] = 0;
+-
+-	if (prom(&args) < 0)
+-		return -1;
+-
+-	return (nret > 0)? args.args[nargs]: 0;
+-}
+-
+-static int call_prom_ret(const char *service, int nargs, int nret,
+-		  unsigned int *rets, ...)
+-{
+-	int i;
+-	struct prom_args {
+-		const char *service;
+-		int nargs;
+-		int nret;
+-		unsigned int args[12];
+-	} args;
+-	va_list list;
+-
+-	args.service = service;
+-	args.nargs = nargs;
+-	args.nret = nret;
+-
+-	va_start(list, rets);
+-	for (i = 0; i < nargs; i++)
+-		args.args[i] = va_arg(list, unsigned int);
+-	va_end(list);
+-
+-	for (i = 0; i < nret; i++)
+-		args.args[nargs+i] = 0;
+-
+-	if (prom(&args) < 0)
+-		return -1;
+-
+-	if (rets != (void *) 0)
+-		for (i = 1; i < nret; ++i)
+-			rets[i-1] = args.args[nargs+i];
+-
+-	return (nret > 0)? args.args[nargs]: 0;
+-}
+-
+-/*
+- * Older OF's require that when claiming a specific range of addresses,
+- * we claim the physical space in the /memory node and the virtual
+- * space in the chosen mmu node, and then do a map operation to
+- * map virtual to physical.
+- */
+-static int need_map = -1;
+-static ihandle chosen_mmu;
+-static phandle memory;
+-
+-/* returns true if s2 is a prefix of s1 */
+-static int string_match(const char *s1, const char *s2)
+-{
+-	for (; *s2; ++s2)
+-		if (*s1++ != *s2)
+-			return 0;
+-	return 1;
+-}
+-
+-static int check_of_version(void)
+-{
+-	phandle oprom, chosen;
+-	char version[64];
+-
+-	oprom = finddevice("/openprom");
+-	if (oprom == (phandle) -1)
+-		return 0;
+-	if (getprop(oprom, "model", version, sizeof(version)) <= 0)
+-		return 0;
+-	version[sizeof(version)-1] = 0;
+-	printf("OF version = '%s'\r\n", version);
+-	if (!string_match(version, "Open Firmware, 1.")
+-	    && !string_match(version, "FirmWorks,3."))
+-		return 0;
+-	chosen = finddevice("/chosen");
+-	if (chosen == (phandle) -1) {
+-		chosen = finddevice("/chosen@0");
+-		if (chosen == (phandle) -1) {
+-			printf("no chosen\n");
+-			return 0;
+-		}
+-	}
+-	if (getprop(chosen, "mmu", &chosen_mmu, sizeof(chosen_mmu)) <= 0) {
+-		printf("no mmu\n");
+-		return 0;
+-	}
+-	memory = (ihandle) call_prom("open", 1, 1, "/memory");
+-	if (memory == (ihandle) -1) {
+-		memory = (ihandle) call_prom("open", 1, 1, "/memory@0");
+-		if (memory == (ihandle) -1) {
+-			printf("no memory node\n");
+-			return 0;
+-		}
+-	}
+-	printf("old OF detected\r\n");
+-	return 1;
+-}
+-
+-static void *claim(unsigned long virt, unsigned long size, unsigned long align)
+-{
+-	int ret;
+-	unsigned int result;
+-
+-	if (need_map < 0)
+-		need_map = check_of_version();
+-	if (align || !need_map)
+-		return (void *) call_prom("claim", 3, 1, virt, size, align);
+-
+-	ret = call_prom_ret("call-method", 5, 2, &result, "claim", memory,
+-			    align, size, virt);
+-	if (ret != 0 || result == -1)
+-		return (void *) -1;
+-	ret = call_prom_ret("call-method", 5, 2, &result, "claim", chosen_mmu,
+-			    align, size, virt);
+-	/* 0x12 == coherent + read/write */
+-	ret = call_prom("call-method", 6, 1, "map", chosen_mmu,
+-			0x12, size, virt, virt);
+-	return (void *) virt;
+-}
+-
+ static void *of_try_claim(unsigned long size)
+ {
+ 	unsigned long addr = 0;
+@@ -184,7 +39,7 @@ static void *of_try_claim(unsigned long 
+ #ifdef DEBUG
+ 		printf("    trying: 0x%08lx\n\r", claim_base);
+ #endif
+-		addr = (unsigned long)claim(claim_base, size, 0);
++		addr = (unsigned long)of_claim(claim_base, size, 0);
+ 		if ((void *)addr != (void *)-1)
+ 			break;
+ 	}
+@@ -218,52 +73,24 @@ static void *of_vmlinux_alloc(unsigned l
+ 	return p;
+ }
+ 
+-static void of_exit(void)
+-{
+-	call_prom("exit", 0, 0);
+-}
+-
+ /*
+  * OF device tree routines
+  */
+ static void *of_finddevice(const char *name)
+ {
+-	return (phandle) call_prom("finddevice", 1, 1, name);
++	return (phandle) of_call_prom("finddevice", 1, 1, name);
+ }
+ 
+ static int of_getprop(const void *phandle, const char *name, void *buf,
+ 		const int buflen)
+ {
+-	return call_prom("getprop", 4, 1, phandle, name, buf, buflen);
++	return of_call_prom("getprop", 4, 1, phandle, name, buf, buflen);
+ }
+ 
+ static int of_setprop(const void *phandle, const char *name, const void *buf,
+ 		const int buflen)
+ {
+-	return call_prom("setprop", 4, 1, phandle, name, buf, buflen);
+-}
+-
+-/*
+- * OF console routines
+- */
+-static void *of_stdout_handle;
+-
+-static int of_console_open(void)
+-{
+-	void *devp;
+-
+-	if (((devp = finddevice("/chosen")) != NULL)
+-			&& (getprop(devp, "stdout", &of_stdout_handle,
+-				sizeof(of_stdout_handle))
+-				== sizeof(of_stdout_handle)))
+-		return 0;
+-
+-	return -1;
+-}
+-
+-static void of_console_write(char *buf, int len)
+-{
+-	call_prom("write", 3, 1, of_stdout_handle, buf, len);
++	return of_call_prom("setprop", 4, 1, phandle, name, buf, buflen);
+ }
+ 
+ void platform_init(unsigned long a1, unsigned long a2, void *promptr)
+@@ -277,10 +104,9 @@ void platform_init(unsigned long a1, uns
+ 	dt_ops.getprop = of_getprop;
+ 	dt_ops.setprop = of_setprop;
+ 
+-	console_ops.open = of_console_open;
+-	console_ops.write = of_console_write;
++	of_console_init();
+ 
+-	prom = (int (*)(void *))promptr;
++	of_init(promptr);
+ 	loader_info.promptr = promptr;
+ 	if (a1 && a2 && a2 != 0xdeadbeef) {
+ 		loader_info.initrd_addr = a1;
+Index: linux-2.6.18/arch/powerpc/boot/of.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/boot/of.h
+@@ -0,0 +1,15 @@
++#ifndef _PPC_BOOT_OF_H_
++#define _PPC_BOOT_OF_H_
++
++typedef void *phandle;
++typedef void *ihandle;
++
++void of_init(void *promptr);
++int of_call_prom(const char *service, int nargs, int nret, ...);
++void *of_claim(unsigned long virt, unsigned long size, unsigned long align);
++void of_exit(void);
++
++/* Console functions */
++void of_console_init(void);
++
++#endif /* _PPC_BOOT_OF_H_ */
+Index: linux-2.6.18/arch/powerpc/boot/ofconsole.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/boot/ofconsole.c
+@@ -0,0 +1,45 @@
++/*
++ * OF console routines
++ *
++ * Copyright (C) Paul Mackerras 1997.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */
++#include <stddef.h>
++#include "types.h"
++#include "elf.h"
++#include "string.h"
++#include "stdio.h"
++#include "page.h"
++#include "ops.h"
++
++#include "of.h"
++
++static void *of_stdout_handle;
++
++static int of_console_open(void)
++{
++	void *devp;
++
++	if (((devp = finddevice("/chosen")) != NULL)
++			&& (getprop(devp, "stdout", &of_stdout_handle,
++				sizeof(of_stdout_handle))
++				== sizeof(of_stdout_handle)))
++		return 0;
++
++	return -1;
++}
++
++static void of_console_write(char *buf, int len)
++{
++	of_call_prom("write", 3, 1, of_stdout_handle, buf, len);
++}
++
++void of_console_init(void)
++{
++	console_ops.open = of_console_open;
++	console_ops.write = of_console_write;
++}
+Index: linux-2.6.18/arch/powerpc/boot/oflib.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/boot/oflib.c
+@@ -0,0 +1,172 @@
++/*
++ * Copyright (C) Paul Mackerras 1997.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */
++#include <stddef.h>
++#include "types.h"
++#include "elf.h"
++#include "string.h"
++#include "stdio.h"
++#include "page.h"
++#include "ops.h"
++
++#include "of.h"
++
++static int (*prom) (void *);
++
++void of_init(void *promptr)
++{
++	prom = (int (*)(void *))promptr;
++}
++
++int of_call_prom(const char *service, int nargs, int nret, ...)
++{
++	int i;
++	struct prom_args {
++		const char *service;
++		int nargs;
++		int nret;
++		unsigned int args[12];
++	} args;
++	va_list list;
++
++	args.service = service;
++	args.nargs = nargs;
++	args.nret = nret;
++
++	va_start(list, nret);
++	for (i = 0; i < nargs; i++)
++		args.args[i] = va_arg(list, unsigned int);
++	va_end(list);
++
++	for (i = 0; i < nret; i++)
++		args.args[nargs+i] = 0;
++
++	if (prom(&args) < 0)
++		return -1;
++
++	return (nret > 0)? args.args[nargs]: 0;
++}
++
++static int of_call_prom_ret(const char *service, int nargs, int nret,
++			    unsigned int *rets, ...)
++{
++	int i;
++	struct prom_args {
++		const char *service;
++		int nargs;
++		int nret;
++		unsigned int args[12];
++	} args;
++	va_list list;
++
++	args.service = service;
++	args.nargs = nargs;
++	args.nret = nret;
++
++	va_start(list, rets);
++	for (i = 0; i < nargs; i++)
++		args.args[i] = va_arg(list, unsigned int);
++	va_end(list);
++
++	for (i = 0; i < nret; i++)
++		args.args[nargs+i] = 0;
++
++	if (prom(&args) < 0)
++		return -1;
++
++	if (rets != (void *) 0)
++		for (i = 1; i < nret; ++i)
++			rets[i-1] = args.args[nargs+i];
++
++	return (nret > 0)? args.args[nargs]: 0;
++}
++
++/* returns true if s2 is a prefix of s1 */
++static int string_match(const char *s1, const char *s2)
++{
++	for (; *s2; ++s2)
++		if (*s1++ != *s2)
++			return 0;
++	return 1;
++}
++
++/*
++ * Older OF's require that when claiming a specific range of addresses,
++ * we claim the physical space in the /memory node and the virtual
++ * space in the chosen mmu node, and then do a map operation to
++ * map virtual to physical.
++ */
++static int need_map = -1;
++static ihandle chosen_mmu;
++static phandle memory;
++
++static int check_of_version(void)
++{
++	phandle oprom, chosen;
++	char version[64];
++
++	oprom = finddevice("/openprom");
++	if (oprom == (phandle) -1)
++		return 0;
++	if (getprop(oprom, "model", version, sizeof(version)) <= 0)
++		return 0;
++	version[sizeof(version)-1] = 0;
++	printf("OF version = '%s'\r\n", version);
++	if (!string_match(version, "Open Firmware, 1.")
++	    && !string_match(version, "FirmWorks,3."))
++		return 0;
++	chosen = finddevice("/chosen");
++	if (chosen == (phandle) -1) {
++		chosen = finddevice("/chosen@0");
++		if (chosen == (phandle) -1) {
++			printf("no chosen\n");
++			return 0;
++		}
++	}
++	if (getprop(chosen, "mmu", &chosen_mmu, sizeof(chosen_mmu)) <= 0) {
++		printf("no mmu\n");
++		return 0;
++	}
++	memory = (ihandle) of_call_prom("open", 1, 1, "/memory");
++	if (memory == (ihandle) -1) {
++		memory = (ihandle) of_call_prom("open", 1, 1, "/memory@0");
++		if (memory == (ihandle) -1) {
++			printf("no memory node\n");
++			return 0;
++		}
++	}
++	printf("old OF detected\r\n");
++	return 1;
++}
++
++void *of_claim(unsigned long virt, unsigned long size, unsigned long align)
++{
++	int ret;
++	unsigned int result;
++
++	if (need_map < 0)
++		need_map = check_of_version();
++	if (align || !need_map)
++		return (void *) of_call_prom("claim", 3, 1, virt, size, align);
++
++	ret = of_call_prom_ret("call-method", 5, 2, &result, "claim", memory,
++			       align, size, virt);
++	if (ret != 0 || result == -1)
++		return (void *) -1;
++	ret = of_call_prom_ret("call-method", 5, 2, &result, "claim", chosen_mmu,
++			       align, size, virt);
++	/* 0x12 == coherent + read/write */
++	ret = of_call_prom("call-method", 6, 1, "map", chosen_mmu,
++			   0x12, size, virt, virt);
++	return (void *) virt;
++}
++
++void of_exit(void)
++{
++	of_call_prom("exit", 0, 0);
++}
+Index: linux-2.6.18/mvl_patches/pro50-0366.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0366.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(366);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

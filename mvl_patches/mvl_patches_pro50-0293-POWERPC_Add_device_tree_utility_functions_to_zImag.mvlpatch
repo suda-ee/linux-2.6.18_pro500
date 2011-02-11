@@ -1,0 +1,470 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Add_device_tree_utility_functions_to_zImag
+# Date: Wed Sep 26 11:14:54 2007
+# MR: 24856
+# From 27fbaa9702e548e74dffd21855769f6cedad42bd Mon Sep 17 00:00:00 2001
+# From: David Gibson <david@gibson.dropbear.id.au>
+# Date: Thu, 22 Mar 2007 17:02:21 +1100
+# Subject: [PATCH] [POWERPC] Add device tree utility functions to zImage
+# 
+# This patch adds a library of useful device tree manipulation functions
+# to the zImage library, for use by platform code.  These functions are
+# based on the hooks already in dt_ops, so they're not dependent on a
+# particular device tree implementation.  This patch also slightly
+# streamlines the code in main.c using these new functions.
+# 
+# This is a consolidation of my work in this area with Scott Wood's
+# patches to a very similar end.
+# 
+# Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=293
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From 27fbaa9702e548e74dffd21855769f6cedad42bd Mon Sep 17 00:00:00 2001
+From: David Gibson <david@gibson.dropbear.id.au>
+Date: Thu, 22 Mar 2007 17:02:21 +1100
+Subject: [PATCH] [POWERPC] Add device tree utility functions to zImage
+
+This patch adds a library of useful device tree manipulation functions
+to the zImage library, for use by platform code.  These functions are
+based on the hooks already in dt_ops, so they're not dependent on a
+particular device tree implementation.  This patch also slightly
+streamlines the code in main.c using these new functions.
+
+This is a consolidation of my work in this area with Scott Wood's
+patches to a very similar end.
+
+Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/boot/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/Makefile
++++ linux-2.6.18/arch/powerpc/boot/Makefile
+@@ -50,7 +50,7 @@ $(addprefix $(obj)/,$(zlib) main.o): $(a
+ 
+ src-wlib := string.S crt0.S stdio.c main.c flatdevtree.c flatdevtree_misc.c \
+ 		ns16550.c serial.c simple_alloc.c div64.S util.S \
+-		gunzip_util.c $(zlib)
++		gunzip_util.c $(zlib) devtree.c
+ src-plat := of.c
+ src-boot := $(src-wlib) $(src-plat) empty.c
+ 
+Index: linux-2.6.18/arch/powerpc/boot/devtree.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/boot/devtree.c
+@@ -0,0 +1,111 @@
++/*
++ * devtree.c - convenience functions for device tree manipulation
++ * Copyright 2007 David Gibson, IBM Corporation.
++ * Copyright (c) 2007 Freescale Semiconductor, Inc.
++ *
++ * Authors: David Gibson <david@gibson.dropbear.id.au>
++ *	    Scott Wood <scottwood@freescale.com>
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ */
++#include <stdarg.h>
++#include <stddef.h>
++#include "types.h"
++#include "string.h"
++#include "stdio.h"
++#include "ops.h"
++
++void dt_fixup_memory(u64 start, u64 size)
++{
++	void *root, *memory;
++	int naddr, nsize, i;
++	u32 memreg[4];
++
++	root = finddevice("/");
++	if (getprop(root, "#address-cells", &naddr, sizeof(naddr)) < 0)
++		naddr = 2;
++	if (naddr < 1 || naddr > 2)
++		fatal("Can't cope with #address-cells == %d in /\n\r", naddr);
++
++	if (getprop(root, "#size-cells", &nsize, sizeof(nsize)) < 0)
++		nsize = 1;
++	if (nsize < 1 || nsize > 2)
++		fatal("Can't cope with #size-cells == %d in /\n\r", nsize);
++
++	i = 0;
++	if (naddr == 2)
++		memreg[i++] = start >> 32;
++	memreg[i++] = start & 0xffffffff;
++	if (nsize == 2)
++		memreg[i++] = size >> 32;
++	memreg[i++] = size & 0xffffffff;
++
++	memory = finddevice("/memory");
++	if (! memory) {
++		memory = create_node(NULL, "memory");
++		setprop_str(memory, "device_type", "memory");
++	}
++
++	printf("Memory <- <0x%x", memreg[0]);
++	for (i = 1; i < (naddr + nsize); i++)
++		printf(" 0x%x", memreg[i]);
++	printf("> (%ldMB)\n\r", (unsigned long)(size >> 20));
++
++	setprop(memory, "reg", memreg, (naddr + nsize)*sizeof(u32));
++}
++
++#define MHZ(x)	((x + 500000) / 1000000)
++
++void dt_fixup_cpu_clocks(u32 cpu, u32 tb, u32 bus)
++{
++	void *devp = NULL;
++
++	printf("CPU clock-frequency <- 0x%x (%dMHz)\n\r", cpu, MHZ(cpu));
++	printf("CPU timebase-frequency <- 0x%x (%dMHz)\n\r", tb, MHZ(tb));
++	if (bus > 0)
++		printf("CPU bus-frequency <- 0x%x (%dMHz)\n\r", bus, MHZ(bus));
++
++	while ((devp = find_node_by_devtype(devp, "cpu"))) {
++		setprop_val(devp, "clock-frequency", cpu);
++		setprop_val(devp, "timebase-frequency", tb);
++		if (bus > 0)
++			setprop_val(devp, "bus-frequency", bus);
++	}
++}
++
++void dt_fixup_clock(const char *path, u32 freq)
++{
++	void *devp = finddevice(path);
++
++	if (devp) {
++		printf("%s: clock-frequency <- %x (%dMHz)\n\r", path, freq, MHZ(freq));
++		setprop_val(devp, "clock-frequency", freq);
++	}
++}
++
++void __dt_fixup_mac_addresses(u32 startindex, ...)
++{
++	va_list ap;
++	u32 index = startindex;
++	void *devp;
++	const u8 *addr;
++
++	va_start(ap, startindex);
++	while ((addr = va_arg(ap, const u8 *))) {
++		devp = find_node_by_prop_value(NULL, "linux,network-index",
++					       (void*)&index, sizeof(index));
++
++		printf("ENET%d: local-mac-address <-"
++		       " %02x:%02x:%02x:%02x:%02x:%02x\n\r", index,
++		       addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
++
++		if (devp)
++			setprop(devp, "local-mac-address", addr, 6);
++
++		index++;
++	}
++	va_end(ap);
++}
+Index: linux-2.6.18/arch/powerpc/boot/main.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/main.c
++++ linux-2.6.18/arch/powerpc/boot/main.c
+@@ -153,13 +153,10 @@ static struct addr_range prep_kernel(voi
+ 	return (struct addr_range){addr, ei.memsize};
+ }
+ 
+-static struct addr_range prep_initrd(struct addr_range vmlinux,
++static struct addr_range prep_initrd(struct addr_range vmlinux, void *chosen,
+ 				     unsigned long initrd_addr,
+ 				     unsigned long initrd_size)
+ {
+-	void *devp;
+-	u32 initrd_start, initrd_end;
+-
+ 	/* If we have an image attached to us, it overrides anything
+ 	 * supplied by the loader. */
+ 	if (_initrd_end > _initrd_start) {
+@@ -198,16 +195,8 @@ static struct addr_range prep_initrd(str
+ 	printf("initrd head: 0x%lx\n\r", *((unsigned long *)initrd_addr));
+ 
+ 	/* Tell the kernel initrd address via device tree */
+-	devp = finddevice("/chosen");
+-	if (! devp)
+-		fatal("Device tree has no chosen node!\n\r");
+-
+-	initrd_start = (u32)initrd_addr;
+-	initrd_end = (u32)initrd_addr + initrd_size;
+-
+-	setprop(devp, "linux,initrd-start", &initrd_start,
+-		sizeof(initrd_start));
+-	setprop(devp, "linux,initrd-end", &initrd_end, sizeof(initrd_end));
++	setprop_val(chosen, "linux,initrd-start", (u32)(initrd_addr));
++	setprop_val(chosen, "linux,initrd-end", (u32)(initrd_addr+initrd_size));
+ 
+ 	return (struct addr_range){(void *)initrd_addr, initrd_size};
+ }
+@@ -254,6 +243,7 @@ void start(void)
+ 	kernel_entry_t kentry;
+ 	char cmdline[COMMAND_LINE_SIZE];
+ 	unsigned long ft_addr = 0;
++	void *chosen;
+ 
+ 	if (console_ops.open && (console_ops.open() < 0))
+ 		exit();
+@@ -263,9 +253,14 @@ void start(void)
+ 	printf("\n\rzImage starting: loaded at 0x%p (sp: 0x%p)\n\r",
+ 	       _start, get_sp());
+ 
++	/* Ensure that the device tree has a /chosen node */
++	chosen = finddevice("/chosen");
++	if (!chosen)
++		chosen = create_node(NULL, "chosen");
++
+ 	vmlinux = prep_kernel();
+-	initrd = prep_initrd(vmlinux, loader_info.initrd_addr,
+-			     loader_info.initrd_size);
++	initrd = prep_initrd(vmlinux, chosen,
++			     loader_info.initrd_addr, loader_info.initrd_size);
+ 
+ 	/* If cmdline came from zimage wrapper or if we can edit the one
+ 	 * in the dt, print it out and edit it, if possible.
+Index: linux-2.6.18/arch/powerpc/boot/ops.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/ops.h
++++ linux-2.6.18/arch/powerpc/boot/ops.h
+@@ -96,6 +96,11 @@ static inline int setprop(void *devp, co
+ {
+ 	return (dt_ops.setprop) ? dt_ops.setprop(devp, name, buf, buflen) : -1;
+ }
++#define setprop_val(devp, name, val) \
++	do { \
++		typeof(val) x = (val); \
++		setprop((devp), (name), &x, sizeof(x)); \
++	} while (0)
+ 
+ static inline int setprop_str(void *devp, const char *name, const char *buf)
+ {
+@@ -141,6 +146,14 @@ static inline void *find_node_by_devtype
+ 	return find_node_by_prop_value_str(prev, "device_type", type);
+ }
+ 
++void dt_fixup_memory(u64 start, u64 size);
++void dt_fixup_cpu_clocks(u32 cpufreq, u32 tbfreq, u32 busfreq);
++void dt_fixup_clock(const char *path, u32 freq);
++void __dt_fixup_mac_addresses(u32 startindex, ...);
++#define dt_fixup_mac_addresses(...) \
++	__dt_fixup_mac_addresses(0, __VA_ARGS__, NULL)
++
++
+ static inline void *malloc(u32 size)
+ {
+ 	return (platform_ops.malloc) ? platform_ops.malloc(size) : NULL;
+Index: linux-2.6.18/mvl_patches/pro50-0293.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0293.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(293);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

@@ -1,0 +1,448 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Celleb_support_spu_priv1_ops
+# Date: Wed Sep 26 11:13:34 2007
+# MR: 24856
+# From e107931956f8327637508b91a9ddd4ba35be289d Mon Sep 17 00:00:00 2001
+# From: Ishizaki Kou <kou.ishizaki@toshiba.co.jp>
+# Date: Fri, 2 Feb 2007 16:46:22 +0900
+# Subject: [PATCH] [POWERPC] Celleb: support spu priv1 ops
+# 
+# SPU support routines for Celleb platform.
+# 
+# Signed-off-by: Kou Ishizaki <kou.ishizaki@toshiba.co.jp>
+# Acked-by: Arnd Bergmann <arnd.bergmann@de.ibm.com>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=253
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From e107931956f8327637508b91a9ddd4ba35be289d Mon Sep 17 00:00:00 2001
+From: Ishizaki Kou <kou.ishizaki@toshiba.co.jp>
+Date: Fri, 2 Feb 2007 16:46:22 +0900
+Subject: [PATCH] [POWERPC] Celleb: support spu priv1 ops
+
+SPU support routines for Celleb platform.
+
+Signed-off-by: Kou Ishizaki <kou.ishizaki@toshiba.co.jp>
+Acked-by: Arnd Bergmann <arnd.bergmann@de.ibm.com>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/platforms/celleb/spu_priv1.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/platforms/celleb/spu_priv1.c
+@@ -0,0 +1,208 @@
++/*
++ * spu hypervisor abstraction for Beat
++ *
++ * (C) Copyright 2006-2007 TOSHIBA CORPORATION
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++#include <linux/module.h>
++
++#include <asm/types.h>
++#include <asm/spu.h>
++#include <asm/spu_priv1.h>
++
++#include "beat_wrapper.h"
++
++static inline void _int_mask_set(struct spu *spu, int class, u64 mask)
++{
++	spu->shadow_int_mask_RW[class] = mask;
++	beat_set_irq_mask_for_spe(spu->spe_id, class, mask);
++}
++
++static inline u64 _int_mask_get(struct spu *spu, int class)
++{
++	return spu->shadow_int_mask_RW[class];
++}
++
++static void int_mask_set(struct spu *spu, int class, u64 mask)
++{
++	_int_mask_set(spu, class, mask);
++}
++
++static u64 int_mask_get(struct spu *spu, int class)
++{
++	return _int_mask_get(spu, class);
++}
++
++static void int_mask_and(struct spu *spu, int class, u64 mask)
++{
++	u64 old_mask;
++	old_mask = _int_mask_get(spu, class);
++	_int_mask_set(spu, class, old_mask & mask);
++}
++
++static void int_mask_or(struct spu *spu, int class, u64 mask)
++{
++	u64 old_mask;
++	old_mask = _int_mask_get(spu, class);
++	_int_mask_set(spu, class, old_mask | mask);
++}
++
++static void int_stat_clear(struct spu *spu, int class, u64 stat)
++{
++	beat_clear_interrupt_status_of_spe(spu->spe_id, class, stat);
++}
++
++static u64 int_stat_get(struct spu *spu, int class)
++{
++	u64 int_stat;
++	beat_get_interrupt_status_of_spe(spu->spe_id, class, &int_stat);
++	return int_stat;
++}
++
++static void cpu_affinity_set(struct spu *spu, int cpu)
++{
++	return;
++}
++
++static u64 mfc_dar_get(struct spu *spu)
++{
++	u64 dar;
++	beat_get_spe_privileged_state_1_registers(
++		spu->spe_id,
++		offsetof(struct spu_priv1, mfc_dar_RW), &dar);
++	return dar;
++}
++
++static u64 mfc_dsisr_get(struct spu *spu)
++{
++	u64 dsisr;
++	beat_get_spe_privileged_state_1_registers(
++		spu->spe_id,
++		offsetof(struct spu_priv1, mfc_dsisr_RW), &dsisr);
++	return dsisr;
++}
++
++static void mfc_dsisr_set(struct spu *spu, u64 dsisr)
++{
++	beat_set_spe_privileged_state_1_registers(
++		spu->spe_id,
++		offsetof(struct spu_priv1, mfc_dsisr_RW), dsisr);
++}
++
++static void mfc_sdr_setup(struct spu *spu)
++{
++	return;
++}
++
++static void mfc_sr1_set(struct spu *spu, u64 sr1)
++{
++	beat_set_spe_privileged_state_1_registers(
++		spu->spe_id,
++		offsetof(struct spu_priv1, mfc_sr1_RW), sr1);
++}
++
++static u64 mfc_sr1_get(struct spu *spu)
++{
++	u64 sr1;
++	beat_get_spe_privileged_state_1_registers(
++		spu->spe_id,
++		offsetof(struct spu_priv1, mfc_sr1_RW), &sr1);
++	return sr1;
++}
++
++static void mfc_tclass_id_set(struct spu *spu, u64 tclass_id)
++{
++	beat_set_spe_privileged_state_1_registers(
++		spu->spe_id,
++		offsetof(struct spu_priv1, mfc_tclass_id_RW), tclass_id);
++}
++
++static u64 mfc_tclass_id_get(struct spu *spu)
++{
++	u64 tclass_id;
++	beat_get_spe_privileged_state_1_registers(
++		spu->spe_id,
++		offsetof(struct spu_priv1, mfc_tclass_id_RW), &tclass_id);
++	return tclass_id;
++}
++
++static void tlb_invalidate(struct spu *spu)
++{
++	beat_set_spe_privileged_state_1_registers(
++		spu->spe_id,
++		offsetof(struct spu_priv1, tlb_invalidate_entry_W), 0ul);
++}
++
++static void resource_allocation_groupID_set(struct spu *spu, u64 id)
++{
++	beat_set_spe_privileged_state_1_registers(
++		spu->spe_id,
++		offsetof(struct spu_priv1, resource_allocation_groupID_RW),
++		id);
++}
++
++static u64 resource_allocation_groupID_get(struct spu *spu)
++{
++	u64 id;
++	beat_get_spe_privileged_state_1_registers(
++		spu->spe_id,
++		offsetof(struct spu_priv1, resource_allocation_groupID_RW),
++		&id);
++	return id;
++}
++
++static void resource_allocation_enable_set(struct spu *spu, u64 enable)
++{
++	beat_set_spe_privileged_state_1_registers(
++		spu->spe_id,
++		offsetof(struct spu_priv1, resource_allocation_enable_RW),
++		enable);
++}
++
++static u64 resource_allocation_enable_get(struct spu *spu)
++{
++	u64 enable;
++	beat_get_spe_privileged_state_1_registers(
++		spu->spe_id,
++		offsetof(struct spu_priv1, resource_allocation_enable_RW),
++		&enable);
++	return enable;
++}
++
++const struct spu_priv1_ops spu_priv1_beat_ops =
++{
++	.int_mask_and = int_mask_and,
++	.int_mask_or = int_mask_or,
++	.int_mask_set = int_mask_set,
++	.int_mask_get = int_mask_get,
++	.int_stat_clear = int_stat_clear,
++	.int_stat_get = int_stat_get,
++	.cpu_affinity_set = cpu_affinity_set,
++	.mfc_dar_get = mfc_dar_get,
++	.mfc_dsisr_get = mfc_dsisr_get,
++	.mfc_dsisr_set = mfc_dsisr_set,
++	.mfc_sdr_setup = mfc_sdr_setup,
++	.mfc_sr1_set = mfc_sr1_set,
++	.mfc_sr1_get = mfc_sr1_get,
++	.mfc_tclass_id_set = mfc_tclass_id_set,
++	.mfc_tclass_id_get = mfc_tclass_id_get,
++	.tlb_invalidate = tlb_invalidate,
++	.resource_allocation_groupID_set = resource_allocation_groupID_set,
++	.resource_allocation_groupID_get = resource_allocation_groupID_get,
++	.resource_allocation_enable_set = resource_allocation_enable_set,
++	.resource_allocation_enable_get = resource_allocation_enable_get,
++};
+Index: linux-2.6.18/mvl_patches/pro50-0253.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0253.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(253);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

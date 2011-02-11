@@ -1,0 +1,316 @@
+#! /usr/bin/env bash
+# Patch: -pro_MVL_libata_implement_ATA_FLAG_SETXFER_POLLING_and_use
+# Date: Wed Jun 11 14:51:54 2008
+# MR: 27840
+# Source: kernel.org
+# Type: Enhancement
+# Disposition: merged from Linus' git tree
+# Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+# Adjustments:
+#     Removed pata_via part, since only old ide/pci PATA drivers
+#     are supported in PRO5.0 and it doesn't have any reworked PATA drivers.
+#     Used drivers/scsi path insted of drivers/ata. The comunity kernel
+#     has sata stuff moved to ata folder.
+#     Minor changes to include/linux/libata.h to make it apply with no fuzz.
+# 
+# From 3d3cca37559e3ab2b574eda11ed5207ccdb8980a Mon Sep 17 00:00:00 2001
+# From: Tejun Heo <htejun@gmail.com>
+# Date: Thu, 16 Nov 2006 10:50:50 +0900
+# Subject: [PATCH] [PATCH] libata: implement ATA_FLAG_SETXFER_POLLING and use it in pata_via, take #2
+# 
+# This patch implements ATA_FLAG_SETXFER_POLLING and use in pata_via.
+# If this flag is set, transfer mode setting performed by polling not by
+# interrupt.  This should help those controllers which raise interrupt
+# before the command is actually complete on SETXFER.
+# 
+# Rationale for this approach.
+# 
+# * uses existing facility and relatively simple
+# * no busy sleep in the interrupt handler
+# * updating drivers is easy
+# 
+# While at it, kill now unused flag ATA_FLAG_SRST in pata_via.
+# 
+# 
+# Follows v2.6.19 (Linux 2.6.19)
+# Precedes v2.6.20-rc1 (Linux v2.6.20-rc1)
+# 
+# 
+# Signed-off-by: Tejun Heo <htejun@gmail.com>
+
+PATCHNUM=1221
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 27840
+Source: kernel.org
+Type: Enhancement
+Disposition: merged from Linus' git tree
+Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+Adjustments:
+    Removed pata_via part, since only old ide/pci PATA drivers
+    are supported in PRO5.0 and it doesn't have any reworked PATA drivers.
+    Used drivers/scsi path insted of drivers/ata. The comunity kernel
+    has sata stuff moved to ata folder.
+    Minor changes to include/linux/libata.h to make it apply with no fuzz.
+
+From 3d3cca37559e3ab2b574eda11ed5207ccdb8980a Mon Sep 17 00:00:00 2001
+From: Tejun Heo <htejun@gmail.com>
+Date: Thu, 16 Nov 2006 10:50:50 +0900
+Subject: [PATCH] [PATCH] libata: implement ATA_FLAG_SETXFER_POLLING and use it in pata_via, take #2
+
+This patch implements ATA_FLAG_SETXFER_POLLING and use in pata_via.
+If this flag is set, transfer mode setting performed by polling not by
+interrupt.  This should help those controllers which raise interrupt
+before the command is actually complete on SETXFER.
+
+Rationale for this approach.
+
+* uses existing facility and relatively simple
+* no busy sleep in the interrupt handler
+* updating drivers is easy
+
+While at it, kill now unused flag ATA_FLAG_SRST in pata_via.
+
+
+Follows v2.6.19 (Linux 2.6.19)
+Precedes v2.6.20-rc1 (Linux v2.6.20-rc1)
+
+
+Signed-off-by: Tejun Heo <htejun@gmail.com>
+Index: linux-2.6.18/drivers/scsi/libata-core.c
+===================================================================
+--- linux-2.6.18.orig/drivers/scsi/libata-core.c
++++ linux-2.6.18/drivers/scsi/libata-core.c
+@@ -4625,6 +4625,14 @@ unsigned int ata_qc_issue_prot(struct at
+ 		}
+ 	}
+ 
++	/* Some controllers show flaky interrupt behavior after
++	 * setting xfer mode.  Use polling instead.
++	 */
++	if (unlikely(qc->tf.command == ATA_CMD_SET_FEATURES &&
++		     qc->tf.feature == SETFEATURES_XFER) &&
++	    (ap->flags & ATA_FLAG_SETXFER_POLLING))
++		qc->tf.flags |= ATA_TFLAG_POLLING;
++
+ 	/* select the device */
+ 	ata_dev_select(ap, qc->dev->devno, 1, 0);
+ 
+Index: linux-2.6.18/include/linux/libata.h
+===================================================================
+--- linux-2.6.18.orig/include/linux/libata.h
++++ linux-2.6.18/include/linux/libata.h
+@@ -162,6 +162,7 @@ enum {
+ 	ATA_FLAG_SKIP_D2H_BSY	= (1 << 12), /* can't wait for the first D2H
+ 					      * Register FIS clearing BSY */
+ 	ATA_FLAG_DEBUGMSG	= (1 << 13),
++	ATA_FLAG_SETXFER_POLLING= (1 << 15), /* use polling for SETXFER */
+ 
+ 	/* The following flag belongs to ap->pflags but is kept in
+ 	 * ap->flags because it's referenced in many LLDs and will be
+Index: linux-2.6.18/mvl_patches/pro50-1221.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1221.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1221);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

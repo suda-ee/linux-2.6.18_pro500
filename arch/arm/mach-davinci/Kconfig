@@ -1,0 +1,162 @@
+if ARCH_DAVINCI
+
+menu "TI DaVinci Implementations"
+
+comment "DaVinci Core Type"
+
+choice
+	prompt "DaVinci ARCH type"
+	default ARCH_DAVINCI_DM644x
+
+config ARCH_DAVINCI644x
+	bool "DaVinci 644x based system"
+
+config ARCH_DAVINCI_DM355
+	bool "DaVinci DM355 based system"
+
+config ARCH_DAVINCI_DM646x
+        bool "DaVinci 646x based system"
+endchoice
+
+comment "DaVinci Board Type"
+
+config MACH_DAVINCI_EVM
+	bool "TI DaVinci EVM"
+	default y
+	depends on ARCH_DAVINCI644x
+	help
+	  Configure this option to specify the whether the board used
+	  for development is a DaVinci EVM
+
+config MACH_DM357_EVM
+	bool "TI DM357 EVM"
+	default n	
+	depends on ARCH_DAVINCI644x
+	help
+	  Configure this option to specify the whether the board used
+	  for development is a TI DM357 EVM
+
+config DM357_STORAGE_NAND
+	bool "STORAGE NAND FOR DM357"
+	default y
+	depends on MACH_DM357_EVM
+	help
+	  Configure this option to choose the appropriate NAND in DM357
+	  Choose y for 1 GB NAND or n for 64 MB NAND
+
+config DAVINCI_EVM_CF_SUPPORT
+	bool "CF card support"
+	depends on MACH_DAVINCI_EVM
+	default y
+	help
+	  Configure this option to enable CompactFlash card support.
+
+config MACH_DAVINCI_DM355_EVM
+	bool "TI DM355 EVM"
+	default n
+	depends on ARCH_DAVINCI_DM355
+	help
+	  Configure this option to specify the whether the board used
+	  for development is a DM355 EVM
+
+config MACH_DAVINCI_DM6467_EVM
+        bool "TI DM646x EVM"
+        default n
+        depends on ARCH_DAVINCI_DM646x && !ARCH_DAVINCI_DM644x
+        help
+          Configure this option to specify the whether the board used
+          for development is a DM646x EVM
+
+config DAVINCI_MUX
+	bool "DAVINCI multiplexing support"
+	depends on ARCH_DAVINCI
+	default y
+	help
+	  Pin multiplexing support for DAVINCI boards. If your bootloader
+	  sets the multiplexing correctly, say N. Otherwise, or if unsure,
+	  say Y.
+
+config DAVINCI_MUX_DEBUG
+	bool "Multiplexing debug output"
+	depends on DAVINCI_MUX
+	help
+	  Makes the multiplexing functions print out a lot of debug info.
+	  This is useful if you want to find out the correct values of the
+	  multiplexing registers.
+
+config DAVINCI_MUX_WARNINGS
+	bool "Warn about pins the bootloader didn't set up"
+	depends on DAVINCI_MUX
+	default y
+	help
+	  Choose Y here to warn whenever driver initialization logic needs
+	  to change the pin multiplexing setup.  When there are no warnings
+	  printed, it's safe to deselect DAVINCI_MUX for your product.
+
+config DAVINCI_I2C_EXPANDER
+	bool "TI DaVinci I2C Expander"
+	default y
+	depends on I2C && ARCH_DAVINCI644x || ARCH_DAVINCI_DM646x || ARCH_DAVINCI_DM355
+	help
+	  Configure this option to specify whether the board used
+	  has I2C exapnder with ATA, USB, CF.
+
+config DM355_NAND_256KB_BLOCKS
+        bool "NAND chip installed on DM355 EVM has 256KB blocks"
+        default y
+        depends on MACH_DAVINCI_DM355_EVM
+        help
+        The boot firmware on the DM355 EVM assumes a default partition map
+        for NAND flash based on erase block offsets.  Thus, the partition map
+        varies based on the size of the erase blocks in the particular NAND
+        flash component installed on the board.  Answer Y here if the NAND
+        chip (e.g a 16 Gigabit Micron MT29F16G08QAA) installed on your board
+        has 256KB blocks.  Answer N here if the NAND chip (e.g. a 4 Gigabit
+        Micron MT29F4G08AAA) installed on your board has 128KB blocks.
+
+config DAVINCI_SPI
+        bool "TI DAVINCI SPI device"
+        default y
+        help
+        Configure this option to specify whether the board used
+        has SPI device.
+
+config DAVINCI_KERNEL_SDRAM_OFFSET
+	hex "SDRAM offset for the Kernel"
+	depends on ARCH_DAVINCI644x || ARCH_DAVINCI_DM646x || ARCH_DAVINCI_DM355
+	default "0x0"
+	help
+	  Provide SDRAM offset, if you want to relocate Kernel image to a
+	  different location (other than the DDR_BASE) in the SDRAM.
+	  For e.g, if want to place DSP image in the beginning of the SDRAM,
+	  provide DSP size as the SDRAM offset. Kernel image will then start
+	  after the reserved SDRAM space for DSP. The default value is 0, which
+	  means the Kernel will start at the DDR_BASE location.
+
+config DAVINCI_KERNEL_ZRELADDR
+	hex "ZRELADDR location for the Kernel"
+	default "0x80008000"
+	depends on ARCH_DAVINCI644x || ARCH_DAVINCI_DM646x || ARCH_DAVINCI_DM355
+	help
+	  Provide ZRELADDR location for the kernel. The value should match with
+	  default + SDRAM_OFFSET.
+
+config DAVINCI_KERNEL_PARAMS_PHYS
+	hex "PARAMS_PHYS location for the Kernel"
+	default "0x80000100"
+	depends on ARCH_DAVINCI644x || ARCH_DAVINCI_DM646x || ARCH_DAVINCI_DM355
+	help
+	  Provide PARAMS_PHYS location for the kernel. The value should match
+	  with default + SDRAM_OFFSET.
+
+config DAVINCI_KERNEL_INITRD_PHYS
+	hex "INITRD_PHYS location"
+	default "0x80800000"
+	depends on ARCH_DAVINCI644x || ARCH_DAVINCI_DM646x || ARCH_DAVINCI_DM355
+	help
+	  Provide INITRD_PHYS location for the kernel. The value should match
+	  with default + SDRAM_OFFSET.
+
+endmenu
+
+endif

@@ -1,0 +1,1061 @@
+#! /usr/bin/env bash
+# Patch: -pro_v6_ibm_newemac_Parameterize_EMAC_Multicast_Match_Handling
+# Date: Fri Aug 15 13:06:56 2008
+# MR: 27840
+# Source: linuxppc-dev
+# Type: Enhancement
+# Disposition: merged from http://patchwork.ozlabs.org/linuxppc/patch?id=19513
+# Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+# Adjustments:
+#     none.
+# 
+# From gerickson@nuovations.com Tue Jul  8 08:03:11 2008
+# From: Grant Erickson <gerickson@nuovations.com>
+# Subject: [PATCH v6] ibm_newemac: Parameterize EMAC Multicast Match Handling
+# Date: Tue, 08 Jul 2008 08:03:11 +1000
+# X-Patchwork-ID: 19513
+# 
+# Various instances of the EMAC core have varying: 1) number of address 
+# match slots, 2) width of the registers for handling address match slots, 
+# 3) number of registers for handling address match slots and 4) base 
+# offset for those registers.
+# 
+# As the driver stands today, it assumes that all EMACs have 4 IAHT and 
+# GAHT 32-bit registers, starting at offset 0x30 from the register base, 
+# with only 16-bits of each used for a total of 64 match slots.
+# 
+# The 405EX(r) and 460EX now use the EMAC4SYNC core rather than the EMAC4 
+# core. This core has 8 IAHT and GAHT registers, starting at offset 0x80 
+# from the register base, with ALL 32-bits of each used for a total of 
+# 256 match slots.
+# 
+# This adds a new compatible device tree entry "emac4sync" and a new,
+# related feature flag "EMAC_FTR_EMAC4SYNC" along with a series of macros
+# and inlines which supply the appropriate parameterized value based on
+# the presence or absence of the EMAC4SYNC feature.
+# 
+# The code has further been reworked where appropriate to use those macros
+# and inlines.
+# 
+# In addition, the register size passed to ioremap is now taken from the 
+# device tree:
+# 
+# 	c4 for EMAC4SYNC cores
+# 	74 for EMAC4 cores
+# 	70 for EMAC cores
+# 
+# rather than sizeof (emac_regs).
+# 
+# Finally, the device trees have been updated with the appropriate compatible
+# entries and resource sizes.
+# 
+# This has been tested on an AMCC Haleakala board such that: 1) inbound 
+# ICMP requests to 'haleakala.local' via MDNS from both Mac OS X 10.4.11 
+# and Ubuntu 8.04 systems as well as 2) outbound ICMP requests from 
+# 'haleakala.local' to those same systems in the '.local' domain via MDNS 
+# now work.
+# 
+# Signed-off-by: Grant Erickson <gerickson@nuovations.com>
+
+PATCHNUM=1471
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 27840
+Source: linuxppc-dev
+Type: Enhancement
+Disposition: merged from http://patchwork.ozlabs.org/linuxppc/patch?id=19513
+Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+Adjustments:
+    none.
+
+From gerickson@nuovations.com Tue Jul  8 08:03:11 2008
+From: Grant Erickson <gerickson@nuovations.com>
+Subject: [PATCH v6] ibm_newemac: Parameterize EMAC Multicast Match Handling
+Date: Tue, 08 Jul 2008 08:03:11 +1000
+X-Patchwork-ID: 19513
+
+Various instances of the EMAC core have varying: 1) number of address 
+match slots, 2) width of the registers for handling address match slots, 
+3) number of registers for handling address match slots and 4) base 
+offset for those registers.
+
+As the driver stands today, it assumes that all EMACs have 4 IAHT and 
+GAHT 32-bit registers, starting at offset 0x30 from the register base, 
+with only 16-bits of each used for a total of 64 match slots.
+
+The 405EX(r) and 460EX now use the EMAC4SYNC core rather than the EMAC4 
+core. This core has 8 IAHT and GAHT registers, starting at offset 0x80 
+from the register base, with ALL 32-bits of each used for a total of 
+256 match slots.
+
+This adds a new compatible device tree entry "emac4sync" and a new,
+related feature flag "EMAC_FTR_EMAC4SYNC" along with a series of macros
+and inlines which supply the appropriate parameterized value based on
+the presence or absence of the EMAC4SYNC feature.
+
+The code has further been reworked where appropriate to use those macros
+and inlines.
+
+In addition, the register size passed to ioremap is now taken from the 
+device tree:
+
+	c4 for EMAC4SYNC cores
+	74 for EMAC4 cores
+	70 for EMAC cores
+
+rather than sizeof (emac_regs).
+
+Finally, the device trees have been updated with the appropriate compatible
+entries and resource sizes.
+
+This has been tested on an AMCC Haleakala board such that: 1) inbound 
+ICMP requests to 'haleakala.local' via MDNS from both Mac OS X 10.4.11 
+and Ubuntu 8.04 systems as well as 2) outbound ICMP requests from 
+'haleakala.local' to those same systems in the '.local' domain via MDNS 
+now work.
+
+Signed-off-by: Grant Erickson <gerickson@nuovations.com>
+Index: linux-2.6.18/arch/powerpc/boot/dts/canyonlands.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/canyonlands.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/canyonlands.dts
+@@ -316,7 +316,7 @@
+ 
+ 			EMAC0: ethernet@ef600e00 {
+ 				device_type = "network";
+-				compatible = "ibm,emac-460ex", "ibm,emac4";
++				compatible = "ibm,emac-460ex", "ibm,emac4sync";
+ 				interrupt-parent = <&EMAC0>;
+ 				interrupts = <0 1>;
+ 				#interrupt-cells = <1>;
+@@ -324,7 +324,7 @@
+ 				#size-cells = <0>;
+ 				interrupt-map = </*Status*/ 0 &UIC2 10 4
+ 						 /*Wake*/   1 &UIC2 14 4>;
+-				reg = <ef600e00 70>;
++				reg = <ef600e00 c4>;
+ 				local-mac-address = [000000000000]; /* Filled in by U-Boot */
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <0>;
+@@ -345,7 +345,7 @@
+ 
+ 			EMAC1: ethernet@ef600f00 {
+ 				device_type = "network";
+-				compatible = "ibm,emac-460ex", "ibm,emac4";
++				compatible = "ibm,emac-460ex", "ibm,emac4sync";
+ 				interrupt-parent = <&EMAC1>;
+ 				interrupts = <0 1>;
+ 				#interrupt-cells = <1>;
+@@ -353,7 +353,7 @@
+ 				#size-cells = <0>;
+ 				interrupt-map = </*Status*/ 0 &UIC2 11 4
+ 						 /*Wake*/   1 &UIC2 15 4>;
+-				reg = <ef600f00 70>;
++				reg = <ef600f00 c4>;
+ 				local-mac-address = [000000000000]; /* Filled in by U-Boot */
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <1>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/glacier.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/glacier.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/glacier.dts
+@@ -297,7 +297,7 @@
+ 				#size-cells = <0>;
+ 				interrupt-map = </*Status*/ 0 &UIC2 10 4
+ 						 /*Wake*/   1 &UIC2 14 4>;
+-				reg = <ef600e00 70>;
++				reg = <ef600e00 74>;
+ 				local-mac-address = [000000000000]; /* Filled in by U-Boot */
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <0>;
+@@ -326,7 +326,7 @@
+ 				#size-cells = <0>;
+ 				interrupt-map = </*Status*/ 0 &UIC2 11 4
+ 						 /*Wake*/   1 &UIC2 15 4>;
+-				reg = <ef600f00 70>;
++				reg = <ef600f00 74>;
+ 				local-mac-address = [000000000000]; /* Filled in by U-Boot */
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <1>;
+@@ -356,7 +356,7 @@
+ 				#size-cells = <0>;
+ 				interrupt-map = </*Status*/ 0 &UIC2 12 4
+ 						 /*Wake*/   1 &UIC2 16 4>;
+-				reg = <ef601100 70>;
++				reg = <ef601100 74>;
+ 				local-mac-address = [000000000000]; /* Filled in by U-Boot */
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <2>;
+@@ -384,7 +384,7 @@
+ 				#size-cells = <0>;
+ 				interrupt-map = </*Status*/ 0 &UIC2 13 4
+ 						 /*Wake*/   1 &UIC2 17 4>;
+-				reg = <ef601200 70>;
++				reg = <ef601200 74>;
+ 				local-mac-address = [000000000000]; /* Filled in by U-Boot */
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <3>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/haleakala.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/haleakala.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/haleakala.dts
+@@ -204,7 +204,7 @@
+ 			EMAC0: ethernet@ef600900 {
+ 				linux,network-index = <0>;
+ 				device_type = "network";
+-				compatible = "ibm,emac-405exr", "ibm,emac4";
++				compatible = "ibm,emac-405exr", "ibm,emac4sync";
+ 				interrupt-parent = <&EMAC0>;
+ 				interrupts = <0 1>;
+ 				#interrupt-cells = <1>;
+@@ -212,7 +212,7 @@
+ 				#size-cells = <0>;
+ 				interrupt-map = </*Status*/ 0 &UIC0 18 4
+ 						/*Wake*/  1 &UIC1 1d 4>;
+-				reg = <ef600900 70>;
++				reg = <ef600900 c4>;
+ 				local-mac-address = [000000000000]; /* Filled in by U-Boot */
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <0>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/katmai.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/katmai.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/katmai.dts
+@@ -206,7 +206,7 @@
+ 				compatible = "ibm,emac-440spe", "ibm,emac4";
+ 				interrupt-parent = <&UIC1>;
+ 				interrupts = <1c 4 1d 4>;
+-				reg = <10000800 70>;
++				reg = <10000800 74>;
+ 				local-mac-address = [000000000000];
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <0>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/kilauea.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/kilauea.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/kilauea.dts
+@@ -205,7 +205,7 @@
+ 			EMAC0: ethernet@ef600900 {
+ 				linux,network-index = <0>;
+ 				device_type = "network";
+-				compatible = "ibm,emac-405ex", "ibm,emac4";
++				compatible = "ibm,emac-405ex", "ibm,emac4sync";
+ 				interrupt-parent = <&EMAC0>;
+ 				interrupts = <0 1>;
+ 				#interrupt-cells = <1>;
+@@ -213,7 +213,7 @@
+ 				#size-cells = <0>;
+ 				interrupt-map = </*Status*/ 0 &UIC0 18 4
+ 						/*Wake*/  1 &UIC1 1d 4>;
+-				reg = <ef600900 70>;
++				reg = <ef600900 c4>;
+ 				local-mac-address = [000000000000]; /* Filled in by U-Boot */
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <0>;
+@@ -233,7 +233,7 @@
+ 			EMAC1: ethernet@ef600a00 {
+ 				linux,network-index = <1>;
+ 				device_type = "network";
+-				compatible = "ibm,emac-405ex", "ibm,emac4";
++				compatible = "ibm,emac-405ex", "ibm,emac4sync";
+ 				interrupt-parent = <&EMAC1>;
+ 				interrupts = <0 1>;
+ 				#interrupt-cells = <1>;
+@@ -241,7 +241,7 @@
+ 				#size-cells = <0>;
+ 				interrupt-map = </*Status*/ 0 &UIC0 19 4
+ 						/*Wake*/  1 &UIC1 1f 4>;
+-				reg = <ef600a00 70>;
++				reg = <ef600a00 c4>;
+ 				local-mac-address = [000000000000]; /* Filled in by U-Boot */
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <1>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/makalu.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/makalu.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/makalu.dts
+@@ -205,7 +205,7 @@
+ 			EMAC0: ethernet@ef600900 {
+ 				linux,network-index = <0>;
+ 				device_type = "network";
+-				compatible = "ibm,emac-405ex", "ibm,emac4";
++				compatible = "ibm,emac-405ex", "ibm,emac4sync";
+ 				interrupt-parent = <&EMAC0>;
+ 				interrupts = <0 1>;
+ 				#interrupt-cells = <1>;
+@@ -213,7 +213,7 @@
+ 				#size-cells = <0>;
+ 				interrupt-map = </*Status*/ 0 &UIC0 18 4
+ 						/*Wake*/  1 &UIC1 1d 4>;
+-				reg = <ef600900 70>;
++				reg = <ef600900 c4>;
+ 				local-mac-address = [000000000000]; /* Filled in by U-Boot */
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <0>;
+@@ -233,7 +233,7 @@
+ 			EMAC1: ethernet@ef600a00 {
+ 				linux,network-index = <1>;
+ 				device_type = "network";
+-				compatible = "ibm,emac-405ex", "ibm,emac4";
++				compatible = "ibm,emac-405ex", "ibm,emac4sync";
+ 				interrupt-parent = <&EMAC1>;
+ 				interrupts = <0 1>;
+ 				#interrupt-cells = <1>;
+@@ -241,7 +241,7 @@
+ 				#size-cells = <0>;
+ 				interrupt-map = </*Status*/ 0 &UIC0 19 4
+ 						/*Wake*/  1 &UIC1 1f 4>;
+-				reg = <ef600a00 70>;
++				reg = <ef600a00 c4>;
+ 				local-mac-address = [000000000000]; /* Filled in by U-Boot */
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <1>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/rainier.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/rainier.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/rainier.dts
+@@ -264,7 +264,7 @@
+ 				#size-cells = <0>;
+ 				interrupt-map = </*Status*/ 0 &UIC0 18 4
+ 						/*Wake*/  1 &UIC1 1d 4>;
+-				reg = <ef600e00 70>;
++				reg = <ef600e00 74>;
+ 				local-mac-address = [000000000000];
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <0>;
+@@ -294,7 +294,7 @@
+ 				#size-cells = <0>;
+ 				interrupt-map = </*Status*/ 0 &UIC0 19 4
+ 						/*Wake*/  1 &UIC1 1f 4>;
+-				reg = <ef600f00 70>;
++				reg = <ef600f00 74>;
+ 				local-mac-address = [000000000000];
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <1>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/sequoia.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/sequoia.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/sequoia.dts
+@@ -279,7 +279,7 @@
+ 				#size-cells = <0>;
+ 				interrupt-map = </*Status*/ 0 &UIC0 18 4
+ 						/*Wake*/  1 &UIC1 1d 4>;
+-				reg = <ef600e00 70>;
++				reg = <ef600e00 74>;
+ 				local-mac-address = [000000000000];
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <0>;
+@@ -309,7 +309,7 @@
+ 				#size-cells = <0>;
+ 				interrupt-map = </*Status*/ 0 &UIC0 19 4
+ 						/*Wake*/  1 &UIC1 1f 4>;
+-				reg = <ef600f00 70>;
++				reg = <ef600f00 74>;
+ 				local-mac-address = [000000000000];
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <1>;
+Index: linux-2.6.18/arch/powerpc/boot/dts/taishan.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/taishan.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/taishan.dts
+@@ -286,7 +286,7 @@
+ 				compatible = "ibm,emac-440gx", "ibm,emac4";
+ 				interrupt-parent = <&UIC1>;
+ 				interrupts = <1c 4 1d 4>;
+-				reg = <40000800 70>;
++				reg = <40000800 74>;
+ 				local-mac-address = [000000000000]; // Filled in by zImage
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <0>;
+@@ -307,7 +307,7 @@
+ 				compatible = "ibm,emac-440gx", "ibm,emac4";
+ 				interrupt-parent = <&UIC1>;
+ 				interrupts = <1e 4 1f 4>;
+-				reg = <40000900 70>;
++				reg = <40000900 74>;
+ 				local-mac-address = [000000000000]; // Filled in by zImage
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <1>;
+@@ -328,7 +328,7 @@
+ 				compatible = "ibm,emac-440gx", "ibm,emac4";
+ 				interrupt-parent = <&UIC2>;
+ 				interrupts = <0 4 1 4>;
+-				reg = <40000c00 70>;
++				reg = <40000c00 74>;
+ 				local-mac-address = [000000000000]; // Filled in by zImage
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <2>;
+@@ -353,7 +353,7 @@
+ 				compatible = "ibm,emac-440gx", "ibm,emac4";
+ 				interrupt-parent = <&UIC2>;
+ 				interrupts = <2 4 3 4>;
+-				reg = <40000e00 70>;
++				reg = <40000e00 74>;
+ 				local-mac-address = [000000000000]; // Filled in by zImage
+ 				mal-device = <&MAL0>;
+ 				mal-tx-channel = <3>;
+Index: linux-2.6.18/drivers/net/ibm_newemac/core.c
+===================================================================
+--- linux-2.6.18.orig/drivers/net/ibm_newemac/core.c
++++ linux-2.6.18/drivers/net/ibm_newemac/core.c
+@@ -358,25 +358,31 @@ static int emac_reset(struct emac_instan
+ 
+ static void emac_hash_mc(struct emac_instance *dev)
+ {
+-	struct emac_regs __iomem *p = dev->emacp;
+-	u16 gaht[4] = { 0 };
++	const int regs = EMAC_XAHT_REGS(dev);
++	u32 *gaht_base = emac_gaht_base(dev);
++	u32 gaht_temp[regs];
+ 	struct dev_mc_list *dmi;
++	int i;
+ 
+ 	DBG(dev, "hash_mc %d" NL, dev->ndev->mc_count);
+ 
++	memset(gaht_temp, 0, sizeof (gaht_temp));
++
+ 	for (dmi = dev->ndev->mc_list; dmi; dmi = dmi->next) {
+-		int bit;
++		int slot, reg, mask;
+ 		DBG2(dev, "mc %02x:%02x:%02x:%02x:%02x:%02x" NL,
+ 		     dmi->dmi_addr[0], dmi->dmi_addr[1], dmi->dmi_addr[2],
+ 		     dmi->dmi_addr[3], dmi->dmi_addr[4], dmi->dmi_addr[5]);
+ 
+-		bit = 63 - (ether_crc(ETH_ALEN, dmi->dmi_addr) >> 26);
+-		gaht[bit >> 4] |= 0x8000 >> (bit & 0x0f);
++		slot = EMAC_XAHT_CRC_TO_SLOT(dev, ether_crc(ETH_ALEN, dmi->dmi_addr));
++		reg = EMAC_XAHT_SLOT_TO_REG(dev, slot);
++		mask = EMAC_XAHT_SLOT_TO_MASK(dev, slot);
++
++		gaht_temp[reg] |= mask;
+ 	}
+-	out_be32(&p->gaht1, gaht[0]);
+-	out_be32(&p->gaht2, gaht[1]);
+-	out_be32(&p->gaht3, gaht[2]);
+-	out_be32(&p->gaht4, gaht[3]);
++
++	for (i = 0; i < regs; i++)
++		out_be32(gaht_base + i, gaht_temp[i]);
+ }
+ 
+ static inline u32 emac_iff2rmr(struct net_device *ndev)
+@@ -393,7 +399,8 @@ static inline u32 emac_iff2rmr(struct ne
+ 
+ 	if (ndev->flags & IFF_PROMISC)
+ 		r |= EMAC_RMR_PME;
+-	else if (ndev->flags & IFF_ALLMULTI || ndev->mc_count > 32)
++	else if (ndev->flags & IFF_ALLMULTI ||
++			 (ndev->mc_count > EMAC_XAHT_SLOTS(dev)))
+ 		r |= EMAC_RMR_PMME;
+ 	else if (ndev->mc_count > 0)
+ 		r |= EMAC_RMR_MAE;
+@@ -537,7 +544,7 @@ static int emac_configure(struct emac_in
+ 			/* Put some arbitrary OUI, Manuf & Rev IDs so we can
+ 			 * identify this GPCS PHY later.
+ 			 */
+-			out_be32(&p->ipcr, 0xdeadbeef);
++			out_be32(&p->u1.emac4.ipcr, 0xdeadbeef);
+ 		} else
+ 			mr1 |= EMAC_MR1_MF_1000;
+ 
+@@ -2011,10 +2018,10 @@ static int emac_get_regs_len(struct emac
+ {
+ 	if (emac_has_feature(dev, EMAC_FTR_EMAC4))
+ 		return sizeof(struct emac_ethtool_regs_subhdr) +
+-			EMAC4_ETHTOOL_REGS_SIZE;
++			EMAC4_ETHTOOL_REGS_SIZE(dev);
+ 	else
+ 		return sizeof(struct emac_ethtool_regs_subhdr) +
+-			EMAC_ETHTOOL_REGS_SIZE;
++			EMAC_ETHTOOL_REGS_SIZE(dev);
+ }
+ 
+ static int emac_ethtool_get_regs_len(struct net_device *ndev)
+@@ -2041,12 +2048,12 @@ static void *emac_dump_regs(struct emac_
+ 	hdr->index = dev->cell_index;
+ 	if (emac_has_feature(dev, EMAC_FTR_EMAC4)) {
+ 		hdr->version = EMAC4_ETHTOOL_REGS_VER;
+-		memcpy_fromio(hdr + 1, dev->emacp, EMAC4_ETHTOOL_REGS_SIZE);
+-		return ((void *)(hdr + 1) + EMAC4_ETHTOOL_REGS_SIZE);
++		memcpy_fromio(hdr + 1, dev->emacp, EMAC4_ETHTOOL_REGS_SIZE(dev));
++		return ((void *)(hdr + 1) + EMAC4_ETHTOOL_REGS_SIZE(dev));
+ 	} else {
+ 		hdr->version = EMAC_ETHTOOL_REGS_VER;
+-		memcpy_fromio(hdr + 1, dev->emacp, EMAC_ETHTOOL_REGS_SIZE);
+-		return ((void *)(hdr + 1) + EMAC_ETHTOOL_REGS_SIZE);
++		memcpy_fromio(hdr + 1, dev->emacp, EMAC_ETHTOOL_REGS_SIZE(dev));
++		return ((void *)(hdr + 1) + EMAC_ETHTOOL_REGS_SIZE(dev));
+ 	}
+ }
+ 
+@@ -2536,7 +2543,9 @@ static int __devinit emac_init_config(st
+ 	}
+ 
+ 	/* Check EMAC version */
+-	if (of_device_is_compatible(np, "ibm,emac4")) {
++	if (of_device_is_compatible(np, "ibm,emac4sync")) {
++		dev->features |= (EMAC_FTR_EMAC4 | EMAC_FTR_EMAC4SYNC);
++	} else if (of_device_is_compatible(np, "ibm,emac4")) {
+ 		dev->features |= EMAC_FTR_EMAC4;
+ 		if (of_device_is_compatible(np, "ibm,emac-440gx"))
+ 			dev->features |= EMAC_FTR_440GX_PHY_CLK_FIX;
+@@ -2597,6 +2606,15 @@ static int __devinit emac_init_config(st
+ 	}
+ 	memcpy(dev->ndev->dev_addr, p, 6);
+ 
++	/* IAHT and GAHT filter parameterization */
++	if (emac_has_feature(dev, EMAC_FTR_EMAC4SYNC)) {
++		dev->xaht_slots_shift = EMAC4SYNC_XAHT_SLOTS_SHIFT;
++		dev->xaht_width_shift = EMAC4SYNC_XAHT_WIDTH_SHIFT;
++	} else {
++		dev->xaht_slots_shift = EMAC4_XAHT_SLOTS_SHIFT;
++		dev->xaht_width_shift = EMAC4_XAHT_WIDTH_SHIFT;
++	}
++
+ 	DBG(dev, "features     : 0x%08x / 0x%08x\n", dev->features, EMAC_FTRS_POSSIBLE);
+ 	DBG(dev, "tx_fifo_size : %d (%d gige)\n", dev->tx_fifo_size, dev->tx_fifo_size_gige);
+ 	DBG(dev, "rx_fifo_size : %d (%d gige)\n", dev->rx_fifo_size, dev->rx_fifo_size_gige);
+@@ -2666,7 +2684,8 @@ static int __devinit emac_probe(struct o
+ 		goto err_irq_unmap;
+ 	}
+ 	// TODO : request_mem_region
+-	dev->emacp = ioremap(dev->rsrc_regs.start, sizeof(struct emac_regs));
++	dev->emacp = ioremap(dev->rsrc_regs.start,
++			     dev->rsrc_regs.end - dev->rsrc_regs.start + 1);
+ 	if (dev->emacp == NULL) {
+ 		printk(KERN_ERR "%s: Can't map device registers!\n",
+ 		       np->full_name);
+@@ -2881,6 +2900,10 @@ static struct of_device_id emac_match[] 
+ 		.type		= "network",
+ 		.compatible	= "ibm,emac4",
+ 	},
++	{
++		.type		= "network",
++		.compatible	= "ibm,emac4sync",
++	},
+ 	{},
+ };
+ 
+Index: linux-2.6.18/drivers/net/ibm_newemac/core.h
+===================================================================
+--- linux-2.6.18.orig/drivers/net/ibm_newemac/core.h
++++ linux-2.6.18/drivers/net/ibm_newemac/core.h
+@@ -235,6 +235,10 @@ struct emac_instance {
+ 	u32				fifo_entry_size;
+ 	u32				mal_burst_size; /* move to MAL ? */
+ 
++	/* IAHT and GAHT filter parameterization */
++	u32				xaht_slots_shift;
++	u32				xaht_width_shift;
++
+ 	/* Descriptor management
+ 	 */
+ 	struct mal_descriptor		*tx_desc;
+@@ -309,6 +313,10 @@ struct emac_instance {
+  * Set if we need phy clock workaround for 440ep or 440gr
+  */
+ #define EMAC_FTR_440EP_PHY_CLK_FIX	0x00000100
++/*
++ * The 405EX and 460EX contain the EMAC4SYNC core
++ */
++#define EMAC_FTR_EMAC4SYNC		0x00000200
+ 
+ 
+ /* Right now, we don't quite handle the always/possible masks on the
+@@ -320,7 +328,8 @@ enum {
+ 
+ 	EMAC_FTRS_POSSIBLE	=
+ #ifdef CONFIG_IBM_NEW_EMAC_EMAC4
+-	    EMAC_FTR_EMAC4 | EMAC_FTR_HAS_NEW_STACR |
++	    EMAC_FTR_EMAC4	| EMAC_FTR_EMAC4SYNC	|
++	    EMAC_FTR_HAS_NEW_STACR	|
+ 	    EMAC_FTR_STACR_OC_INVERT | EMAC_FTR_440GX_PHY_CLK_FIX |
+ #endif
+ #ifdef CONFIG_IBM_NEW_EMAC_TAH
+@@ -342,6 +351,71 @@ static inline int emac_has_feature(struc
+ 	       (EMAC_FTRS_POSSIBLE & dev->features & feature);
+ }
+ 
++/*
++ * Various instances of the EMAC core have varying 1) number of
++ * address match slots, 2) width of the registers for handling address
++ * match slots, 3) number of registers for handling address match
++ * slots and 4) base offset for those registers.
++ *
++ * These macros and inlines handle these differences based on
++ * parameters supplied by the device structure which are, in turn,
++ * initialized based on the "compatible" entry in the device tree.
++ */
++
++#define	EMAC4_XAHT_SLOTS_SHIFT		6
++#define	EMAC4_XAHT_WIDTH_SHIFT		4
++
++#define	EMAC4SYNC_XAHT_SLOTS_SHIFT	8
++#define	EMAC4SYNC_XAHT_WIDTH_SHIFT	5
++
++#define	EMAC_XAHT_SLOTS(dev)         	(1 << (dev)->xaht_slots_shift)
++#define	EMAC_XAHT_WIDTH(dev)         	(1 << (dev)->xaht_width_shift)
++#define	EMAC_XAHT_REGS(dev)          	(1 << ((dev)->xaht_slots_shift - \
++					       (dev)->xaht_width_shift))
++
++#define	EMAC_XAHT_CRC_TO_SLOT(dev, crc)			\
++	((EMAC_XAHT_SLOTS(dev) - 1) -			\
++	 ((crc) >> ((sizeof (u32) * BITS_PER_BYTE) -	\
++		    (dev)->xaht_slots_shift)))
++
++#define	EMAC_XAHT_SLOT_TO_REG(dev, slot)		\
++	((slot) >> (dev)->xaht_width_shift)
++
++#define	EMAC_XAHT_SLOT_TO_MASK(dev, slot)		\
++	((u32)(1 << (EMAC_XAHT_WIDTH(dev) - 1)) >>	\
++	 ((slot) & (u32)(EMAC_XAHT_WIDTH(dev) - 1)))
++
++static inline u32 *emac_xaht_base(struct emac_instance *dev)
++{
++	struct emac_regs __iomem *p = dev->emacp;
++	int offset;
++
++	/* The first IAHT entry always is the base of the block of
++	 * IAHT and GAHT registers.
++	 */
++	if (emac_has_feature(dev, EMAC_FTR_EMAC4SYNC))
++		offset = offsetof(struct emac_regs, u1.emac4sync.iaht1);
++	else
++		offset = offsetof(struct emac_regs, u0.emac4.iaht1);
++
++	return ((u32 *)((ptrdiff_t)p + offset));
++}
++
++static inline u32 *emac_gaht_base(struct emac_instance *dev)
++{
++	/* GAHT registers always come after an identical number of
++	 * IAHT registers.
++	 */
++	return (emac_xaht_base(dev) + EMAC_XAHT_REGS(dev));
++}
++
++static inline u32 *emac_iaht_base(struct emac_instance *dev)
++{
++	/* IAHT registers always come before an identical number of
++	 * GAHT registers.
++	 */
++	return (emac_xaht_base(dev));
++}
+ 
+ /* Ethtool get_regs complex data.
+  * We want to get not just EMAC registers, but also MAL, ZMII, RGMII, TAH
+@@ -366,4 +440,11 @@ struct emac_ethtool_regs_subhdr {
+ 	u32 index;
+ };
+ 
++#define EMAC_ETHTOOL_REGS_VER		0
++#define EMAC_ETHTOOL_REGS_SIZE(dev) 	((dev)->rsrc_regs.end - \
++					 (dev)->rsrc_regs.start + 1)
++#define EMAC4_ETHTOOL_REGS_VER      	1
++#define EMAC4_ETHTOOL_REGS_SIZE(dev)	((dev)->rsrc_regs.end -	\
++					 (dev)->rsrc_regs.start + 1)
++
+ #endif /* __IBM_NEWEMAC_CORE_H */
+Index: linux-2.6.18/drivers/net/ibm_newemac/debug.c
+===================================================================
+--- linux-2.6.18.orig/drivers/net/ibm_newemac/debug.c
++++ linux-2.6.18/drivers/net/ibm_newemac/debug.c
+@@ -67,29 +67,55 @@ static void emac_desc_dump(struct emac_i
+ static void emac_mac_dump(struct emac_instance *dev)
+ {
+ 	struct emac_regs __iomem *p = dev->emacp;
++	const int xaht_regs = EMAC_XAHT_REGS(dev);
++	u32 *gaht_base = emac_gaht_base(dev);
++	u32 *iaht_base = emac_iaht_base(dev);
++	int emac4sync = emac_has_feature(dev, EMAC_FTR_EMAC4SYNC);
++	int n;
+ 
+ 	printk("** EMAC %s registers **\n"
+ 	       "MR0 = 0x%08x MR1 = 0x%08x TMR0 = 0x%08x TMR1 = 0x%08x\n"
+ 	       "RMR = 0x%08x ISR = 0x%08x ISER = 0x%08x\n"
+-	       "IAR = %04x%08x VTPID = 0x%04x VTCI = 0x%04x\n"
+-	       "IAHT: 0x%04x 0x%04x 0x%04x 0x%04x "
+-	       "GAHT: 0x%04x 0x%04x 0x%04x 0x%04x\n"
+-	       "LSA = %04x%08x IPGVR = 0x%04x\n"
+-	       "STACR = 0x%08x TRTR = 0x%08x RWMR = 0x%08x\n"
+-	       "OCTX = 0x%08x OCRX = 0x%08x IPCR = 0x%08x\n",
++	       "IAR = %04x%08x VTPID = 0x%04x VTCI = 0x%04x\n",
+ 	       dev->ofdev->node->full_name, in_be32(&p->mr0), in_be32(&p->mr1),
+ 	       in_be32(&p->tmr0), in_be32(&p->tmr1),
+ 	       in_be32(&p->rmr), in_be32(&p->isr), in_be32(&p->iser),
+ 	       in_be32(&p->iahr), in_be32(&p->ialr), in_be32(&p->vtpid),
+-	       in_be32(&p->vtci),
+-	       in_be32(&p->iaht1), in_be32(&p->iaht2), in_be32(&p->iaht3),
+-	       in_be32(&p->iaht4),
+-	       in_be32(&p->gaht1), in_be32(&p->gaht2), in_be32(&p->gaht3),
+-	       in_be32(&p->gaht4),
++	       in_be32(&p->vtci)
++	       );
++
++	if (emac4sync)
++		printk("MAR = %04x%08x MMAR = %04x%08x\n",
++		       in_be32(&p->u0.emac4sync.mahr),
++		       in_be32(&p->u0.emac4sync.malr),
++		       in_be32(&p->u0.emac4sync.mmahr),
++		       in_be32(&p->u0.emac4sync.mmalr)
++		       );
++
++	for (n = 0; n < xaht_regs; n++)
++		printk("IAHT%02d = 0x%08x\n", n + 1, in_be32(iaht_base + n));
++
++	for (n = 0; n < xaht_regs; n++)
++		printk("GAHT%02d = 0x%08x\n", n + 1, in_be32(gaht_base + n));
++
++	printk("LSA = %04x%08x IPGVR = 0x%04x\n"
++	       "STACR = 0x%08x TRTR = 0x%08x RWMR = 0x%08x\n"
++	       "OCTX = 0x%08x OCRX = 0x%08x\n",
+ 	       in_be32(&p->lsah), in_be32(&p->lsal), in_be32(&p->ipgvr),
+ 	       in_be32(&p->stacr), in_be32(&p->trtr), in_be32(&p->rwmr),
+-	       in_be32(&p->octx), in_be32(&p->ocrx), in_be32(&p->ipcr)
+-	    );
++	       in_be32(&p->octx), in_be32(&p->ocrx)
++	       );
++
++	if (!emac4sync) {
++		printk("IPCR = 0x%08x\n",
++		       in_be32(&p->u1.emac4.ipcr)
++		       );
++	} else {
++		printk("REVID = 0x%08x TPC = 0x%08x\n",
++		       in_be32(&p->u1.emac4sync.revid),
++		       in_be32(&p->u1.emac4sync.tpc)
++		       );
++	}
+ 
+ 	emac_desc_dump(dev);
+ }
+Index: linux-2.6.18/drivers/net/ibm_newemac/emac.h
+===================================================================
+--- linux-2.6.18.orig/drivers/net/ibm_newemac/emac.h
++++ linux-2.6.18/drivers/net/ibm_newemac/emac.h
+@@ -27,37 +27,80 @@
+ 
+ #include <linux/types.h>
+ 
+-/* EMAC registers 		Write Access rules */
++/* EMAC registers 			Write Access rules */
+ struct emac_regs {
+-	u32 mr0;		/* special 	*/
+-	u32 mr1;		/* Reset 	*/
+-	u32 tmr0;		/* special 	*/
+-	u32 tmr1;		/* special 	*/
+-	u32 rmr;		/* Reset 	*/
+-	u32 isr;		/* Always 	*/
+-	u32 iser;		/* Reset 	*/
+-	u32 iahr;		/* Reset, R, T 	*/
+-	u32 ialr;		/* Reset, R, T 	*/
+-	u32 vtpid;		/* Reset, R, T 	*/
+-	u32 vtci;		/* Reset, R, T 	*/
+-	u32 ptr;		/* Reset,    T 	*/
+-	u32 iaht1;		/* Reset, R	*/
+-	u32 iaht2;		/* Reset, R	*/
+-	u32 iaht3;		/* Reset, R	*/
+-	u32 iaht4;		/* Reset, R	*/
+-	u32 gaht1;		/* Reset, R	*/
+-	u32 gaht2;		/* Reset, R	*/
+-	u32 gaht3;		/* Reset, R	*/
+-	u32 gaht4;		/* Reset, R	*/
++	/* Common registers across all EMAC implementations. */
++	u32 mr0;			/* Special 	*/
++	u32 mr1;			/* Reset 	*/
++	u32 tmr0;			/* Special 	*/
++	u32 tmr1;			/* Special 	*/
++	u32 rmr;			/* Reset 	*/
++	u32 isr;			/* Always 	*/
++	u32 iser;			/* Reset 	*/
++	u32 iahr;			/* Reset, R, T 	*/
++	u32 ialr;			/* Reset, R, T 	*/
++	u32 vtpid;			/* Reset, R, T 	*/
++	u32 vtci;			/* Reset, R, T 	*/
++	u32 ptr;			/* Reset,    T 	*/
++	union {
++		/* Registers unique to EMAC4 implementations */
++		struct {
++			u32 iaht1;	/* Reset, R	*/
++			u32 iaht2;	/* Reset, R	*/
++			u32 iaht3;	/* Reset, R	*/
++			u32 iaht4;	/* Reset, R	*/
++			u32 gaht1;	/* Reset, R	*/
++			u32 gaht2;	/* Reset, R	*/
++			u32 gaht3;	/* Reset, R	*/
++			u32 gaht4;	/* Reset, R	*/
++		} emac4;
++		/* Registers unique to EMAC4SYNC implementations */
++		struct {
++			u32 mahr;	/* Reset, R, T  */
++			u32 malr;	/* Reset, R, T  */
++			u32 mmahr;	/* Reset, R, T  */
++			u32 mmalr;	/* Reset, R, T  */
++			u32 rsvd0[4];
++		} emac4sync;
++	} u0;
++	/* Common registers across all EMAC implementations. */
+ 	u32 lsah;
+ 	u32 lsal;
+-	u32 ipgvr;		/* Reset,    T 	*/
+-	u32 stacr;		/* special 	*/
+-	u32 trtr;		/* special 	*/
+-	u32 rwmr;		/* Reset 	*/
++	u32 ipgvr;			/* Reset,    T 	*/
++	u32 stacr;			/* Special 	*/
++	u32 trtr;			/* Special 	*/
++	u32 rwmr;			/* Reset 	*/
+ 	u32 octx;
+ 	u32 ocrx;
+-	u32 ipcr;
++	union {
++		/* Registers unique to EMAC4 implementations */
++		struct {
++			u32 ipcr;
++		} emac4;
++		/* Registers unique to EMAC4SYNC implementations */
++		struct {
++			u32 rsvd1;
++			u32 revid;
++ 			u32 rsvd2[2];
++			u32 iaht1;	/* Reset, R     */
++			u32 iaht2;	/* Reset, R     */
++			u32 iaht3;	/* Reset, R     */
++			u32 iaht4;	/* Reset, R     */
++			u32 iaht5;	/* Reset, R     */
++			u32 iaht6;	/* Reset, R     */
++			u32 iaht7;	/* Reset, R     */
++			u32 iaht8;	/* Reset, R     */
++			u32 gaht1;	/* Reset, R     */
++			u32 gaht2;	/* Reset, R     */
++			u32 gaht3;	/* Reset, R     */
++			u32 gaht4;	/* Reset, R     */
++			u32 gaht5;	/* Reset, R     */
++			u32 gaht6;	/* Reset, R     */
++			u32 gaht7;	/* Reset, R     */
++			u32 gaht8;	/* Reset, R     */
++			u32 tpc;	/* Reset, T     */
++		} emac4sync;
++	} u1;
+ };
+ 
+ /*
+@@ -73,12 +116,6 @@ struct emac_regs {
+ #define PHY_MODE_RTBI	7
+ #define PHY_MODE_SGMII	8
+ 
+-
+-#define EMAC_ETHTOOL_REGS_VER		0
+-#define EMAC_ETHTOOL_REGS_SIZE		(sizeof(struct emac_regs) - sizeof(u32))
+-#define EMAC4_ETHTOOL_REGS_VER      	1
+-#define EMAC4_ETHTOOL_REGS_SIZE		sizeof(struct emac_regs)
+-
+ /* EMACx_MR0 */
+ #define EMAC_MR0_RXI			0x80000000
+ #define EMAC_MR0_TXI			0x40000000
+Index: linux-2.6.18/mvl_patches/pro50-1471.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1471.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1471);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

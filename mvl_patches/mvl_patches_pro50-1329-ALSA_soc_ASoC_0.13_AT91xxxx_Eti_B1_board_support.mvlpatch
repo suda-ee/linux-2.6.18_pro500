@@ -1,0 +1,468 @@
+#! /usr/bin/env bash
+# Patch: -ALSA_soc_ASoC_0.13_AT91xxxx_Eti_B1_board_support
+# Date: Mon Jul 21 10:28:02 2008
+# MR: 26835
+# Disposition: Backport from 2.6.21-rc1
+# Adjustments:
+# 
+# From c8044274c7f1e269975b2bd55d057ceb7708e929 Mon Sep 17 00:00:00 2001
+# From: Frank Mandarino <fmandarino@endrelia.com>
+# Date: Fri, 2 Feb 2007 17:19:58 +0100
+# Subject: [PATCH] [ALSA] soc - ASoC 0.13 AT91xxxx Eti_B1 board support
+# 
+# This patch updates the EtI B1 machine driver to the new API in ASoC
+# 0.13.
+# Changes:-
+# o  Manually configure DAI hardware format.
+# o Removed config_sysclk() function. No longer needed as clocking is now
+# configured manually.
+# 
+# Signed-off-by: Frank Mandarino <fmandarino@endrelia.com>
+# Signed-off-by: Liam Girdwood <lg@opensource.wolfsonmicro.com>
+# Signed-off-by: Takashi Iwai <tiwai@suse.de>
+# Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+
+PATCHNUM=1329
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26835
+Disposition: Backport from 2.6.21-rc1
+Adjustments:
+
+From c8044274c7f1e269975b2bd55d057ceb7708e929 Mon Sep 17 00:00:00 2001
+From: Frank Mandarino <fmandarino@endrelia.com>
+Date: Fri, 2 Feb 2007 17:19:58 +0100
+Subject: [PATCH] [ALSA] soc - ASoC 0.13 AT91xxxx Eti_B1 board support
+
+This patch updates the EtI B1 machine driver to the new API in ASoC
+0.13.
+Changes:-
+o  Manually configure DAI hardware format.
+o Removed config_sysclk() function. No longer needed as clocking is now
+configured manually.
+
+Signed-off-by: Frank Mandarino <fmandarino@endrelia.com>
+Signed-off-by: Liam Girdwood <lg@opensource.wolfsonmicro.com>
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+Index: linux-2.6.18/sound/soc/at91/eti_b1_wm8731.c
+===================================================================
+--- linux-2.6.18.orig/sound/soc/at91/eti_b1_wm8731.c
++++ linux-2.6.18/sound/soc/at91/eti_b1_wm8731.c
+@@ -18,9 +18,6 @@
+  *  Free Software Foundation;  either version 2 of the  License, or (at your
+  *  option) any later version.
+  *
+- *  Revision history
+- *    30th Nov 2005   Initial version.
+- *
+  */
+ 
+ #include <linux/module.h>
+@@ -43,9 +40,10 @@
+ 
+ #include "../codecs/wm8731.h"
+ #include "at91-pcm.h"
++#include "at91-i2s.h"
+ 
+ #if 0
+-#define	DBG(x...)	printk(KERN_INFO "eti_b1_wm8731:" x)
++#define	DBG(x...)	printk(KERN_INFO "eti_b1_wm8731: " x)
+ #else
+ #define	DBG(x...)
+ #endif
+@@ -57,12 +55,29 @@
+ #define AT91_PIO_RK1	(1 << (AT91_PIN_PB10 - PIN_BASE) % 32)
+ #define AT91_PIO_RF1	(1 << (AT91_PIN_PB11 - PIN_BASE) % 32)
+ 
+-
+ static struct clk *pck1_clk;
+ static struct clk *pllb_clk;
+ 
++
+ static int eti_b1_startup(struct snd_pcm_substream *substream)
+ {
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct snd_soc_codec_dai *codec_dai = rtd->dai->codec_dai;
++	struct snd_soc_cpu_dai *cpu_dai = rtd->dai->cpu_dai;
++	int ret;
++
++	/* cpu clock is the AT91 master clock sent to the SSC */
++	ret = cpu_dai->dai_ops.set_sysclk(cpu_dai, AT91_SYSCLK_MCK,
++		60000000, SND_SOC_CLOCK_IN);
++	if (ret < 0)
++		return ret;
++
++	/* codec system clock is supplied by PCK1, set to 12MHz */
++	ret = codec_dai->dai_ops.set_sysclk(codec_dai, WM8731_SYSCLK,
++		12000000, SND_SOC_CLOCK_IN);
++	if (ret < 0)
++		return ret;
++
+ 	/* Start PCK1 clock. */
+ 	clk_enable(pck1_clk);
+ 	DBG("pck1 started\n");
+@@ -77,8 +92,105 @@ static void eti_b1_shutdown(struct snd_p
+ 	DBG("pck1 stopped\n");
+ }
+ 
++static int eti_b1_hw_params(struct snd_pcm_substream *substream,
++	struct snd_pcm_hw_params *params)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct snd_soc_codec_dai *codec_dai = rtd->dai->codec_dai;
++	struct snd_soc_cpu_dai *cpu_dai = rtd->dai->cpu_dai;
++	int ret;
++
++#ifdef CONFIG_SND_AT91_SOC_ETI_SLAVE
++	unsigned int rate;
++	int cmr_div, period;
++
++	/* set codec DAI configuration */
++	ret = codec_dai->dai_ops.set_fmt(codec_dai, SND_SOC_DAIFMT_I2S |
++		SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_CBS_CFS);
++	if (ret < 0)
++		return ret;
++
++	/* set cpu DAI configuration */
++	ret = cpu_dai->dai_ops.set_fmt(cpu_dai, SND_SOC_DAIFMT_I2S |
++		SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_CBS_CFS);
++	if (ret < 0)
++		return ret;
++
++	/*
++	 * The SSC clock dividers depend on the sample rate.  The CMR.DIV
++	 * field divides the system master clock MCK to drive the SSC TK
++	 * signal which provides the codec BCLK.  The TCMR.PERIOD and
++	 * RCMR.PERIOD fields further divide the BCLK signal to drive
++	 * the SSC TF and RF signals which provide the codec DACLRC and
++	 * ADCLRC clocks.
++	 *
++	 * The dividers were determined through trial and error, where a
++	 * CMR.DIV value is chosen such that the resulting BCLK value is
++	 * divisible, or almost divisible, by (2 * sample rate), and then
++	 * the TCMR.PERIOD or RCMR.PERIOD is BCLK / (2 * sample rate) - 1.
++	 */
++	rate = params_rate(params);
++
++	switch (rate) {
++	case 8000:
++		cmr_div = 25;	/* BCLK = 60MHz/(2*25) = 1.2MHz */
++		period = 74;	/* LRC = BCLK/(2*(74+1)) = 8000Hz */
++		break;
++	case 32000:
++		cmr_div = 7;	/* BCLK = 60MHz/(2*7) ~= 4.28571428MHz */
++		period = 66;	/* LRC = BCLK/(2*(66+1)) = 31982.942Hz */
++		break;
++	case 48000:
++		cmr_div = 13;	/* BCLK = 60MHz/(2*13) ~= 2.3076923MHz */
++		period = 23;	/* LRC = BCLK/(2*(23+1)) = 48076.923Hz */
++		break;
++	default:
++		printk(KERN_WARNING "unsupported rate %d on ETI-B1 board\n", rate);
++		return -EINVAL;
++	}
++
++	/* set the MCK divider for BCLK */
++	ret = cpu_dai->dai_ops.set_clkdiv(cpu_dai, AT91SSC_CMR_DIV, cmr_div);
++	if (ret < 0)
++		return ret;
++
++	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
++		/* set the BCLK divider for DACLRC */
++		ret = cpu_dai->dai_ops.set_clkdiv(cpu_dai,
++						AT91SSC_TCMR_PERIOD, period);
++	} else {
++		/* set the BCLK divider for ADCLRC */
++		ret = cpu_dai->dai_ops.set_clkdiv(cpu_dai,
++						AT91SSC_RCMR_PERIOD, period);
++	}
++	if (ret < 0)
++		return ret;
++
++#else /* CONFIG_SND_AT91_SOC_ETI_SLAVE */
++	/*
++	 * Codec in Master Mode.
++	 */
++
++	/* set codec DAI configuration */
++	ret = codec_dai->dai_ops.set_fmt(codec_dai, SND_SOC_DAIFMT_I2S |
++		SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_CBM_CFM);
++	if (ret < 0)
++		return ret;
++
++	/* set cpu DAI configuration */
++	ret = cpu_dai->dai_ops.set_fmt(cpu_dai, SND_SOC_DAIFMT_I2S |
++		SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_CBM_CFM);
++	if (ret < 0)
++		return ret;
++
++#endif /* CONFIG_SND_AT91_SOC_ETI_SLAVE */
++
++	return 0;
++}
++
+ static struct snd_soc_ops eti_b1_ops = {
+ 	.startup = eti_b1_startup,
++	.hw_params = eti_b1_hw_params,
+ 	.shutdown = eti_b1_shutdown,
+ };
+ 
+@@ -134,29 +246,19 @@ static int eti_b1_wm8731_init(struct snd
+ 	return 0;
+ }
+ 
+-unsigned int eti_b1_config_sysclk(struct snd_soc_pcm_runtime *rtd,
+-	struct snd_soc_clock_info *info)
+-{
+-	if(info->bclk_master & SND_SOC_DAIFMT_CBS_CFS) {
+-		return rtd->codec_dai->config_sysclk(rtd->codec_dai, info, 12000000);
+-	}
+-	return 0;
+-}
+-
+ static struct snd_soc_dai_link eti_b1_dai = {
+ 	.name = "WM8731",
+ 	.stream_name = "WM8731",
+ 	.cpu_dai = &at91_i2s_dai[1],
+ 	.codec_dai = &wm8731_dai,
+ 	.init = eti_b1_wm8731_init,
+-	.config_sysclk = eti_b1_config_sysclk,
++	.ops = &eti_b1_ops,
+ };
+ 
+ static struct snd_soc_machine snd_soc_machine_eti_b1 = {
+ 	.name = "ETI_B1",
+ 	.dai_link = &eti_b1_dai,
+ 	.num_links = 1,
+-	.ops = &eti_b1_ops,
+ };
+ 
+ static struct wm8731_setup_data eti_b1_wm8731_setup = {
+@@ -210,7 +312,7 @@ static int __init eti_b1_init(void)
+ 	}
+ 
+  	ssc_pio_lines = AT91_PIO_TF1 | AT91_PIO_TK1 | AT91_PIO_TD1
+-			| AT91_PIO_RD1 /* | AT91_PIO_RK1 | AT91_PIO_RF1 */;
++			| AT91_PIO_RD1 /* | AT91_PIO_RK1 */ | AT91_PIO_RF1;
+ 
+ 	/* Reset all PIO registers and assign lines to peripheral A */
+  	at91_sys_write(AT91_PIOB + PIO_PDR,  ssc_pio_lines);
+@@ -237,6 +339,11 @@ static int __init eti_b1_init(void)
+ 	/* assign the GPIO pin to PCK1 */
+ 	at91_set_B_periph(AT91_PIN_PA24, 0);
+ 
++#ifdef CONFIG_SND_AT91_SOC_ETI_SLAVE
++	printk(KERN_INFO "eti_b1_wm8731: Codec in Slave Mode\n");
++#else
++	printk(KERN_INFO "eti_b1_wm8731: Codec in Master Mode\n");
++#endif
+ 	return ret;
+ 
+ fail_io_unmap:
+Index: linux-2.6.18/mvl_patches/pro50-1329.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1329.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1329);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

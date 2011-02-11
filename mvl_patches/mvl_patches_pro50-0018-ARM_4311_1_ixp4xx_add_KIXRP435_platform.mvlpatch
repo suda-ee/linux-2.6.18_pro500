@@ -1,0 +1,554 @@
+#! /usr/bin/env bash
+# Patch: -ARM_4311_1_ixp4xx_add_KIXRP435_platform
+# Date: Fri Jun 15 10:08:04 2007
+# MR: 23057
+# From 45fba0846f5a5a48ed3c394aa4f8ca93699e7655 Mon Sep 17 00:00:00 2001
+# From: Ruslan V. Sushko <rsushko@ru.mvista.com>
+# Date: Fri, 6 Apr 2007 15:00:31 +0100
+# Subject: [PATCH] [ARM] 4311/1: ixp4xx: add KIXRP435 platform
+# 
+# Add Intel KIXRP435 Reference Platform based on IXP43x processor.
+# Fixed after review : access to cp15 removed in identification functions,
+# used access to global processor_id instead
+# 
+# Signed-off-by: Vladimir Barinov <vbarinov@ru.mvista.com>
+# Signed-off-by: Ruslan  Sushko <rsushko@ru.mvista.com>
+# Signed-off-by: Russell King <rmk+kernel@arm.linux.org.uk>
+
+PATCHNUM=18
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 23057
+From 45fba0846f5a5a48ed3c394aa4f8ca93699e7655 Mon Sep 17 00:00:00 2001
+From: Ruslan V. Sushko <rsushko@ru.mvista.com>
+Date: Fri, 6 Apr 2007 15:00:31 +0100
+Subject: [PATCH] [ARM] 4311/1: ixp4xx: add KIXRP435 platform
+
+Add Intel KIXRP435 Reference Platform based on IXP43x processor.
+Fixed after review : access to cp15 removed in identification functions,
+used access to global processor_id instead
+
+Signed-off-by: Vladimir Barinov <vbarinov@ru.mvista.com>
+Signed-off-by: Ruslan  Sushko <rsushko@ru.mvista.com>
+Signed-off-by: Russell King <rmk+kernel@arm.linux.org.uk>
+Index: linux-2.6.18/arch/arm/configs/ixp4xx_defconfig
+===================================================================
+--- linux-2.6.18.orig/arch/arm/configs/ixp4xx_defconfig
++++ linux-2.6.18/arch/arm/configs/ixp4xx_defconfig
+@@ -117,11 +117,13 @@ CONFIG_ARCH_ADI_COYOTE=y
+ CONFIG_ARCH_IXDP425=y
+ CONFIG_MACH_IXDPG425=y
+ CONFIG_MACH_IXDP465=y
++CONFIG_MACH_KIXRP435=y
+ CONFIG_ARCH_IXCDP1100=y
+ CONFIG_ARCH_PRPMC1100=y
+ CONFIG_MACH_NAS100D=y
+ CONFIG_ARCH_IXDP4XX=y
+ CONFIG_CPU_IXP46X=y
++CONFIG_CPU_IXP43X=y
+ # CONFIG_MACH_GTWX5715 is not set
+ 
+ #
+Index: linux-2.6.18/arch/arm/mach-ixp4xx/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-ixp4xx/Kconfig
++++ linux-2.6.18/arch/arm/mach-ixp4xx/Kconfig
+@@ -62,6 +62,12 @@ config MACH_IXDP465
+ 	  IXDP465 Development Platform (Also known as BMP).
+ 	  For more information on this platform, see <file:Documentation/arm/IXP4xx>.
+ 
++config MACH_KIXRP435
++	bool "KIXRP435"
++	help
++	  Say 'Y' here if you want your kernel to support Intel's
++	  KIXRP435 Reference Platform.
++	  For more information on this platform, see <file:Documentation/arm/IXP4xx>.
+ 
+ #
+ # IXCDP1100 is the exact same HW as IXDP425, but with a different machine 
+@@ -94,7 +100,7 @@ config MACH_NAS100D
+ #
+ config	ARCH_IXDP4XX
+ 	bool
+-	depends on ARCH_IXDP425 || MACH_IXDP465
++	depends on ARCH_IXDP425 || MACH_IXDP465 || MACH_KIXRP435
+ 	default y
+ 
+ #
+@@ -105,6 +111,11 @@ config CPU_IXP46X
+ 	depends on MACH_IXDP465
+ 	default y
+ 
++config CPU_IXP43X
++	bool
++	depends on MACH_KIXRP435
++	default y
++
+ config MACH_GTWX5715
+ 	bool "Gemtek WX5715 (Linksys WRV54G)"
+ 	depends on ARCH_IXP4XX
+Index: linux-2.6.18/arch/arm/mach-ixp4xx/common-pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-ixp4xx/common-pci.c
++++ linux-2.6.18/arch/arm/mach-ixp4xx/common-pci.c
+@@ -374,7 +374,7 @@ void __init ixp4xx_pci_preinit(void)
+ 	 * Determine which PCI read method to use.
+ 	 * Rev 0 IXP425 requires workaround.
+ 	 */
+-	if (!(processor_id & 0xf) && !cpu_is_ixp46x()) {
++	if (!(processor_id & 0xf) && cpu_is_ixp42x()) {
+ 		printk("PCI: IXP42x A0 silicon detected - "
+ 			"PCI Non-Prefetch Workaround Enabled\n");
+ 		ixp4xx_pci_read = ixp4xx_pci_read_errata;
+@@ -480,7 +480,7 @@ int ixp4xx_setup(int nr, struct pci_sys_
+ 	res[0].flags = IORESOURCE_IO;
+ 
+ 	res[1].name = "PCI Memory Space";
+-	res[1].start = 0x48000000;
++	res[1].start = PCIBIOS_MIN_MEM;
+ #ifndef CONFIG_IXP4XX_INDIRECT_PCI
+ 	res[1].end = 0x4bffffff;
+ #else
+Index: linux-2.6.18/arch/arm/mach-ixp4xx/common.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-ixp4xx/common.c
++++ linux-2.6.18/arch/arm/mach-ixp4xx/common.c
+@@ -172,7 +172,7 @@ static int ixp4xx_set_irq_type(unsigned 
+ 
+ static void ixp4xx_irq_mask(unsigned int irq)
+ {
+-	if (cpu_is_ixp46x() && irq >= 32)
++	if ((cpu_is_ixp46x() || cpu_is_ixp43x()) && irq >= 32)
+ 		*IXP4XX_ICMR2 &= ~(1 << (irq - 32));
+ 	else
+ 		*IXP4XX_ICMR &= ~(1 << irq);
+@@ -195,7 +195,7 @@ static void ixp4xx_irq_unmask(unsigned i
+ 	if (!(ixp4xx_irq_edge & (1 << irq)))
+ 		ixp4xx_irq_ack(irq);
+ 
+-	if (cpu_is_ixp46x() && irq >= 32)
++	if ((cpu_is_ixp46x() || cpu_is_ixp43x()) && irq >= 32)
+ 		*IXP4XX_ICMR2 |= (1 << (irq - 32));
+ 	else
+ 		*IXP4XX_ICMR |= (1 << irq);
+@@ -219,7 +219,7 @@ void __init ixp4xx_init_irq(void)
+ 	/* Disable all interrupt */
+ 	*IXP4XX_ICMR = 0x0; 
+ 
+-	if (cpu_is_ixp46x()) {
++	if (cpu_is_ixp46x() || cpu_is_ixp43x()) {
+ 		/* Route upper 32 sources to IRQ instead of FIQ */
+ 		*IXP4XX_ICLR2 = 0x00;
+ 
+Index: linux-2.6.18/arch/arm/mach-ixp4xx/ixdp425-pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-ixp4xx/ixdp425-pci.c
++++ linux-2.6.18/arch/arm/mach-ixp4xx/ixdp425-pci.c
+@@ -66,7 +66,7 @@ struct hw_pci ixdp425_pci __initdata = {
+ int __init ixdp425_pci_init(void)
+ {
+ 	if (machine_is_ixdp425() || machine_is_ixcdp1100() ||
+-			machine_is_ixdp465())
++			machine_is_ixdp465() || machine_is_kixrp435())
+ 		pci_common_init(&ixdp425_pci);
+ 	return 0;
+ }
+Index: linux-2.6.18/arch/arm/mach-ixp4xx/ixdp425-setup.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-ixp4xx/ixdp425-setup.c
++++ linux-2.6.18/arch/arm/mach-ixp4xx/ixdp425-setup.c
+@@ -118,6 +118,11 @@ static void __init ixdp425_init(void)
+ 	ixdp425_flash_resource.end =
+ 		IXP4XX_EXP_BUS_BASE(0) + ixp4xx_exp_bus_size - 1;
+ 
++	if (cpu_is_ixp43x()) {
++		ixdp425_uart.num_resources = 1;
++		ixdp425_uart_data[1].flags = 0;
++	}
++
+ 	platform_add_devices(ixdp425_devices, ARRAY_SIZE(ixdp425_devices));
+ }
+ 
+@@ -169,3 +174,16 @@ MACHINE_START(IXCDP1100, "Intel IXCDP110
+ 	.init_machine	= ixdp425_init,
+ MACHINE_END
+ #endif
++
++#ifdef CONFIG_MACH_KIXRP435
++MACHINE_START(KIXRP435, "Intel KIXRP435 Reference Platform")
++	/* Maintainer: MontaVista Software, Inc. */
++	.phys_io	= IXP4XX_PERIPHERAL_BASE_PHYS,
++	.io_pg_offst	= ((IXP4XX_PERIPHERAL_BASE_VIRT) >> 18) & 0xfffc,
++	.map_io		= ixp4xx_map_io,
++	.init_irq	= ixp4xx_init_irq,
++	.timer		= &ixp4xx_timer,
++	.boot_params	= 0x0100,
++	.init_machine	= ixdp425_init,
++MACHINE_END
++#endif
+Index: linux-2.6.18/arch/arm/mm/proc-xscale.S
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mm/proc-xscale.S
++++ linux-2.6.18/arch/arm/mm/proc-xscale.S
+@@ -595,6 +595,11 @@ cpu_ixp42x_name:
+ 	.asciz	"XScale-IXP42x Family"
+ 	.size	cpu_ixp42x_name, . - cpu_ixp42x_name
+ 
++	.type	cpu_ixp43x_name, #object
++cpu_ixp43x_name:
++	.asciz	"XScale-IXP43x Family"
++	.size	cpu_ixp43x_name, . - cpu_ixp43x_name
++
+ 	.type	cpu_ixp46x_name, #object
+ cpu_ixp46x_name:
+ 	.asciz	"XScale-IXP46x Family"
+@@ -854,6 +859,29 @@ __ixp42x_proc_info:
+ 	.long	xscale_cache_fns
+ 	.size   __ixp42x_proc_info, . - __ixp42x_proc_info                
+ 
++	.type   __ixp43x_proc_info, #object
++__ixp43x_proc_info:
++	.long   0x69054040
++	.long   0xfffffff0
++	.long   PMD_TYPE_SECT | \
++		PMD_SECT_BUFFERABLE | \
++		PMD_SECT_CACHEABLE | \
++		PMD_SECT_AP_WRITE | \
++		PMD_SECT_AP_READ
++	.long   PMD_TYPE_SECT | \
++		PMD_SECT_AP_WRITE | \
++		PMD_SECT_AP_READ
++	b       __xscale_setup
++	.long   cpu_arch_name
++	.long   cpu_elf_name
++	.long   HWCAP_SWP|HWCAP_HALF|HWCAP_THUMB|HWCAP_FAST_MULT|HWCAP_EDSP
++	.long   cpu_ixp43x_name
++	.long   xscale_processor_functions
++	.long   v4wbi_tlb_fns
++	.long   xscale_mc_user_fns
++	.long   xscale_cache_fns
++	.size   __ixp43x_proc_info, . - __ixp43x_proc_info
++
+ 	.type	__ixp46x_proc_info, #object
+ __ixp46x_proc_info:
+ 	.long   0x69054200
+Index: linux-2.6.18/include/asm-arm/arch-ixp4xx/entry-macro.S
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-ixp4xx/entry-macro.S
++++ linux-2.6.18/include/asm-arm/arch-ixp4xx/entry-macro.S
+@@ -25,9 +25,9 @@
+ 
+ 1001:
+ 		/*
+-		 * IXP465 has an upper IRQ status register
++		 * IXP465/IXP435 has an upper IRQ status register
+ 		 */
+-#if defined(CONFIG_CPU_IXP46X)
++#if defined(CONFIG_CPU_IXP46X) || defined(CONFIG_CPU_IXP43X)
+ 		ldr	\irqstat, =(IXP4XX_INTC_BASE_VIRT+IXP4XX_ICIP2_OFFSET)
+ 		ldr	\irqstat, [\irqstat]		@ get upper interrupts
+ 		mov	\irqnr, #63
+Index: linux-2.6.18/include/asm-arm/arch-ixp4xx/hardware.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-ixp4xx/hardware.h
++++ linux-2.6.18/include/asm-arm/arch-ixp4xx/hardware.h
+@@ -17,8 +17,8 @@
+ #ifndef __ASM_ARCH_HARDWARE_H__
+ #define __ASM_ARCH_HARDWARE_H__
+ 
+-#define PCIBIOS_MIN_IO			0x00001000
+-#define PCIBIOS_MIN_MEM			0x48000000
++#define PCIBIOS_MIN_IO		0x00001000
++#define PCIBIOS_MIN_MEM		(cpu_is_ixp43x() ? 0x40000000 : 0x48000000)
+ 
+ /*
+  * We override the standard dma-mask routines for bouncing.
+Index: linux-2.6.18/include/asm-arm/arch-ixp4xx/io.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-ixp4xx/io.h
++++ linux-2.6.18/include/asm-arm/arch-ixp4xx/io.h
+@@ -61,7 +61,7 @@ extern int ixp4xx_pci_write(u32 addr, u3
+ static inline void __iomem *
+ __ixp4xx_ioremap(unsigned long addr, size_t size, unsigned long flags)
+ {
+-	if((addr < 0x48000000) || (addr > 0x4fffffff))
++	if((addr < PCIBIOS_MIN_MEM) || (addr > 0x4fffffff))
+ 		return __ioremap(addr, size, flags);
+ 
+ 	return (void *)addr;
+Index: linux-2.6.18/include/asm-arm/arch-ixp4xx/irqs.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-ixp4xx/irqs.h
++++ linux-2.6.18/include/asm-arm/arch-ixp4xx/irqs.h
+@@ -62,10 +62,10 @@
+ /*
+  * Only first 32 sources are valid if running on IXP42x systems
+  */
+-#ifndef	CONFIG_CPU_IXP46X
+-#define NR_IRQS			32
+-#else
++#if defined(CONFIG_CPU_IXP46X) || defined(CONFIG_CPU_IXP43X)
+ #define NR_IRQS			64
++#else
++#define NR_IRQS			32
+ #endif
+ 
+ #define	XSCALE_PMU_IRQ		(IRQ_IXP4XX_XSCALE_PMU)
+Index: linux-2.6.18/include/asm-arm/arch-ixp4xx/ixp4xx-regs.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-ixp4xx/ixp4xx-regs.h
++++ linux-2.6.18/include/asm-arm/arch-ixp4xx/ixp4xx-regs.h
+@@ -607,15 +607,43 @@
+ 
+ #define DCMD_LENGTH	0x01fff		/* length mask (max = 8K - 1) */
+ 
++/* Processor id value in CP15 Register 0 */
++#define IXP425_PROCESSOR_ID_VALUE	0x690541c0
++#define IXP435_PROCESSOR_ID_VALUE	0x69054040
++#define IXP465_PROCESSOR_ID_VALUE	0x69054200
++#define IXP4XX_PROCESSOR_ID_MASK	0xfffffff0
++
+ #ifndef __ASSEMBLY__
++static inline int cpu_is_ixp42x(void)
++{
++	extern unsigned int processor_id;
++
++	if ((processor_id & IXP4XX_PROCESSOR_ID_MASK) ==
++	     IXP425_PROCESSOR_ID_VALUE )
++		return 1;
++
++	return 0;
++}
++
++static inline int cpu_is_ixp43x(void)
++{
++#ifdef CONFIG_CPU_IXP43X
++	extern unsigned int processor_id;
++
++	if ((processor_id & IXP4XX_PROCESSOR_ID_MASK) ==
++	     IXP435_PROCESSOR_ID_VALUE )
++		return 1;
++#endif
++	return 0;
++}
++
+ static inline int cpu_is_ixp46x(void)
+ {
+ #ifdef CONFIG_CPU_IXP46X
+-	unsigned int processor_id;
+-
+-	asm("mrc p15, 0, %0, cr0, cr0, 0;" : "=r"(processor_id) :);
++	extern unsigned int processor_id;
+ 
+-	if ((processor_id & 0xffffff00) == 0x69054200)
++	if ((processor_id & IXP4XX_PROCESSOR_ID_MASK) ==
++	     IXP465_PROCESSOR_ID_VALUE )
+ 		return 1;
+ #endif
+ 	return 0;
+Index: linux-2.6.18/mvl_patches/pro50-0018.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0018.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(18);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

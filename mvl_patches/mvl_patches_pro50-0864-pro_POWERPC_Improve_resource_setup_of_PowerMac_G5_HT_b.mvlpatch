@@ -1,0 +1,433 @@
+#! /usr/bin/env bash
+# Patch: -pro_POWERPC_Improve_resource_setup_of_PowerMac_G5_HT_b
+# Date: Wed Mar  5 11:43:54 2008
+# MR: 26747
+# Disposition: backport from
+# git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# 
+# From d0264ce796e4e3d77fdadf72d6625f8e6c1c96bd Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Thu, 20 Dec 2007 14:55:02 +1100
+# Subject: [PATCH] [POWERPC] Improve resource setup of PowerMac G5 HT bridge
+# 
+# The device node for the HT bridge on G5s doesn't contain useful ranges.
+# 
+# We used to give it a bunch of the known PCI space and then punch a "hole"
+# in it based on where the AGP or PCIe region was.  This reworks it to
+# use the actual register in the bridge that controls the decoding instead.
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=864
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26747
+Disposition: backport from
+git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+
+From d0264ce796e4e3d77fdadf72d6625f8e6c1c96bd Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Thu, 20 Dec 2007 14:55:02 +1100
+Subject: [PATCH] [POWERPC] Improve resource setup of PowerMac G5 HT bridge
+
+The device node for the HT bridge on G5s doesn't contain useful ranges.
+
+We used to give it a bunch of the known PCI space and then punch a "hole"
+in it based on where the AGP or PCIe region was.  This reworks it to
+use the actual register in the bridge that controls the decoding instead.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/platforms/powermac/pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/powermac/pci.c
++++ linux-2.6.18/arch/powerpc/platforms/powermac/pci.c
+@@ -40,8 +40,6 @@
+ static int has_uninorth;
+ #ifdef CONFIG_PPC64
+ static struct pci_controller *u3_agp;
+-static struct pci_controller *u4_pcie;
+-static struct pci_controller *u3_ht;
+ #else
+ static int has_second_ohare;
+ #endif /* CONFIG_PPC64 */
+@@ -776,16 +774,50 @@ static void __init setup_u4_pcie(struct 
+ 	 */
+ 	hose->first_busno = 0x00;
+ 	hose->last_busno = 0xff;
+-	u4_pcie = hose;
++}
++
++static void __init parse_region_decode(struct pci_controller *hose,
++				       u32 decode)
++{
++	unsigned long base, end, next = -1;
++	int i, cur = -1;
++
++	/* Iterate through all bits. We ignore the last bit as this region is
++	 * reserved for the ROM among other niceties
++	 */
++	for (i = 0; i < 31; i++) {
++		if ((decode & (0x80000000 >> i)) == 0)
++			continue;
++		if (i < 16) {
++			base = 0xf0000000 | (((u32)i) << 24);
++			end = base + 0x00ffffff;
++		} else {
++			base = ((u32)i-16) << 28;
++			end = base + 0x0fffffff;
++		}
++		if (base != next) {
++			if (++cur >= 3) {
++				printk(KERN_WARNING "PCI: Too many ranges !\n");
++				break;
++			}
++			hose->mem_resources[cur].flags = IORESOURCE_MEM;
++			hose->mem_resources[cur].name = hose->dn->full_name;
++			hose->mem_resources[cur].start = base;
++			hose->mem_resources[cur].end = end;
++			DBG("  %d: 0x%08lx-0x%08lx\n", cur, base, end);
++		} else {
++			DBG("   :           -0x%08lx\n", end);
++			hose->mem_resources[cur].end = end;
++		}
++		next = end + 1;
++	}
+ }
+ 
+ static void __init setup_u3_ht(struct pci_controller* hose)
+ {
+ 	struct device_node *np = hose->dn;
+-	struct pci_controller *other = NULL;
+ 	struct resource cfg_res, self_res;
+-	int i, cur;
+-
++	u32 decode;
+ 
+ 	hose->ops = &u3_ht_pci_ops;
+ 
+@@ -805,12 +837,9 @@ static void __init setup_u3_ht(struct pc
+ 				 self_res.end - self_res.start + 1);
+ 
+ 	/*
+-	 * /ht node doesn't expose a "ranges" property, so we "remove"
+-	 * regions that have been allocated to AGP. So far, this version of
+-	 * the code doesn't assign any of the 0xfxxxxxxx "fine" memory regions
+-	 * to /ht. We need to fix that sooner or later by either parsing all
+-	 * child "ranges" properties or figuring out the U3 address space
+-	 * decoding logic and then read its configuration register (if any).
++	 * /ht node doesn't expose a "ranges" property, we read the register
++	 * that controls the decoding logic and use that for memory regions.
++	 * The IO region is hard coded since it is fixed in HW as well.
+ 	 */
+ 	hose->io_base_phys = 0xf4000000;
+ 	hose->pci_io_size = 0x00400000;
+@@ -821,76 +850,33 @@ static void __init setup_u3_ht(struct pc
+ 	hose->pci_mem_offset = 0;
+ 	hose->first_busno = 0;
+ 	hose->last_busno = 0xef;
+-	hose->mem_resources[0].name = np->full_name;
+-	hose->mem_resources[0].start = 0x80000000;
+-	hose->mem_resources[0].end = 0xefffffff;
+-	hose->mem_resources[0].flags = IORESOURCE_MEM;
+-
+-	u3_ht = hose;
+-
+-	if (u3_agp != NULL)
+-		other = u3_agp;
+-	else if (u4_pcie != NULL)
+-		other = u4_pcie;
+ 
+-	if (other == NULL) {
+-		DBG("U3/4 has no AGP/PCIE, using full resource range\n");
+-		return;
+-	}
++	/* Note: fix offset when cfg_addr becomes a void * */
++	decode = in_be32(hose->cfg_addr + 0x80);
+ 
+-	/* Fixup bus range vs. PCIE */
+-	if (u4_pcie)
+-		hose->last_busno = u4_pcie->first_busno - 1;
+-
+-	/* We "remove" the AGP resources from the resources allocated to HT,
+-	 * that is we create "holes". However, that code does assumptions
+-	 * that so far happen to be true (cross fingers...), typically that
+-	 * resources in the AGP node are properly ordered
+-	 */
+-	cur = 0;
+-	for (i=0; i<3; i++) {
+-		struct resource *res = &other->mem_resources[i];
+-		if (res->flags != IORESOURCE_MEM)
+-			continue;
+-		/* We don't care about "fine" resources */
+-		if (res->start >= 0xf0000000)
+-			continue;
+-		/* Check if it's just a matter of "shrinking" us in one
+-		 * direction
+-		 */
+-		if (hose->mem_resources[cur].start == res->start) {
+-			DBG("U3/HT: shrink start of %d, %08lx -> %08lx\n",
+-			    cur, hose->mem_resources[cur].start,
+-			    res->end + 1);
+-			hose->mem_resources[cur].start = res->end + 1;
+-			continue;
+-		}
+-		if (hose->mem_resources[cur].end == res->end) {
+-			DBG("U3/HT: shrink end of %d, %08lx -> %08lx\n",
+-			    cur, hose->mem_resources[cur].end,
+-			    res->start - 1);
+-			hose->mem_resources[cur].end = res->start - 1;
+-			continue;
+-		}
+-		/* No, it's not the case, we need a hole */
+-		if (cur == 2) {
+-			/* not enough resources for a hole, we drop part
+-			 * of the range
+-			 */
+-			printk(KERN_WARNING "Running out of resources"
+-			       " for /ht host !\n");
+-			hose->mem_resources[cur].end = res->start - 1;
+-			continue;
+-		}
+-		cur++;
+-		DBG("U3/HT: hole, %d end at %08lx, %d start at %08lx\n",
+-		    cur-1, res->start - 1, cur, res->end + 1);
+-		hose->mem_resources[cur].name = np->full_name;
+-		hose->mem_resources[cur].flags = IORESOURCE_MEM;
+-		hose->mem_resources[cur].start = res->end + 1;
+-		hose->mem_resources[cur].end = hose->mem_resources[cur-1].end;
+-		hose->mem_resources[cur-1].end = res->start - 1;
+-	}
++	DBG("PCI: Apple HT bridge decode register: 0x%08x\n", decode);
++
++	/* NOTE: The decode register setup is a bit weird... region
++	 * 0xf8000000 for example is marked as enabled in there while it's
++	 & actually the memory controller registers.
++	 * That means that we are incorrectly attributing it to HT.
++	 *
++	 * In a similar vein, region 0xf4000000 is actually the HT IO space but
++	 * also marked as enabled in here and 0xf9000000 is used by some other
++	 * internal bits of the northbridge.
++	 *
++	 * Unfortunately, we can't just mask out those bit as we would end
++	 * up with more regions than we can cope (linux can only cope with
++	 * 3 memory regions for a PHB at this stage).
++	 *
++	 * So for now, we just do a little hack. We happen to -know- that
++	 * Apple firmware doesn't assign things below 0xfa000000 for that
++	 * bridge anyway so we mask out all bits we don't want.
++	 */
++	decode &= 0x003fffff;
++
++	/* Now parse the resulting bits and build resources */
++	parse_region_decode(hose, decode);
+ }
+ #endif /* CONFIG_PPC64 */
+ 
+Index: linux-2.6.18/mvl_patches/pro50-0864.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0864.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(864);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

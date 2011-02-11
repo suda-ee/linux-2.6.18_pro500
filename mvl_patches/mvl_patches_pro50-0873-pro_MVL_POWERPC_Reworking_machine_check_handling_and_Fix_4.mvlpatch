@@ -1,0 +1,1331 @@
+#! /usr/bin/env bash
+# Patch: -pro_MVL_POWERPC_Reworking_machine_check_handling_and_Fix_4
+# Date: Wed Mar  5 11:44:21 2008
+# MR: 26747
+# Disposition: backport from
+# git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# Adjustments:
+#     Some changes to cputable.c part to make it apply with no fuzz.
+# 
+# From 47c0bd1ae24c34e851cf0f2b02ef2a6847d7ae15 Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Fri, 21 Dec 2007 15:39:21 +1100
+# Subject: [PATCH] [POWERPC] Reworking machine check handling and Fix 440/440A
+# 
+# This adds a cputable function pointer for the CPU-side machine
+# check handling. The semantic is still the same as the old one,
+# the one in ppc_md. overrides the one in cputable, though
+# ultimately we'll want to change that so the CPU gets first.
+# 
+# This removes CONFIG_440A which was a problem for multiplatform
+# kernels and instead fixes up the IVOR at runtime from a setup_cpu
+# function. The "A" version of the machine check also tweaks the
+# regs->trap value to differenciate the 2 versions at the C level.
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+
+PATCHNUM=873
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26747
+Disposition: backport from
+git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+Adjustments:
+    Some changes to cputable.c part to make it apply with no fuzz.
+
+From 47c0bd1ae24c34e851cf0f2b02ef2a6847d7ae15 Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Fri, 21 Dec 2007 15:39:21 +1100
+Subject: [PATCH] [POWERPC] Reworking machine check handling and Fix 440/440A
+
+This adds a cputable function pointer for the CPU-side machine
+check handling. The semantic is still the same as the old one,
+the one in ppc_md. overrides the one in cputable, though
+ultimately we'll want to change that so the CPU gets first.
+
+This removes CONFIG_440A which was a problem for multiplatform
+kernels and instead fixes up the IVOR at runtime from a setup_cpu
+function. The "A" version of the machine check also tweaks the
+regs->trap value to differenciate the 2 versions at the C level.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+Index: linux-2.6.18/arch/powerpc/kernel/cpu_setup_44x.S
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/cpu_setup_44x.S
++++ linux-2.6.18/arch/powerpc/kernel/cpu_setup_44x.S
+@@ -23,11 +23,20 @@ _GLOBAL(__setup_cpu_440epx)
+ 	mflr	r4
+ 	bl	__init_fpu_44x
+ 	bl	__plb_disable_wrp
++	bl	__fixup_440A_mcheck
+ 	mtlr	r4
+ 	blr
+ _GLOBAL(__setup_cpu_440grx)
+ 	b	__plb_disable_wrp
++_GLOBAL(__setup_cpu_440gx)
++_GLOBAL(__setup_cpu_440spe)
++	b	__fixup_440A_mcheck
+ 
++ /* Temporary fixup for arch/ppc until we kill the whole thing */
++#ifndef CONFIG_PPC_MERGE
++_GLOBAL(__fixup_440A_mcheck)
++	blr
++#endif
+ 
+ /* enable APU between CPU and FPU */
+ _GLOBAL(__init_fpu_44x)
+Index: linux-2.6.18/arch/powerpc/kernel/cputable.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/cputable.c
++++ linux-2.6.18/arch/powerpc/kernel/cputable.c
+@@ -33,7 +33,9 @@ EXPORT_SYMBOL(cur_cpu_spec);
+ #ifdef CONFIG_PPC32
+ extern void __setup_cpu_440ep(unsigned long offset, struct cpu_spec* spec);
+ extern void __setup_cpu_440epx(unsigned long offset, struct cpu_spec* spec);
++extern void __setup_cpu_440gx(unsigned long offset, struct cpu_spec* spec);
+ extern void __setup_cpu_440grx(unsigned long offset, struct cpu_spec* spec);
++extern void __setup_cpu_440spe(unsigned long offset, struct cpu_spec* spec);
+ extern void __setup_cpu_603(unsigned long offset, struct cpu_spec* spec);
+ extern void __setup_cpu_604(unsigned long offset, struct cpu_spec* spec);
+ extern void __setup_cpu_750(unsigned long offset, struct cpu_spec* spec);
+@@ -90,6 +92,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.num_pmcs		= 8,
+ 		.oprofile_cpu_type	= "ppc64/power3",
+ 		.oprofile_type		= PPC_OPROFILE_RS64,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "power3",
+ 	},
+ 	{	/* Power3+ */
+@@ -103,6 +106,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.num_pmcs		= 8,
+ 		.oprofile_cpu_type	= "ppc64/power3",
+ 		.oprofile_type		= PPC_OPROFILE_RS64,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "power3",
+ 	},
+ 	{	/* Northstar */
+@@ -116,6 +120,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.num_pmcs		= 8,
+ 		.oprofile_cpu_type	= "ppc64/rs64",
+ 		.oprofile_type		= PPC_OPROFILE_RS64,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "rs64",
+ 	},
+ 	{	/* Pulsar */
+@@ -129,6 +134,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.num_pmcs		= 8,
+ 		.oprofile_cpu_type	= "ppc64/rs64",
+ 		.oprofile_type		= PPC_OPROFILE_RS64,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "rs64",
+ 	},
+ 	{	/* I-star */
+@@ -142,6 +148,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.num_pmcs		= 8,
+ 		.oprofile_cpu_type	= "ppc64/rs64",
+ 		.oprofile_type		= PPC_OPROFILE_RS64,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "rs64",
+ 	},
+ 	{	/* S-star */
+@@ -155,6 +162,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.num_pmcs		= 8,
+ 		.oprofile_cpu_type	= "ppc64/rs64",
+ 		.oprofile_type		= PPC_OPROFILE_RS64,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "rs64",
+ 	},
+ 	{	/* Power4 */
+@@ -168,6 +176,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.num_pmcs		= 8,
+ 		.oprofile_cpu_type	= "ppc64/power4",
+ 		.oprofile_type		= PPC_OPROFILE_POWER4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "power4",
+ 	},
+ 	{	/* Power4+ */
+@@ -181,6 +190,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.num_pmcs		= 8,
+ 		.oprofile_cpu_type	= "ppc64/power4",
+ 		.oprofile_type		= PPC_OPROFILE_POWER4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "power4",
+ 	},
+ 	{	/* PPC970 */
+@@ -197,6 +207,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_restore		= __restore_cpu_ppc970,
+ 		.oprofile_cpu_type	= "ppc64/970",
+ 		.oprofile_type		= PPC_OPROFILE_POWER4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc970",
+ 	},
+ 	{	/* PPC970FX */
+@@ -213,6 +224,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_restore		= __restore_cpu_ppc970,
+ 		.oprofile_cpu_type	= "ppc64/970",
+ 		.oprofile_type		= PPC_OPROFILE_POWER4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc970",
+ 	},
+ 	{	/* PPC970MP */
+@@ -229,6 +241,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_restore		= __restore_cpu_ppc970,
+ 		.oprofile_cpu_type	= "ppc64/970",
+ 		.oprofile_type		= PPC_OPROFILE_POWER4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc970",
+ 	},
+ 	{	/* PPC970GX */
+@@ -244,6 +257,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_setup		= __setup_cpu_ppc970,
+ 		.oprofile_cpu_type	= "ppc64/970",
+ 		.oprofile_type		= PPC_OPROFILE_POWER4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc970",
+ 	},
+ 	{	/* Power5 GR */
+@@ -262,6 +276,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		 */
+ 		.oprofile_mmcra_sihv	= MMCRA_SIHV,
+ 		.oprofile_mmcra_sipr	= MMCRA_SIPR,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "power5",
+ 	},
+ 	{	/* Power5 GS */
+@@ -277,6 +292,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.oprofile_type		= PPC_OPROFILE_POWER4,
+ 		.oprofile_mmcra_sihv	= MMCRA_SIHV,
+ 		.oprofile_mmcra_sipr	= MMCRA_SIPR,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "power5+",
+ 	},
+ 	{	/* POWER6 in P5+ mode; 2.04-compliant processor */
+@@ -294,6 +310,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.oprofile_mmcra_sipr	= POWER6_MMCRA_SIPR,
+ 		.oprofile_mmcra_clear	= POWER6_MMCRA_THRM |
+ 			POWER6_MMCRA_OTHER,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "power5+",
+ 	},
+ 	{	/* Power6 */
+@@ -312,6 +329,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.oprofile_mmcra_sipr	= POWER6_MMCRA_SIPR,
+ 		.oprofile_mmcra_clear	= POWER6_MMCRA_THRM |
+ 			POWER6_MMCRA_OTHER,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "power6x",
+ 	},
+ 	{	/* 2.05-compliant processor, i.e. Power6 "architected" mode */
+@@ -329,6 +347,7 @@ static struct cpu_spec cpu_specs[] = {
+  		.oprofile_mmcra_sipr	= POWER6_MMCRA_SIPR,
+  		.oprofile_mmcra_clear	= POWER6_MMCRA_THRM |
+  			POWER6_MMCRA_OTHER,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "power6",
+ 	},
+ 	{	/* Cell Broadband Engine */
+@@ -344,6 +363,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.num_pmcs		= 4,
+ 		.oprofile_cpu_type	= "ppc64/cell-be",
+ 		.oprofile_type		= PPC_OPROFILE_CELL,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc-cell-be",
+ 	},
+ 	{	/* PA Semi PA6T */
+@@ -355,6 +375,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.icache_bsize		= 64,
+ 		.dcache_bsize		= 64,
+ 		.num_pmcs		= 6,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "pa6t",
+ 	},
+ 	{	/* default match */
+@@ -366,6 +387,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.icache_bsize		= 128,
+ 		.dcache_bsize		= 128,
+ 		.num_pmcs		= 6,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "power4",
+ 	}
+ #endif	/* CONFIG_PPC64 */
+@@ -380,6 +402,7 @@ static struct cpu_spec cpu_specs[] = {
+ 			PPC_FEATURE_UNIFIED_CACHE | PPC_FEATURE_NO_TB,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc601",
+ 	},
+ 	{	/* 603 */
+@@ -391,6 +414,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
+ 		.cpu_setup		= __setup_cpu_603,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc603",
+ 	},
+ 	{	/* 603e */
+@@ -402,6 +426,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
+ 		.cpu_setup		= __setup_cpu_603,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc603",
+ 	},
+ 	{	/* 603ev */
+@@ -413,6 +438,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
+ 		.cpu_setup		= __setup_cpu_603,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc603",
+ 	},
+ 	{	/* 604 */
+@@ -425,6 +451,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 2,
+ 		.cpu_setup		= __setup_cpu_604,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc604",
+ 	},
+ 	{	/* 604e */
+@@ -437,6 +464,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_604,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc604",
+ 	},
+ 	{	/* 604r */
+@@ -449,6 +477,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_604,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc604",
+ 	},
+ 	{	/* 604ev */
+@@ -461,6 +490,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_604,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc604",
+ 	},
+ 	{	/* 740/750 (0x4202, don't support TAU ?) */
+@@ -473,6 +503,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_750,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc750",
+ 	},
+ 	{	/* 750CX (80100 and 8010x?) */
+@@ -485,6 +516,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_750cx,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc750",
+ 	},
+ 	{	/* 750CX (82201 and 82202) */
+@@ -497,6 +529,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_750cx,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc750",
+ 	},
+ 	{	/* 750CXe (82214) */
+@@ -509,6 +542,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_750cx,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc750",
+ 	},
+ 	{	/* 750CXe "Gekko" (83214) */
+@@ -521,6 +555,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_750cx,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc750",
+ 	},
+ 	{	/* 750CL */
+@@ -533,6 +568,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_750,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc750",
+ 	},
+ 	{	/* 745/755 */
+@@ -545,6 +581,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_750,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc750",
+ 	},
+ 	{	/* 750FX rev 1.x */
+@@ -557,6 +594,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_750,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc750",
+ 	},
+ 	{	/* 750FX rev 2.0 must disable HID0[DPM] */
+@@ -569,6 +607,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_750,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc750",
+ 	},
+ 	{	/* 750FX (All revs except 2.0) */
+@@ -581,6 +620,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_750fx,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc750",
+ 	},
+ 	{	/* 750GX */
+@@ -593,6 +633,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_750fx,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc750",
+ 	},
+ 	{	/* 740/750 (L2CR bit need fixup for 740) */
+@@ -605,6 +646,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_750,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc750",
+ 	},
+ 	{	/* 7400 rev 1.1 ? (no TAU) */
+@@ -618,6 +660,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_7400,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc7400",
+ 	},
+ 	{	/* 7400 */
+@@ -631,6 +674,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_7400,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc7400",
+ 	},
+ 	{	/* 7410 */
+@@ -644,6 +688,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.dcache_bsize		= 32,
+ 		.num_pmcs		= 4,
+ 		.cpu_setup		= __setup_cpu_7410,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc7400",
+ 	},
+ 	{	/* 7450 2.0 - no doze/nap */
+@@ -659,6 +704,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_setup		= __setup_cpu_745x,
+ 		.oprofile_cpu_type      = "ppc/7450",
+ 		.oprofile_type		= PPC_OPROFILE_G4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc7450",
+ 	},
+ 	{	/* 7450 2.1 */
+@@ -674,6 +720,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_setup		= __setup_cpu_745x,
+ 		.oprofile_cpu_type      = "ppc/7450",
+ 		.oprofile_type		= PPC_OPROFILE_G4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc7450",
+ 	},
+ 	{	/* 7450 2.3 and newer */
+@@ -689,6 +736,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_setup		= __setup_cpu_745x,
+ 		.oprofile_cpu_type      = "ppc/7450",
+ 		.oprofile_type		= PPC_OPROFILE_G4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc7450",
+ 	},
+ 	{	/* 7455 rev 1.x */
+@@ -704,6 +752,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_setup		= __setup_cpu_745x,
+ 		.oprofile_cpu_type      = "ppc/7450",
+ 		.oprofile_type		= PPC_OPROFILE_G4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc7450",
+ 	},
+ 	{	/* 7455 rev 2.0 */
+@@ -719,6 +768,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_setup		= __setup_cpu_745x,
+ 		.oprofile_cpu_type      = "ppc/7450",
+ 		.oprofile_type		= PPC_OPROFILE_G4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc7450",
+ 	},
+ 	{	/* 7455 others */
+@@ -734,6 +784,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_setup		= __setup_cpu_745x,
+ 		.oprofile_cpu_type      = "ppc/7450",
+ 		.oprofile_type		= PPC_OPROFILE_G4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc7450",
+ 	},
+ 	{	/* 7447/7457 Rev 1.0 */
+@@ -749,6 +800,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_setup		= __setup_cpu_745x,
+ 		.oprofile_cpu_type      = "ppc/7450",
+ 		.oprofile_type		= PPC_OPROFILE_G4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc7450",
+ 	},
+ 	{	/* 7447/7457 Rev 1.1 */
+@@ -764,6 +816,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_setup		= __setup_cpu_745x,
+ 		.oprofile_cpu_type      = "ppc/7450",
+ 		.oprofile_type		= PPC_OPROFILE_G4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc7450",
+ 	},
+ 	{	/* 7447/7457 Rev 1.2 and later */
+@@ -778,6 +831,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_setup		= __setup_cpu_745x,
+ 		.oprofile_cpu_type      = "ppc/7450",
+ 		.oprofile_type		= PPC_OPROFILE_G4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc7450",
+ 	},
+ 	{	/* 7447A */
+@@ -793,6 +847,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_setup		= __setup_cpu_745x,
+ 		.oprofile_cpu_type      = "ppc/7450",
+ 		.oprofile_type		= PPC_OPROFILE_G4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc7450",
+ 	},
+ 	{	/* 7448 */
+@@ -808,6 +863,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_setup		= __setup_cpu_745x,
+ 		.oprofile_cpu_type      = "ppc/7450",
+ 		.oprofile_type		= PPC_OPROFILE_G4,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc7450",
+ 	},
+ 	{	/* 82xx (8240, 8245, 8260 are all 603e cores) */
+@@ -819,6 +875,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
+ 		.cpu_setup		= __setup_cpu_603,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc603",
+ 	},
+ 	{	/* All G2_LE (603e core, plus some) have the same pvr */
+@@ -830,6 +887,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
+ 		.cpu_setup		= __setup_cpu_603,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc603",
+ 	},
+ 	{	/* e300c1 (a 603e core, plus some) on 83xx */
+@@ -841,6 +899,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
+ 		.cpu_setup		= __setup_cpu_603,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc603",
+ 	},
+ 	{	/* e300c2 (an e300c1 core, plus some, minus FPU) on 83xx */
+@@ -852,6 +911,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
+ 		.cpu_setup		= __setup_cpu_603,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc603",
+ 	},
+ 	{	/* e300c3 on 83xx  */
+@@ -863,6 +923,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
+ 		.cpu_setup		= __setup_cpu_603,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc603",
+ 	},
+ 	{	/* default match, we assume split I/D cache & TB (non-601)... */
+@@ -873,6 +934,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_user_features	= COMMON_USER,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc603",
+ 	},
+ #endif /* CLASSIC_PPC */
+@@ -887,6 +949,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_user_features	= PPC_FEATURE_32 | PPC_FEATURE_HAS_MMU,
+ 		.icache_bsize		= 16,
+ 		.dcache_bsize		= 16,
++		.machine_check		= machine_check_generic,
+ 		.platform		= "ppc823",
+ 	},
+ #endif /* CONFIG_8xx */
+@@ -899,6 +962,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_user_features	= PPC_FEATURE_32 | PPC_FEATURE_HAS_MMU,
+ 		.icache_bsize		= 16,
+ 		.dcache_bsize		= 16,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc403",
+ 	},
+ 	{	/* 403GCX */
+@@ -910,6 +974,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		 	PPC_FEATURE_HAS_MMU | PPC_FEATURE_NO_TB,
+ 		.icache_bsize		= 16,
+ 		.dcache_bsize		= 16,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc403",
+ 	},
+ 	{	/* 403G ?? */
+@@ -920,6 +985,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_user_features	= PPC_FEATURE_32 | PPC_FEATURE_HAS_MMU,
+ 		.icache_bsize		= 16,
+ 		.dcache_bsize		= 16,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc403",
+ 	},
+ 	{	/* 405GP */
+@@ -931,6 +997,7 @@ static struct cpu_spec cpu_specs[] = {
+ 			PPC_FEATURE_HAS_MMU | PPC_FEATURE_HAS_4xxMAC,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc405",
+ 	},
+ 	{	/* STB 03xxx */
+@@ -942,6 +1009,7 @@ static struct cpu_spec cpu_specs[] = {
+ 			PPC_FEATURE_HAS_MMU | PPC_FEATURE_HAS_4xxMAC,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc405",
+ 	},
+ 	{	/* STB 04xxx */
+@@ -953,6 +1021,7 @@ static struct cpu_spec cpu_specs[] = {
+ 			PPC_FEATURE_HAS_MMU | PPC_FEATURE_HAS_4xxMAC,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc405",
+ 	},
+ 	{	/* NP405L */
+@@ -964,6 +1033,7 @@ static struct cpu_spec cpu_specs[] = {
+ 			PPC_FEATURE_HAS_MMU | PPC_FEATURE_HAS_4xxMAC,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc405",
+ 	},
+ 	{	/* NP4GS3 */
+@@ -975,6 +1045,7 @@ static struct cpu_spec cpu_specs[] = {
+ 			PPC_FEATURE_HAS_MMU | PPC_FEATURE_HAS_4xxMAC,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc405",
+ 	},
+ 	{   /* NP405H */
+@@ -986,6 +1057,7 @@ static struct cpu_spec cpu_specs[] = {
+ 			PPC_FEATURE_HAS_MMU | PPC_FEATURE_HAS_4xxMAC,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc405",
+ 	},
+ 	{	/* 405GPr */
+@@ -997,6 +1069,7 @@ static struct cpu_spec cpu_specs[] = {
+ 			PPC_FEATURE_HAS_MMU | PPC_FEATURE_HAS_4xxMAC,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc405",
+ 	},
+ 	{   /* STBx25xx */
+@@ -1008,6 +1081,7 @@ static struct cpu_spec cpu_specs[] = {
+ 			PPC_FEATURE_HAS_MMU | PPC_FEATURE_HAS_4xxMAC,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc405",
+ 	},
+ 	{	/* 405LP */
+@@ -1018,6 +1092,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_user_features	= PPC_FEATURE_32 | PPC_FEATURE_HAS_MMU,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc405",
+ 	},
+ 	{	/* Xilinx Virtex-II Pro  */
+@@ -1029,6 +1104,7 @@ static struct cpu_spec cpu_specs[] = {
+ 			PPC_FEATURE_HAS_MMU | PPC_FEATURE_HAS_4xxMAC,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc405",
+ 	},
+ 	{	/* Xilinx Virtex-4 FX */
+@@ -1040,6 +1116,7 @@ static struct cpu_spec cpu_specs[] = {
+ 			PPC_FEATURE_HAS_MMU | PPC_FEATURE_HAS_4xxMAC,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc405",
+ 	},
+ 	{	/* 405EP */
+@@ -1051,6 +1128,7 @@ static struct cpu_spec cpu_specs[] = {
+ 			PPC_FEATURE_HAS_MMU | PPC_FEATURE_HAS_4xxMAC,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc405",
+ 	},
+ 	{	/* 405EX */
+@@ -1062,6 +1140,7 @@ static struct cpu_spec cpu_specs[] = {
+ 			PPC_FEATURE_HAS_MMU | PPC_FEATURE_HAS_4xxMAC,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc405",
+ 	},
+ 
+@@ -1075,6 +1154,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_user_features	= COMMON_USER_BOOKE,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc440",
+ 	},
+ 	{ /* Use logical PVR for 440EP (logical pvr = pvr | 0x8) */
+@@ -1086,6 +1166,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
+ 		.cpu_setup		= __setup_cpu_440ep,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc440",
+ 	},
+ 	{
+@@ -1096,6 +1177,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_user_features	= COMMON_USER_BOOKE | PPC_FEATURE_HAS_FPU,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc440",
+ 	},
+ 	{ /* Use logical PVR for 440EP (logical pvr = pvr | 0x8) */
+@@ -1107,6 +1189,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
+ 		.cpu_setup		= __setup_cpu_440ep,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc440",
+ 	},
+ 	{ /* 440GRX */
+@@ -1118,6 +1201,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
+ 		.cpu_setup		= __setup_cpu_440grx,
++		.machine_check		= machine_check_440A,
+ 		.platform		= "ppc440",
+ 	},
+ 	{ /* Use logical PVR for 440EPx (logical pvr = pvr | 0x8) */
+@@ -1129,6 +1213,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
+ 		.cpu_setup		= __setup_cpu_440epx,
++		.machine_check		= machine_check_440A,
+ 		.platform		= "ppc440",
+ 	},
+ 	{	/* 440GP Rev. B */
+@@ -1139,6 +1224,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_user_features	= COMMON_USER_BOOKE,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc440gp",
+ 	},
+ 	{	/* 440GP Rev. C */
+@@ -1149,6 +1235,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_user_features	= COMMON_USER_BOOKE,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc440gp",
+ 	},
+ 	{ /* 440GX Rev. A */
+@@ -1159,6 +1246,8 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_user_features	= COMMON_USER_BOOKE,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.cpu_setup		= __setup_cpu_440gx,
++		.machine_check		= machine_check_440A,
+ 		.platform		= "ppc440",
+ 	},
+ 	{ /* 440GX Rev. B */
+@@ -1169,6 +1258,8 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_user_features	= COMMON_USER_BOOKE,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.cpu_setup		= __setup_cpu_440gx,
++		.machine_check		= machine_check_440A,
+ 		.platform		= "ppc440",
+ 	},
+ 	{ /* 440GX Rev. C */
+@@ -1179,6 +1270,8 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_user_features	= COMMON_USER_BOOKE,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.cpu_setup		= __setup_cpu_440gx,
++		.machine_check		= machine_check_440A,
+ 		.platform		= "ppc440",
+ 	},
+ 	{ /* 440GX Rev. F */
+@@ -1189,6 +1282,8 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_user_features	= COMMON_USER_BOOKE,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.cpu_setup		= __setup_cpu_440gx,
++		.machine_check		= machine_check_440A,
+ 		.platform		= "ppc440",
+ 	},
+ 	{ /* 440SP Rev. A */
+@@ -1199,6 +1294,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_user_features	= COMMON_USER_BOOKE,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_4xx,
+ 		.platform		= "ppc440",
+ 	},
+ 	{ /* 440SPe Rev. A */
+@@ -1209,6 +1305,8 @@ static struct cpu_spec cpu_specs[] = {
+ 		.cpu_user_features	= COMMON_USER_BOOKE,
+ 		.icache_bsize		= 32,
+ 		.dcache_bsize		= 32,
++		.cpu_setup		= __setup_cpu_440spe,
++		.machine_check		= machine_check_440A,
+ 		.platform		= "ppc440",
+ 	},
+ #endif /* CONFIG_44x */
+@@ -1223,6 +1321,7 @@ static struct cpu_spec cpu_specs[] = {
+ 			PPC_FEATURE_HAS_EFP_SINGLE |
+ 			PPC_FEATURE_UNIFIED_CACHE,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_e200,
+ 		.platform		= "ppc5554",
+ 	},
+ 	{	/* e200z6 */
+@@ -1236,6 +1335,7 @@ static struct cpu_spec cpu_specs[] = {
+ 			PPC_FEATURE_HAS_EFP_SINGLE |
+ 			PPC_FEATURE_UNIFIED_CACHE,
+ 		.dcache_bsize		= 32,
++		.machine_check		= machine_check_e200,
+ 		.platform		= "ppc5554",
+ 	},
+ 	{	/* e500 */
+@@ -1252,6 +1352,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.num_pmcs		= 4,
+ 		.oprofile_cpu_type	= "ppc/e500",
+ 		.oprofile_type		= PPC_OPROFILE_BOOKE,
++		.machine_check		= machine_check_e500,
+ 		.platform		= "ppc8540",
+ 	},
+ 	{	/* e500v2 */
+@@ -1269,6 +1370,7 @@ static struct cpu_spec cpu_specs[] = {
+ 		.num_pmcs		= 4,
+ 		.oprofile_cpu_type	= "ppc/e500",
+ 		.oprofile_type		= PPC_OPROFILE_BOOKE,
++		.machine_check		= machine_check_e500,
+ 		.platform		= "ppc8548",
+ 	},
+ #endif
+Index: linux-2.6.18/include/asm-powerpc/cputable.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/cputable.h
++++ linux-2.6.18/include/asm-powerpc/cputable.h
+@@ -50,6 +50,14 @@ enum powerpc_oprofile_type {
+ 	PPC_OPROFILE_CELL = 5,
+ };
+ 
++struct pt_regs;
++
++extern int machine_check_generic(struct pt_regs *regs);
++extern int machine_check_4xx(struct pt_regs *regs);
++extern int machine_check_440A(struct pt_regs *regs);
++extern int machine_check_e500(struct pt_regs *regs);
++extern int machine_check_e200(struct pt_regs *regs);
++
+ struct cpu_spec {
+ 	/* CPU is matched via (PVR & pvr_mask) == pvr_value */
+ 	unsigned int	pvr_mask;
+@@ -88,6 +96,11 @@ struct cpu_spec {
+ 
+ 	/* Name of processor class, for the ELF AT_PLATFORM entry */
+ 	char		*platform;
++
++	/* Processor specific machine check handling. Return negative
++	 * if the error is fatal, 1 if it was fully recovered and 0 to
++	 * pass up (not CPU originated) */
++	int		(*machine_check)(struct pt_regs *regs);
+ };
+ 
+ extern struct cpu_spec		*cur_cpu_spec;
+Index: linux-2.6.18/arch/powerpc/kernel/head_44x.S
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/head_44x.S
++++ linux-2.6.18/arch/powerpc/kernel/head_44x.S
+@@ -289,11 +289,8 @@ interrupt_base:
+ 	CRITICAL_EXCEPTION(0x0100, CriticalInput, unknown_exception)
+ 
+ 	/* Machine Check Interrupt */
+-#ifdef CONFIG_440A
+-	MCHECK_EXCEPTION(0x0200, MachineCheck, machine_check_exception)
+-#else
+ 	CRITICAL_EXCEPTION(0x0200, MachineCheck, machine_check_exception)
+-#endif
++	MCHECK_EXCEPTION(0x0210, MachineCheckA, machine_check_exception)
+ 
+ 	/* Data Storage Interrupt */
+ 	START_EXCEPTION(DataStorage)
+@@ -674,6 +671,15 @@ finish_tlb_load:
+  */
+ 
+ /*
++ * Adjust the machine check IVOR on 440A cores
++ */
++_GLOBAL(__fixup_440A_mcheck)
++	li	r3,MachineCheckA@l
++	mtspr	SPRN_IVOR1,r3
++	sync
++	blr
++
++/*
+  * extern void giveup_altivec(struct task_struct *prev)
+  *
+  * The 44x core does not have an AltiVec unit.
+Index: linux-2.6.18/arch/powerpc/kernel/head_booke.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/head_booke.h
++++ linux-2.6.18/arch/powerpc/kernel/head_booke.h
+@@ -166,7 +166,7 @@ label:
+ 	mfspr	r5,SPRN_ESR;					\
+ 	stw	r5,_ESR(r11);					\
+ 	addi	r3,r1,STACK_FRAME_OVERHEAD;			\
+-	EXC_XFER_TEMPLATE(hdlr, n+2, (MSR_KERNEL & ~(MSR_ME|MSR_DE|MSR_CE)), \
++	EXC_XFER_TEMPLATE(hdlr, n+4, (MSR_KERNEL & ~(MSR_ME|MSR_DE|MSR_CE)), \
+ 			  NOCOPY, mcheck_transfer_to_handler,   \
+ 			  ret_from_mcheck_exc)
+ 
+Index: linux-2.6.18/arch/powerpc/kernel/traps.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/kernel/traps.c
++++ linux-2.6.18/arch/powerpc/kernel/traps.c
+@@ -321,18 +321,25 @@ static inline int check_io_access(struct
+ #define clear_single_step(regs)	((regs)->msr &= ~MSR_SE)
+ #endif
+ 
+-static int generic_machine_check_exception(struct pt_regs *regs)
++#if defined(CONFIG_4xx)
++int machine_check_4xx(struct pt_regs *regs)
+ {
+ 	unsigned long reason = get_mc_reason(regs);
+ 
+-#if defined(CONFIG_4xx) && !defined(CONFIG_440A)
+ 	if (reason & ESR_IMCP) {
+ 		printk("Instruction");
+ 		mtspr(SPRN_ESR, reason & ~ESR_IMCP);
+ 	} else
+ 		printk("Data");
+ 	printk(" machine check in kernel mode.\n");
+-#elif defined(CONFIG_440A)
++
++	return 0;
++}
++
++int machine_check_440A(struct pt_regs *regs)
++{
++	unsigned long reason = get_mc_reason(regs);
++
+ 	printk("Machine check in kernel mode.\n");
+ 	if (reason & ESR_IMCP){
+ 		printk("Instruction Synchronous Machine Check exception\n");
+@@ -362,7 +369,13 @@ static int generic_machine_check_excepti
+ 		/* Clear MCSR */
+ 		mtspr(SPRN_MCSR, mcsr);
+ 	}
+-#elif defined (CONFIG_E500)
++	return 0;
++}
++#elif defined(CONFIG_E500)
++int machine_check_e500(struct pt_regs *regs)
++{
++	unsigned long reason = get_mc_reason(regs);
++
+ 	printk("Machine check in kernel mode.\n");
+ 	printk("Caused by (from MCSR=%lx): ", reason);
+ 
+@@ -390,7 +403,14 @@ static int generic_machine_check_excepti
+ 		printk("Bus - Instruction Parity Error\n");
+ 	if (reason & MCSR_BUS_RPERR)
+ 		printk("Bus - Read Parity Error\n");
+-#elif defined (CONFIG_E200)
++
++	return 0;
++}
++#elif defined(CONFIG_E200)
++int machine_check_e200(struct pt_regs *regs)
++{
++	unsigned long reason = get_mc_reason(regs);
++
+ 	printk("Machine check in kernel mode.\n");
+ 	printk("Caused by (from MCSR=%lx): ", reason);
+ 
+@@ -408,7 +428,14 @@ static int generic_machine_check_excepti
+ 		printk("Bus - Read Bus Error on data load\n");
+ 	if (reason & MCSR_BUS_WRERR)
+ 		printk("Bus - Write Bus Error on buffered store or cache line push\n");
+-#else /* !CONFIG_4xx && !CONFIG_E500 && !CONFIG_E200 */
++
++	return 0;
++}
++#else
++int machine_check_generic(struct pt_regs *regs)
++{
++	unsigned long reason = get_mc_reason(regs);
++
+ 	printk("Machine check in kernel mode.\n");
+ 	printk("Caused by (from SRR1=%lx): ", reason);
+ 	switch (reason & 0x601F0000) {
+@@ -438,22 +465,26 @@ static int generic_machine_check_excepti
+ 	default:
+ 		printk("Unknown values in msr\n");
+ 	}
+-#endif /* CONFIG_4xx */
+-
+ 	return 0;
+ }
++#endif /* everything else */
+ 
+ void machine_check_exception(struct pt_regs *regs)
+ {
+ 	int recover = 0;
+ 
+-	/* See if any machine dependent calls */
++	/* See if any machine dependent calls. In theory, we would want
++	 * to call the CPU first, and call the ppc_md. one if the CPU
++	 * one returns a positive number. However there is existing code
++	 * that assumes the board gets a first chance, so let's keep it
++	 * that way for now and fix things later. --BenH.
++	 */
+ 	if (ppc_md.machine_check_exception)
+ 		recover = ppc_md.machine_check_exception(regs);
+-	else
+-		recover = generic_machine_check_exception(regs);
++	else if (cur_cpu_spec->machine_check)
++		recover = cur_cpu_spec->machine_check(regs);
+ 
+-	if (recover)
++	if (recover > 0)
+ 		return;
+ 
+ 	if (user_mode(regs)) {
+@@ -463,7 +494,12 @@ void machine_check_exception(struct pt_r
+ 	}
+ 
+ #if defined(CONFIG_8xx) && defined(CONFIG_PCI)
+-	/* the qspan pci read routines can cause machine checks -- Cort */
++	/* the qspan pci read routines can cause machine checks -- Cort
++	 *
++	 * yuck !!! that totally needs to go away ! There are better ways
++	 * to deal with that than having a wart in the mcheck handler.
++	 * -- BenH
++	 */
+ 	bad_page_fault(regs, regs->dar, SIGBUS);
+ 	return;
+ #endif
+Index: linux-2.6.18/arch/powerpc/platforms/44x/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/platforms/44x/Kconfig
++++ linux-2.6.18/arch/powerpc/platforms/44x/Kconfig
+@@ -76,11 +76,6 @@ config 440GX
+ config 440SP
+ 	bool
+ 
+-config 440A
+-	bool
+-	depends on 440GX || 440EPX || 440GRX
+-	default y
+-
+ # 44x errata/workaround config symbols, selected by the CPU models above
+ config IBM440EP_ERR42
+ 	bool
+Index: linux-2.6.18/include/asm-powerpc/ptrace.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/ptrace.h
++++ linux-2.6.18/include/asm-powerpc/ptrace.h
+@@ -99,7 +99,8 @@ extern unsigned long profile_pc(struct p
+  */
+ #define FULL_REGS(regs)		(((regs)->trap & 1) == 0)
+ #ifndef __powerpc64__
+-#define IS_CRITICAL_EXC(regs)	(((regs)->trap & 2) == 0)
++#define IS_CRITICAL_EXC(regs)	(((regs)->trap & 2) != 0)
++#define IS_MCHECK_EXC(regs)	(((regs)->trap & 4) != 0)
+ #endif /* ! __powerpc64__ */
+ #define TRAP(regs)		((regs)->trap & ~0xF)
+ #ifdef __powerpc64__
+Index: linux-2.6.18/include/asm-powerpc/reg_booke.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-powerpc/reg_booke.h
++++ linux-2.6.18/include/asm-powerpc/reg_booke.h
+@@ -207,7 +207,6 @@
+ #define	CCR1_TCS	0x00000080 /* Timer Clock Select */
+ 
+ /* Bit definitions for the MCSR. */
+-#ifdef CONFIG_440A
+ #define MCSR_MCS	0x80000000 /* Machine Check Summary */
+ #define MCSR_IB		0x40000000 /* Instruction PLB Error */
+ #define MCSR_DRB	0x20000000 /* Data Read PLB Error */
+@@ -217,7 +216,7 @@
+ #define MCSR_DCSP	0x02000000 /* D-Cache Search Parity Error */
+ #define MCSR_DCFP	0x01000000 /* D-Cache Flush Parity Error */
+ #define MCSR_IMPE	0x00800000 /* Imprecise Machine Check Exception */
+-#endif
++
+ #ifdef CONFIG_E500
+ #define MCSR_MCP 	0x80000000UL /* Machine Check Input Pin */
+ #define MCSR_ICPERR 	0x40000000UL /* I-Cache Parity Error */
+Index: linux-2.6.18/include/asm-ppc/reg_booke.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-ppc/reg_booke.h
++++ linux-2.6.18/include/asm-ppc/reg_booke.h
+@@ -207,7 +207,7 @@
+ #define	CCR1_TCS	0x00000080 /* Timer Clock Select */
+ 
+ /* Bit definitions for the MCSR. */
+-#ifdef CONFIG_440A
++#ifdef CONFIG_4xx
+ #define MCSR_MCS	0x80000000 /* Machine Check Summary */
+ #define MCSR_IB		0x40000000 /* Instruction PLB Error */
+ #define MCSR_DRB	0x20000000 /* Data Read PLB Error */
+Index: linux-2.6.18/mvl_patches/pro50-0873.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0873.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(873);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

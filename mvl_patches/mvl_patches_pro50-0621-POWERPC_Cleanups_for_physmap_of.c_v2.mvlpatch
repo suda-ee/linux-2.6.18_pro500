@@ -1,0 +1,653 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Cleanups_for_physmap_of.c_v2
+# Date: Fri Nov  9 15:03:10 2007
+# Source: git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux-2.6.git
+# MR: 25793
+# Type: Defect Fix
+# Disposition: backport
+# Signed-off-by: Randy Vinson <rvinson@mvista.com>
+# Description:
+# From c4d5e375470862fd741f93bf0686d7ac2f7fdce4 Mon Sep 17 00:00:00 2001
+# From: David Gibson <david@gibson.dropbear.id.au>
+# Date: Thu, 20 Sep 2007 11:22:25 +1000
+# Subject: [PATCH] [POWERPC] Cleanups for physmap_of.c (v2)
+# 
+# This patch includes a whole batch of smallish cleanups for
+# drivers/mtd/physmap_of.c.
+# 
+# 	- A bunch of uneeded #includes are removed
+# 	- We switch to the modern linux/of.h etc. in place of
+# asm/prom.h
+# 	- Use some helper macros to avoid some ugly inline #ifdefs
+# 	- A few lines of unreachable code are removed
+# 	- A number of indentation / line-wrapping fixes
+# 	- More consistent use of kernel idioms such as if (!p) instead
+# of if (p == NULL)
+# 	- Clarify some printk()s and other informative strings.
+# 	- parse_obsolete_partitions() now returns 0 if no partition
+# information is found, instead of returning -ENOENT which the caller
+# had to handle specially.
+# 	- (the big one) Despite the name, this driver really has
+# nothing to do with drivers/mtd/physmap.c.  The fact that the flash
+# chips must be physically direct mapped is a constrant, but doesn't
+# really say anything about the actual purpose of this driver, which is
+# to instantiate MTD devices based on information from the device tree.
+# Therefore the physmap name is replaced everywhere within the file with
+# "of_flash".  The file itself and the Kconfig option is not renamed for
+# now (so that the diff is actually a diff).  That can come later.
+# 
+# Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+# Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+# 
+# NOTE: This patch was modified to remove the #include changes since
+# our tree doesn't have the newere files.
+# 
+
+PATCHNUM=621
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux-2.6.git
+MR: 25793
+Type: Defect Fix
+Disposition: backport
+Signed-off-by: Randy Vinson <rvinson@mvista.com>
+Description:
+From c4d5e375470862fd741f93bf0686d7ac2f7fdce4 Mon Sep 17 00:00:00 2001
+From: David Gibson <david@gibson.dropbear.id.au>
+Date: Thu, 20 Sep 2007 11:22:25 +1000
+Subject: [PATCH] [POWERPC] Cleanups for physmap_of.c (v2)
+
+This patch includes a whole batch of smallish cleanups for
+drivers/mtd/physmap_of.c.
+
+	- A bunch of uneeded #includes are removed
+	- We switch to the modern linux/of.h etc. in place of
+asm/prom.h
+	- Use some helper macros to avoid some ugly inline #ifdefs
+	- A few lines of unreachable code are removed
+	- A number of indentation / line-wrapping fixes
+	- More consistent use of kernel idioms such as if (!p) instead
+of if (p == NULL)
+	- Clarify some printk()s and other informative strings.
+	- parse_obsolete_partitions() now returns 0 if no partition
+information is found, instead of returning -ENOENT which the caller
+had to handle specially.
+	- (the big one) Despite the name, this driver really has
+nothing to do with drivers/mtd/physmap.c.  The fact that the flash
+chips must be physically direct mapped is a constrant, but doesn't
+really say anything about the actual purpose of this driver, which is
+to instantiate MTD devices based on information from the device tree.
+Therefore the physmap name is replaced everywhere within the file with
+"of_flash".  The file itself and the Kconfig option is not renamed for
+now (so that the diff is actually a diff).  That can come later.
+
+Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+
+NOTE: This patch was modified to remove the #include changes since
+our tree doesn't have the newere files.
+
+Index: linux-2.6.18/drivers/mtd/maps/physmap_of.c
+===================================================================
+--- linux-2.6.18.orig/drivers/mtd/maps/physmap_of.c
++++ linux-2.6.18/drivers/mtd/maps/physmap_of.c
+@@ -1,5 +1,5 @@
+ /*
+- * Normal mappings of chips in physical memory for OF devices
++ * Flash mappings described by the OF (or flattened) device tree
+  *
+  * Copyright (C) 2006 MontaVista Software Inc.
+  * Author: Vitaly Wool <vwool@ru.mvista.com>
+@@ -28,7 +28,7 @@
+ #include <asm/of_device.h>
+ #include <asm/of_platform.h>
+ 
+-struct physmap_flash_info {
++struct of_flash {
+ 	struct mtd_info		*mtd;
+ 	struct map_info		map;
+ 	struct resource		*res;
+@@ -38,8 +38,10 @@ struct physmap_flash_info {
+ };
+ 
+ #ifdef CONFIG_MTD_PARTITIONS
++#define OF_FLASH_PARTS(info)	((info)->parts)
++
+ static int parse_obsolete_partitions(struct of_device *dev,
+-				     struct physmap_flash_info *info,
++				     struct of_flash *info,
+ 				     struct device_node *dp)
+ {
+ 	int i, plen, nr_parts;
+@@ -50,17 +52,15 @@ static int parse_obsolete_partitions(str
+ 
+ 	part = of_get_property(dp, "partitions", &plen);
+ 	if (!part)
+-		return -ENOENT;
++		return 0; /* No partitions found */
+ 
+ 	dev_warn(&dev->dev, "Device tree uses obsolete partition map binding\n");
+ 
+ 	nr_parts = plen / sizeof(part[0]);
+ 
+-	info->parts = kzalloc(nr_parts * sizeof(struct mtd_partition), GFP_KERNEL);
+-	if (!info->parts) {
+-		printk(KERN_ERR "Can't allocate the flash partition data!\n");
++	info->parts = kzalloc(nr_parts * sizeof(*info->parts), GFP_KERNEL);
++	if (!info->parts)
+ 		return -ENOMEM;
+-	}
+ 
+ 	names = of_get_property(dp, "partition-names", &plen);
+ 
+@@ -86,8 +86,8 @@ static int parse_obsolete_partitions(str
+ 	return nr_parts;
+ }
+ 
+-static int __devinit process_partitions(struct physmap_flash_info *info,
+-					struct of_device *dev)
++static int __devinit parse_partitions(struct of_flash *info,
++				      struct of_device *dev)
+ {
+ 	const char *partname;
+ 	static const char *part_probe_types[]
+@@ -109,89 +109,68 @@ static int __devinit process_partitions(
+ 	for (pp = dp->child; pp; pp = pp->sibling)
+ 		nr_parts++;
+ 
+-	if (nr_parts) {
+-		info->parts = kzalloc(nr_parts * sizeof(struct mtd_partition),
+-				      GFP_KERNEL);
+-		if (!info->parts) {
+-			printk(KERN_ERR "Can't allocate the flash partition data!\n");
+-			return -ENOMEM;
+-		}
++	if (nr_parts == 0)
++		return parse_obsolete_partitions(dev, info, dp);
+ 
+-		for (pp = dp->child, i = 0 ; pp; pp = pp->sibling, i++) {
+-			const u32 *reg;
+-			int len;
+-
+-			reg = of_get_property(pp, "reg", &len);
+-			if (!reg || (len != 2*sizeof(u32))) {
+-				dev_err(&dev->dev, "Invalid 'reg' on %s\n",
+-					dp->full_name);
+-				kfree(info->parts);
+-				info->parts = NULL;
+-				return -EINVAL;
+-			}
+-			info->parts[i].offset = reg[0];
+-			info->parts[i].size = reg[1];
+-
+-			partname = of_get_property(pp, "label", &len);
+-			if (!partname)
+-				partname = of_get_property(pp, "name", &len);
+-			info->parts[i].name = (char *)partname;
++	info->parts = kzalloc(nr_parts * sizeof(*info->parts),
++			      GFP_KERNEL);
++	if (!info->parts)
++		return -ENOMEM;
+ 
+-			if (of_get_property(pp, "read-only", &len))
+-				info->parts[i].mask_flags = MTD_WRITEABLE;
++	for (pp = dp->child, i = 0; pp; pp = pp->sibling, i++) {
++		const u32 *reg;
++		int len;
++
++		reg = of_get_property(pp, "reg", &len);
++		if (!reg || (len != 2*sizeof(u32))) {
++			dev_err(&dev->dev, "Invalid 'reg' on %s\n",
++				dp->full_name);
++			kfree(info->parts);
++			info->parts = NULL;
++			return -EINVAL;
+ 		}
+-	} else {
+-		nr_parts = parse_obsolete_partitions(dev, info, dp);
+-		if (nr_parts == -ENOENT)
+-			nr_parts = 0;
+-	}
++		info->parts[i].offset = reg[0];
++		info->parts[i].size = reg[1];
+ 
+-	if (nr_parts < 0)
+-		return nr_parts;
++		partname = of_get_property(pp, "label", &len);
++		if (!partname)
++			partname = of_get_property(pp, "name", &len);
++		info->parts[i].name = (char *)partname;
+ 
+-	if (nr_parts > 0)
+-		add_mtd_partitions(info->mtd, info->parts, nr_parts);
+-	else
+-		add_mtd_device(info->mtd);
++		if (of_get_property(pp, "read-only", &len))
++			info->parts[i].mask_flags = MTD_WRITEABLE;
++	}
+ 
+-	return 0;
++	return nr_parts;
+ }
+ #else /* MTD_PARTITIONS */
+-static int __devinit process_partitions(struct physmap_flash_info *info,
+-					struct device_node *dev)
+-{
+-	add_mtd_device(info->mtd);
+-	return 0;
+-}
++#define	OF_FLASH_PARTS(info)		(0)
++#define parse_partitions(info, dev)	(0)
+ #endif /* MTD_PARTITIONS */
+ 
+-static int of_physmap_remove(struct of_device *dev)
++static int of_flash_remove(struct of_device *dev)
+ {
+-	struct physmap_flash_info *info;
++	struct of_flash *info;
+ 
+ 	info = dev_get_drvdata(&dev->dev);
+-	if (info == NULL)
++	if (!info)
+ 		return 0;
+ 	dev_set_drvdata(&dev->dev, NULL);
+ 
+-	if (info->mtd != NULL) {
+-#ifdef CONFIG_MTD_PARTITIONS
+-		if (info->parts) {
++	if (info->mtd) {
++		if (OF_FLASH_PARTS(info)) {
+ 			del_mtd_partitions(info->mtd);
+-			kfree(info->parts);
++			kfree(OF_FLASH_PARTS(info));
+ 		} else {
+ 			del_mtd_device(info->mtd);
+ 		}
+-#else
+-		del_mtd_device(info->mtd);
+-#endif
+ 		map_destroy(info->mtd);
+ 	}
+ 
+-	if (info->map.virt != NULL)
++	if (info->map.virt)
+ 		iounmap(info->map.virt);
+ 
+-	if (info->res != NULL) {
++	if (info->res) {
+ 		release_resource(info->res);
+ 		kfree(info->res);
+ 	}
+@@ -229,51 +208,48 @@ static struct mtd_info * __devinit obsol
+ 		return do_map_probe("jedec_probe", map);
+ 	} else {
+ 		if (strcmp(of_probe, "ROM") != 0)
+-			dev_dbg(&dev->dev, "obsolete_probe: don't know probe type "
+-				"'%s', mapping as rom\n", of_probe);
++			dev_warn(&dev->dev, "obsolete_probe: don't know probe "
++				 "type '%s', mapping as rom\n", of_probe);
+ 		return do_map_probe("mtd_rom", map);
+ 	}
+ }
+ 
+-static int __devinit of_physmap_probe(struct of_device *dev, const struct of_device_id *match)
++static int __devinit of_flash_probe(struct of_device *dev,
++				    const struct of_device_id *match)
+ {
+ 	struct device_node *dp = dev->node;
+ 	struct resource res;
+-	struct physmap_flash_info *info;
+-	const char *probe_type = (const char *)match->data;
++	struct of_flash *info;
++	const char *probe_type = match->data;
+ 	const u32 *width;
+ 	int err;
+ 
++	err = -ENXIO;
+ 	if (of_address_to_resource(dp, 0, &res)) {
+-		dev_err(&dev->dev, "Can't get the flash mapping!\n");
+-		err = -EINVAL;
++		dev_err(&dev->dev, "Can't get IO address from device tree\n");
+ 		goto err_out;
+ 	}
+ 
+-       	dev_dbg(&dev->dev, "physmap flash device: %.8llx at %.8llx\n",
+-	    (unsigned long long)res.end - res.start + 1,
+-	    (unsigned long long)res.start);
+-
+-	info = kzalloc(sizeof(struct physmap_flash_info), GFP_KERNEL);
+-	if (info == NULL) {
+-		err = -ENOMEM;
++       	dev_dbg(&dev->dev, "of_flash device: %.8llx-%.8llx\n",
++		(unsigned long long)res.start, (unsigned long long)res.end);
++
++	err = -ENOMEM;
++	info = kzalloc(sizeof(*info), GFP_KERNEL);
++	if (!info)
+ 		goto err_out;
+-	}
+ 
+ 	dev_set_drvdata(&dev->dev, info);
+ 
++	err = -EBUSY;
+ 	info->res = request_mem_region(res.start, res.end - res.start + 1,
+-			dev->dev.bus_id);
+-	if (info->res == NULL) {
+-		dev_err(&dev->dev, "Could not reserve memory region\n");
+-		err = -ENOMEM;
++				       dev->dev.bus_id);
++	if (!info->res)
+ 		goto err_out;
+-	}
+ 
++	err = -ENXIO;
+ 	width = of_get_property(dp, "bank-width", NULL);
+-	if (width == NULL) {
+-		dev_err(&dev->dev, "Can't get the flash bank width!\n");
+-		err = -EINVAL;
++	if (!width) {
++		dev_err(&dev->dev, "Can't get bank width from device tree\n");
+ 		goto err_out;
+ 	}
+ 
+@@ -282,10 +258,10 @@ static int __devinit of_physmap_probe(st
+ 	info->map.size = res.end - res.start + 1;
+ 	info->map.bankwidth = *width;
+ 
++	err = -ENOMEM;
+ 	info->map.virt = ioremap(info->map.phys, info->map.size);
+-	if (info->map.virt == NULL) {
+-		dev_err(&dev->dev, "Failed to ioremap flash region\n");
+-		err = EIO;
++	if (!info->map.virt) {
++		dev_err(&dev->dev, "Failed to ioremap() flash region\n");
+ 		goto err_out;
+ 	}
+ 
+@@ -296,21 +272,30 @@ static int __devinit of_physmap_probe(st
+ 	else
+ 		info->mtd = obsolete_probe(dev, &info->map);
+ 
+-	if (info->mtd == NULL) {
+-		dev_err(&dev->dev, "map_probe failed\n");
+-		err = -ENXIO;
++	err = -ENXIO;
++	if (!info->mtd) {
++		dev_err(&dev->dev, "do_map_probe() failed\n");
+ 		goto err_out;
+ 	}
+ 	info->mtd->owner = THIS_MODULE;
+ 
+-	return process_partitions(info, dev);
++	err = parse_partitions(info, dev);
++	if (err < 0)
++		goto err_out;
++
++	if (err > 0)
++		add_mtd_partitions(info->mtd, OF_FLASH_PARTS(info), err);
++	else
++		add_mtd_device(info->mtd);
++
++	return 0;
+ 
+ err_out:
+-	of_physmap_remove(dev);
++	of_flash_remove(dev);
+ 	return err;
+ }
+ 
+-static struct of_device_id of_physmap_match[] = {
++static struct of_device_id of_flash_match[] = {
+ 	{
+ 		.compatible	= "cfi-flash",
+ 		.data		= (void *)"cfi_probe",
+@@ -332,30 +317,28 @@ static struct of_device_id of_physmap_ma
+ 	},
+ 	{ },
+ };
++MODULE_DEVICE_TABLE(of, of_flash_match);
+ 
+-MODULE_DEVICE_TABLE(of, of_physmap_match);
+-
+-
+-static struct of_platform_driver of_physmap_flash_driver = {
+-	.name		= "physmap-flash",
+-	.match_table	= of_physmap_match,
+-	.probe		= of_physmap_probe,
+-	.remove		= of_physmap_remove,
++static struct of_platform_driver of_flash_driver = {
++	.name		= "of-flash",
++	.match_table	= of_flash_match,
++	.probe		= of_flash_probe,
++	.remove		= of_flash_remove,
+ };
+ 
+-static int __init of_physmap_init(void)
++static int __init of_flash_init(void)
+ {
+-	return of_register_platform_driver(&of_physmap_flash_driver);
++	return of_register_platform_driver(&of_flash_driver);
+ }
+ 
+-static void __exit of_physmap_exit(void)
++static void __exit of_flash_exit(void)
+ {
+-	of_unregister_platform_driver(&of_physmap_flash_driver);
++	of_unregister_platform_driver(&of_flash_driver);
+ }
+ 
+-module_init(of_physmap_init);
+-module_exit(of_physmap_exit);
++module_init(of_flash_init);
++module_exit(of_flash_exit);
+ 
+ MODULE_LICENSE("GPL");
+ MODULE_AUTHOR("Vitaly Wool <vwool@ru.mvista.com>");
+-MODULE_DESCRIPTION("Configurable MTD map driver for OF");
++MODULE_DESCRIPTION("Device tree based MTD map driver");
+Index: linux-2.6.18/mvl_patches/pro50-0621.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0621.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(621);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

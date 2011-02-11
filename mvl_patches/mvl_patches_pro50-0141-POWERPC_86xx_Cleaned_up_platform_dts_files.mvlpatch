@@ -1,0 +1,587 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_86xx_Cleaned_up_platform_dts_files
+# Date: Thu Sep  6 08:26:15 2007
+# MR:23289
+# 
+# [POWERPC] 86xx: Cleaned up platform dts files
+# 
+# * Removed explicit linux,phandle usage. Use references and labels now
+# * Removed interrupts property from openpic node
+# * Removed interrupt-parent property from openpic node that pointed to itself
+# 
+# Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+# Acked-by: Jon Loeliger <jdl@freescale.com>
+# 
+# commit 6d9065d8af2c86464b1f16e8aad80b3aa91756d2
+# tree d03d27107b5a49f247103853eff9865037786b1b
+# parent ff7298ea16bc15ffbba49c36724714e033a5fc10
+# author Kumar Gala <galak@kernel.crashing.org> Sat, 17 Feb 2007 16:09:56 -0600
+# committer Kumar Gala <galak@kernel.crashing.org> Sun, 18 Feb 2007 08:33:32 -0600
+# 
+#  arch/powerpc/boot/dts/mpc8641_hpcn.dts |  193 ++++++++++++++------------------
+#  1 files changed, 85 insertions(+), 108 deletions(-)
+# 
+
+PATCHNUM=141
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR:23289
+
+[POWERPC] 86xx: Cleaned up platform dts files
+
+* Removed explicit linux,phandle usage. Use references and labels now
+* Removed interrupts property from openpic node
+* Removed interrupt-parent property from openpic node that pointed to itself
+
+Signed-off-by: Kumar Gala <galak@kernel.crashing.org>
+Acked-by: Jon Loeliger <jdl@freescale.com>
+
+commit 6d9065d8af2c86464b1f16e8aad80b3aa91756d2
+tree d03d27107b5a49f247103853eff9865037786b1b
+parent ff7298ea16bc15ffbba49c36724714e033a5fc10
+author Kumar Gala <galak@kernel.crashing.org> Sat, 17 Feb 2007 16:09:56 -0600
+committer Kumar Gala <galak@kernel.crashing.org> Sun, 18 Feb 2007 08:33:32 -0600
+
+ arch/powerpc/boot/dts/mpc8641_hpcn.dts |  193 ++++++++++++++-------------------
+ mvl_patches/pro50-0141.c               |   16 ++
+ 2 files changed, 101 insertions(+), 108 deletions(-)
+
+diff --git a/arch/powerpc/boot/dts/mpc8641_hpcn.dts b/arch/powerpc/boot/dts/mpc8641_hpcn.dts
+index 8c75e4e..8a4995a 100644
+
+Index: linux-2.6.18/arch/powerpc/boot/dts/mpc8641_hpcn.dts
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/dts/mpc8641_hpcn.dts
++++ linux-2.6.18/arch/powerpc/boot/dts/mpc8641_hpcn.dts
+@@ -66,7 +66,7 @@
+ 			compatible = "fsl-i2c";
+ 			reg = <3000 100>;
+ 			interrupts = <2b 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 			dfsrr;
+ 		};
+ 
+@@ -75,7 +75,7 @@
+ 			compatible = "fsl-i2c";
+ 			reg = <3100 100>;
+ 			interrupts = <2b 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 			dfsrr;
+ 		};
+ 
+@@ -85,31 +85,26 @@
+ 			device_type = "mdio";
+ 			compatible = "gianfar";
+ 			reg = <24520 20>;
+-			linux,phandle = <24520>;
+-			ethernet-phy@0 {
+-				linux,phandle = <2452000>;
+-				interrupt-parent = <40000>;
++			phy0: ethernet-phy@0 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <4a 1>;
+ 				reg = <0>;
+ 				device_type = "ethernet-phy";
+ 			};
+-			ethernet-phy@1 {
+-				linux,phandle = <2452001>;
+-				interrupt-parent = <40000>;
++			phy1: ethernet-phy@1 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <4a 1>;
+ 				reg = <1>;
+ 				device_type = "ethernet-phy";
+ 			};
+-			ethernet-phy@2 {
+-				linux,phandle = <2452002>;
+-				interrupt-parent = <40000>;
++			phy2: ethernet-phy@2 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <4a 1>;
+ 				reg = <2>;
+ 				device_type = "ethernet-phy";
+ 			};
+-			ethernet-phy@3 {
+-				linux,phandle = <2452003>;
+-				interrupt-parent = <40000>;
++			phy3: ethernet-phy@3 {
++				interrupt-parent = <&mpic>;
+ 				interrupts = <4a 1>;
+ 				reg = <3>;
+ 				device_type = "ethernet-phy";
+@@ -125,8 +120,8 @@
+ 			reg = <24000 1000>;
+ 			mac-address = [ 00 E0 0C 00 73 00 ];
+ 			interrupts = <1d 2 1e 2 22 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452000>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy0>;
+ 		};
+ 
+ 		ethernet@25000 {
+@@ -138,8 +133,8 @@
+ 			reg = <25000 1000>;
+ 			mac-address = [ 00 E0 0C 00 73 01 ];
+ 			interrupts = <23 2 24 2 28 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452001>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy1>;
+ 		};
+ 		
+ 		ethernet@26000 {
+@@ -151,8 +146,8 @@
+ 			reg = <26000 1000>;
+ 			mac-address = [ 00 E0 0C 00 02 FD ];
+ 			interrupts = <1F 2 20 2 21 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452002>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy2>;
+ 		};
+ 
+ 		ethernet@27000 {
+@@ -164,8 +159,8 @@
+ 			reg = <27000 1000>;
+ 			mac-address = [ 00 E0 0C 00 03 FD ];
+ 			interrupts = <25 2 26 2 27 2>;
+-			interrupt-parent = <40000>;
+-			phy-handle = <2452003>;
++			interrupt-parent = <&mpic>;
++			phy-handle = <&phy3>;
+ 		};
+ 		serial@4500 {
+ 			device_type = "serial";
+@@ -173,7 +168,7 @@
+ 			reg = <4500 100>;
+ 			clock-frequency = <0>;
+ 			interrupts = <2a 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 		};
+ 
+ 		serial@4600 {
+@@ -182,7 +177,7 @@
+ 			reg = <4600 100>;
+ 			clock-frequency = <0>;
+ 			interrupts = <1c 2>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 		};
+ 
+ 		pci@8000 {
+@@ -196,103 +191,102 @@
+ 			ranges = <02000000 0 80000000 80000000 0 20000000
+ 				  01000000 0 00000000 e2000000 0 00100000>;
+ 			clock-frequency = <1fca055>;
+-			interrupt-parent = <40000>;
++			interrupt-parent = <&mpic>;
+ 			interrupts = <18 2>;
+ 			interrupt-map-mask = <f800 0 0 7>;
+ 			interrupt-map = <
+ 				/* IDSEL 0x11 */
+-				8800 0 0 1 4d0 3 2
+-				8800 0 0 2 4d0 4 2
+-				8800 0 0 3 4d0 5 2
+-				8800 0 0 4 4d0 6 2
++				8800 0 0 1 &i8259 3 2
++				8800 0 0 2 &i8259 4 2
++				8800 0 0 3 &i8259 5 2
++				8800 0 0 4 &i8259 6 2
+ 
+ 				/* IDSEL 0x12 */
+-				9000 0 0 1 4d0 4 2
+-				9000 0 0 2 4d0 5 2
+-				9000 0 0 3 4d0 6 2
+-				9000 0 0 4 4d0 3 2
++				9000 0 0 1 &i8259 4 2
++				9000 0 0 2 &i8259 5 2
++				9000 0 0 3 &i8259 6 2
++				9000 0 0 4 &i8259 3 2
+ 
+ 				/* IDSEL 0x13 */
+-				9800 0 0 1 4d0 0 0
+-				9800 0 0 2 4d0 0 0
+-				9800 0 0 3 4d0 0 0
+-				9800 0 0 4 4d0 0 0
++				9800 0 0 1 &i8259 0 0
++				9800 0 0 2 &i8259 0 0
++				9800 0 0 3 &i8259 0 0
++				9800 0 0 4 &i8259 0 0
+ 
+ 				/* IDSEL 0x14 */
+-				a000 0 0 1 4d0 0 0
+-				a000 0 0 2 4d0 0 0
+-				a000 0 0 3 4d0 0 0
+-				a000 0 0 4 4d0 0 0
++				a000 0 0 1 &i8259 0 0
++				a000 0 0 2 &i8259 0 0
++				a000 0 0 3 &i8259 0 0
++				a000 0 0 4 &i8259 0 0
+ 
+ 				/* IDSEL 0x15 */
+-				a800 0 0 1 4d0 0 0
+-				a800 0 0 2 4d0 0 0
+-				a800 0 0 3 4d0 0 0
+-				a800 0 0 4 4d0 0 0
++				a800 0 0 1 &i8259 0 0
++				a800 0 0 2 &i8259 0 0
++				a800 0 0 3 &i8259 0 0
++				a800 0 0 4 &i8259 0 0
+ 
+ 				/* IDSEL 0x16 */
+-				b000 0 0 1 4d0 0 0
+-				b000 0 0 2 4d0 0 0
+-				b000 0 0 3 4d0 0 0
+-				b000 0 0 4 4d0 0 0
++				b000 0 0 1 &i8259 0 0
++				b000 0 0 2 &i8259 0 0
++				b000 0 0 3 &i8259 0 0
++				b000 0 0 4 &i8259 0 0
+ 
+ 				/* IDSEL 0x17 */
+-				b800 0 0 1 4d0 0 0
+-				b800 0 0 2 4d0 0 0
+-				b800 0 0 3 4d0 0 0
+-				b800 0 0 4 4d0 0 0
++				b800 0 0 1 &i8259 0 0
++				b800 0 0 2 &i8259 0 0
++				b800 0 0 3 &i8259 0 0
++				b800 0 0 4 &i8259 0 0
+ 
+ 				/* IDSEL 0x18 */
+-				c000 0 0 1 4d0 0 0
+-				c000 0 0 2 4d0 0 0
+-				c000 0 0 3 4d0 0 0
+-				c000 0 0 4 4d0 0 0
++				c000 0 0 1 &i8259 0 0
++				c000 0 0 2 &i8259 0 0
++				c000 0 0 3 &i8259 0 0
++				c000 0 0 4 &i8259 0 0
+ 
+ 				/* IDSEL 0x19 */
+-				c800 0 0 1 4d0 0 0
+-				c800 0 0 2 4d0 0 0
+-				c800 0 0 3 4d0 0 0
+-				c800 0 0 4 4d0 0 0
++				c800 0 0 1 &i8259 0 0
++				c800 0 0 2 &i8259 0 0
++				c800 0 0 3 &i8259 0 0
++				c800 0 0 4 &i8259 0 0
+ 
+ 				/* IDSEL 0x1a */
+-				d000 0 0 1 4d0 6 2
+-				d000 0 0 2 4d0 3 2
+-				d000 0 0 3 4d0 4 2
+-				d000 0 0 4 4d0 5 2
++				d000 0 0 1 &i8259 6 2
++				d000 0 0 2 &i8259 3 2
++				d000 0 0 3 &i8259 4 2
++				d000 0 0 4 &i8259 5 2
+ 
+ 
+ 				/* IDSEL 0x1b */
+-				d800 0 0 1 4d0 5 2
+-				d800 0 0 2 4d0 0 0
+-				d800 0 0 3 4d0 0 0
+-				d800 0 0 4 4d0 0 0
++				d800 0 0 1 &i8259 5 2
++				d800 0 0 2 &i8259 0 0
++				d800 0 0 3 &i8259 0 0
++				d800 0 0 4 &i8259 0 0
+ 
+ 				/* IDSEL 0x1c */
+-				e000 0 0 1 4d0 9 2
+-				e000 0 0 2 4d0 a 2
+-				e000 0 0 3 4d0 c 2
+-				e000 0 0 4 4d0 7 2
++				e000 0 0 1 &i8259 9 2
++				e000 0 0 2 &i8259 a 2
++				e000 0 0 3 &i8259 c 2
++				e000 0 0 4 &i8259 7 2
+ 
+ 				/* IDSEL 0x1d */
+-				e800 0 0 1 4d0 9 2
+-				e800 0 0 2 4d0 a 2
+-				e800 0 0 3 4d0 b 2
+-				e800 0 0 4 4d0 0 0
++				e800 0 0 1 &i8259 9 2
++				e800 0 0 2 &i8259 a 2
++				e800 0 0 3 &i8259 b 2
++				e800 0 0 4 &i8259 0 0
+ 
+ 				/* IDSEL 0x1e */
+-				f000 0 0 1 4d0 c 2
+-				f000 0 0 2 4d0 0 0
+-				f000 0 0 3 4d0 0 0
+-				f000 0 0 4 4d0 0 0
++				f000 0 0 1 &i8259 c 2
++				f000 0 0 2 &i8259 0 0
++				f000 0 0 3 &i8259 0 0
++				f000 0 0 4 &i8259 0 0
+ 
+ 				/* IDSEL 0x1f */
+-				f800 0 0 1 4d0 6 2
+-				f800 0 0 2 4d0 0 0
+-				f800 0 0 3 4d0 0 0
+-				f800 0 0 4 4d0 0 0
++				f800 0 0 1 &i8259 6 2
++				f800 0 0 2 &i8259 0 0
++				f800 0 0 3 &i8259 0 0
++				f800 0 0 4 &i8259 0 0
+ 				>;
+-			i8259@4d0 {
+-				linux,phandle = <4d0>;
++			i8259: i8259@4d0 {
+ 				clock-frequency = <0>;
+ 				interrupt-controller;
+ 				device_type = "interrupt-controller";
+@@ -302,12 +296,11 @@
+ 				compatible = "chrp,iic";
+                 	        big-endian;
+ 				interrupts = <49 2>;
+-				interrupt-parent = <40000>;
++				interrupt-parent = <&mpic>;
+ 			};
+ 
+ 		};
+-		pic@40000 {
+-			linux,phandle = <40000>;
++		mpic: pic@40000 {
+ 			clock-frequency = <0>;
+ 			interrupt-controller;
+ 			#address-cells = <0>;
+@@ -316,23 +309,7 @@
+ 			built-in;
+ 			compatible = "chrp,open-pic";
+ 			device_type = "open-pic";
+-                        big-endian;
+-			interrupts = <
+-				10 2 11 2 12 2 13 2
+-				14 2 15 2 16 2 17 2
+-				18 2 19 2 1a 2 1b 2
+-				1c 2 1d 2 1e 2 1f 2
+-				20 2 21 2 22 2 23 2
+-				24 2 25 2 26 2 27 2
+-				28 2 29 2 2a 2 2b 2
+-				2c 2 2d 2 2e 2 2f 2
+-				30 2 31 2 32 2 33 2
+-				34 2 35 2 36 2 37 2
+-				38 2 39 2 2a 2 3b 2
+-				3c 2 3d 2 3e 2 3f 2
+-				48 1 49 2 4a 1
+-				>;
+-			interrupt-parent = <40000>;
++			big-endian;
+ 		};
+ 	};
+ };
+Index: linux-2.6.18/mvl_patches/pro50-0141.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0141.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(141);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

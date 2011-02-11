@@ -1,0 +1,1410 @@
+#! /usr/bin/env bash
+# Patch: -common_arm_freescale_mx27ads_usb_sync_checkpatch
+# Date: Tue Mar 11 17:36:55 2008
+# Source:  local
+# MR: 26885
+# Type: Integration    
+# Disposition: local
+# Signed-off-by:  Aleksey Makarov <amakarov@ru.mvista.com>    
+# Description:    
+#     Fixing checkpatch issues of USB sync with bsp-imx27ads-rel3
+# 
+
+PATCHNUM=978
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source:  local
+MR: 26885
+Type: Integration    
+Disposition: local
+Signed-off-by:  Aleksey Makarov <amakarov@ru.mvista.com>    
+Description:    
+    Fixing checkpatch issues of USB sync with bsp-imx27ads-rel3
+
+Index: linux-2.6.18/arch/arm/mach-mx2/usb.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-mx2/usb.c
++++ linux-2.6.18/arch/arm/mach-mx2/usb.c
+@@ -45,22 +45,22 @@
+ #include <asm/mach-types.h>
+ #include <asm/arch/arc_otg.h>
+ 
+-extern struct platform_device *host_pdev_register(struct resource *res,
+-						  int n_res,
+-						  struct fsl_usb2_platform_data
+-						  *config);
+-extern int fsl_usb_host_init(struct platform_device *pdev);
+-extern void fsl_usb_host_uninit(struct fsl_usb2_platform_data *pdata);
+-extern int usbotg_init(struct platform_device *pdev);
+-extern void usbotg_uninit(struct fsl_usb2_platform_data *pdata);
+-extern int gpio_usbh1_active(void);
+-extern void gpio_usbh1_inactive(void);
+-extern int gpio_usbh2_active(void);
+-extern void gpio_usbh2_inactive(void);
+-extern int gpio_usbotg_hs_active(void);
+-extern void gpio_usbotg_hs_inactive(void);
+-extern int gpio_usbotg_fs_active(void);
+-extern void gpio_usbotg_fs_inactive(void);
++struct platform_device *host_pdev_register(struct resource *res,
++					  int n_res,
++					  struct fsl_usb2_platform_data
++					  *config);
++int fsl_usb_host_init(struct platform_device *pdev);
++void fsl_usb_host_uninit(struct fsl_usb2_platform_data *pdata);
++int usbotg_init(struct platform_device *pdev);
++void usbotg_uninit(struct fsl_usb2_platform_data *pdata);
++int gpio_usbh1_active(void);
++void gpio_usbh1_inactive(void);
++int gpio_usbh2_active(void);
++void gpio_usbh2_inactive(void);
++int gpio_usbotg_hs_active(void);
++void gpio_usbotg_hs_inactive(void);
++int gpio_usbotg_fs_active(void);
++void gpio_usbotg_fs_inactive(void);
+ 
+ #ifdef CONFIG_USB_EHCI_ARC_H1
+ /*!
+@@ -127,7 +127,8 @@ static struct resource usbh2_resources[]
+  * OTG config
+  */
+ /* *INDENT-OFF* */
+-#if defined(CONFIG_USB_EHCI_ARC_OTG) || defined(CONFIG_USB_GADGET_ARC) || defined(CONFIG_OTG_BTC_ARC)
++#if defined(CONFIG_USB_EHCI_ARC_OTG) || defined(CONFIG_USB_GADGET_ARC) \
++	|| defined(CONFIG_OTG_BTC_ARC)
+ #if defined(CONFIG_MC13783_MXC)
+ static struct fsl_usb2_platform_data mxc_serial_host_config = {
+ 	.name              = "OTG",
+Index: linux-2.6.18/arch/arm/plat-mxc/isp1301xc.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/plat-mxc/isp1301xc.c
++++ linux-2.6.18/arch/arm/plat-mxc/isp1301xc.c
+@@ -154,7 +154,7 @@ static void isp1301_init(struct fsl_xcvr
+ 
+ static void isp1301_uninit(struct fsl_xcvr_ops *this)
+ {
+-	// DDD do this for host only:
++	/* DDD do this for host only: */
+ 	/* disable OTG VBUS */
+ 	i2c_del_driver(&isp1301_i2c_driver);
+ }
+@@ -219,7 +219,7 @@ static inline void isp1301_set_serial_de
+ 			  (DP_PULLDOWN | DM_PULLDOWN | DP_PULLUP));
+ }
+ 
+-static void isp1301_set_vbus_power(u32 * view, int on)
++static void isp1301_set_vbus_power(u32 *view, int on)
+ {
+ 	pr_debug("%s(on=%d)\n", __FUNCTION__, on);
+ 	if (on) {
+@@ -249,7 +249,7 @@ static struct fsl_xcvr_ops isp1301_ops_o
+ 	.set_vbus_power = isp1301_set_vbus_power,
+ };
+ 
+-extern void fsl_usb_xcvr_register(struct fsl_xcvr_ops *xcvr_ops);
++void fsl_usb_xcvr_register(struct fsl_xcvr_ops *xcvr_ops);
+ 
+ static int __init isp1301xc_init(void)
+ {
+@@ -260,7 +260,7 @@ static int __init isp1301xc_init(void)
+ 	return 0;
+ }
+ 
+-extern void fsl_usb_xcvr_unregister(struct fsl_xcvr_ops *xcvr_ops);
++void fsl_usb_xcvr_unregister(struct fsl_xcvr_ops *xcvr_ops);
+ 
+ static void __exit isp1301xc_exit(void)
+ {
+Index: linux-2.6.18/arch/arm/plat-mxc/isp1504xc.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/plat-mxc/isp1504xc.c
++++ linux-2.6.18/arch/arm/plat-mxc/isp1504xc.c
+@@ -51,7 +51,7 @@
+  * @param       view  the ULPI VIEWPORT register address
+  * @return	return isp1504 register value
+  */
+-static u8 isp1504_read(int reg, volatile u32 * view)
++static u8 isp1504_read(int reg, u32 *view)
+ {
+ 	u32 data;
+ 
+@@ -80,7 +80,7 @@ static u8 isp1504_read(int reg, volatile
+  * @param	reg   which register
+  * @param       view  the ULPI VIEWPORT register address
+  */
+-static void isp1504_set(u8 bits, int reg, volatile u32 * view)
++static void isp1504_set(u8 bits, int reg, u32 *view)
+ {
+ 	u32 data;
+ 
+@@ -108,7 +108,7 @@ static void isp1504_set(u8 bits, int reg
+  * @param	reg   in this register
+  * @param       view  the ULPI VIEWPORT register address
+  */
+-static void isp1504_clear(u8 bits, int reg, volatile u32 * view)
++static void isp1504_clear(u8 bits, int reg, u32 *view)
+ {
+ 	__raw_writel((ULPIVW_RUN | ULPIVW_WRITE |
+ 		      ((reg + ISP1504_REG_CLEAR) << ULPIVW_ADDR_SHIFT) |
+@@ -119,9 +119,9 @@ static void isp1504_clear(u8 bits, int r
+ 		continue;
+ }
+ 
+-extern int gpio_usbotg_hs_active(void);
++int gpio_usbotg_hs_active(void);
+ 
+-static void isp1508_fix(u32 * view)
++static void isp1508_fix(u32 *view)
+ {
+ 	/* Set bits IND_PASS_THRU and IND_COMPL */
+ 	isp1504_set(0x60, ISP1504_ITFCTL, view);
+@@ -136,7 +136,7 @@ static void isp1508_fix(u32 * view)
+  * @param       view  viewport register
+  * @param       on    power on or off
+  */
+-static void isp1504_set_vbus_power(u32 * view, int on)
++static void isp1504_set_vbus_power(u32 *view, int on)
+ {
+ 	pr_debug("real %s(on=%d) view=0x%p\n", __FUNCTION__, on, view);
+ 
+@@ -177,7 +177,7 @@ static void isp1504_set_vbus_power(u32 *
+  *
+  * @param       view  viewport register
+  */
+-static void isp1504_set_remote_wakeup(u32 * view)
++static void isp1504_set_remote_wakeup(u32 *view)
+ {
+ 	__raw_writel(~ULPIVW_WRITE & __raw_readl(view), view);
+ 	__raw_writel((1 << ULPIVW_PORT_SHIFT) | __raw_readl(view), view);
+@@ -208,7 +208,7 @@ static struct fsl_xcvr_ops isp1504_ops =
+ 	.set_remote_wakeup = isp1504_set_remote_wakeup,
+ };
+ 
+-extern void fsl_usb_xcvr_register(struct fsl_xcvr_ops *xcvr_ops);
++void fsl_usb_xcvr_register(struct fsl_xcvr_ops *xcvr_ops);
+ 
+ static int __init isp1504xc_init(void)
+ {
+@@ -219,7 +219,7 @@ static int __init isp1504xc_init(void)
+ 	return 0;
+ }
+ 
+-extern void fsl_usb_xcvr_unregister(struct fsl_xcvr_ops *xcvr_ops);
++void fsl_usb_xcvr_unregister(struct fsl_xcvr_ops *xcvr_ops);
+ 
+ static void __exit isp1504xc_exit(void)
+ {
+Index: linux-2.6.18/arch/arm/plat-mxc/serialxc.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/plat-mxc/serialxc.c
++++ linux-2.6.18/arch/arm/plat-mxc/serialxc.c
+@@ -38,7 +38,7 @@ static struct fsl_xcvr_ops serial_ops = 
+ 	.uninit = usb_serial_uninit,
+ };
+ 
+-extern void fsl_usb_xcvr_register(struct fsl_xcvr_ops *xcvr_ops);
++void fsl_usb_xcvr_register(struct fsl_xcvr_ops *xcvr_ops);
+ 
+ static int __init serialxc_init(void)
+ {
+@@ -49,7 +49,7 @@ static int __init serialxc_init(void)
+ 	return 0;
+ }
+ 
+-extern void fsl_usb_xcvr_unregister(struct fsl_xcvr_ops *xcvr_ops);
++void fsl_usb_xcvr_unregister(struct fsl_xcvr_ops *xcvr_ops);
+ 
+ static void __exit serialxc_exit(void)
+ {
+Index: linux-2.6.18/arch/arm/plat-mxc/usb_common.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/plat-mxc/usb_common.c
++++ linux-2.6.18/arch/arm/plat-mxc/usb_common.c
+@@ -87,7 +87,6 @@ void fsl_usb_xcvr_register(struct fsl_xc
+ 
+ 	pr_debug("Failed %s\n", __FUNCTION__);
+ }
+-
+ EXPORT_SYMBOL(fsl_usb_xcvr_register);
+ 
+ void fsl_usb_xcvr_unregister(struct fsl_xcvr_ops *xcvr_ops)
+@@ -104,7 +103,6 @@ void fsl_usb_xcvr_unregister(struct fsl_
+ 
+ 	pr_debug("Failed %s\n", __FUNCTION__);
+ }
+-
+ EXPORT_SYMBOL(fsl_usb_xcvr_unregister);
+ 
+ static struct fsl_xcvr_ops *fsl_usb_get_xcvr(char *name)
+@@ -118,9 +116,8 @@ static struct fsl_xcvr_ops *fsl_usb_get_
+ 	}
+ 
+ 	for (i = 0; i < MXC_NUMBER_USB_TRANSCEIVER; i++) {
+-		if (strcmp(g_xc_ops[i]->name, name) == 0) {
++		if (strcmp(g_xc_ops[i]->name, name) == 0)
+ 			return g_xc_ops[i];
+-		}
+ 	}
+ 	pr_debug("Failed %s\n", __FUNCTION__);
+ 	return NULL;
+@@ -144,9 +141,9 @@ static u64 ehci_dmamask = ~(u32) 0;
+  * of the "fsl-ehci" device.  Call this function multiple times
+  * to register each host interface.
+  */
+-static int instance_id = 0;
+-struct platform_device *host_pdev_register(struct resource *res, int n_res, struct fsl_usb2_platform_data
+-					   *config)
++static int instance_id;
++struct platform_device *host_pdev_register(struct resource *res,
++		int n_res, struct fsl_usb2_platform_data *config)
+ {
+ 	struct platform_device *pdev;
+ 	int rc;
+@@ -262,7 +259,6 @@ void fsl_platform_set_vbus_power(struct 
+ 	if (pdata->xcvr_ops && pdata->xcvr_ops->set_vbus_power)
+ 		pdata->xcvr_ops->set_vbus_power((u32 *) pdata->viewport, on);
+ }
+-
+ EXPORT_SYMBOL(fsl_platform_set_vbus_power);
+ 
+ void fsl_platform_perform_remote_wakeup(struct fsl_usb2_platform_data *pdata)
+@@ -270,7 +266,6 @@ void fsl_platform_perform_remote_wakeup(
+ 	if (pdata->xcvr_ops && pdata->xcvr_ops->set_remote_wakeup)
+ 		pdata->xcvr_ops->set_remote_wakeup((u32 *) pdata->viewport);
+ }
+-
+ EXPORT_SYMBOL(fsl_platform_perform_remote_wakeup);
+ 
+ #if defined(CONFIG_USB_OTG)
+@@ -290,7 +285,6 @@ struct otg_transceiver *otg_get_transcei
+ 		get_device(xceiv->dev);
+ 	return xceiv;
+ }
+-
+ EXPORT_SYMBOL(otg_get_transceiver);
+ 
+ int otg_set_transceiver(struct otg_transceiver *x)
+@@ -301,14 +295,13 @@ int otg_set_transceiver(struct otg_trans
+ 	xceiv = x;
+ 	return 0;
+ }
+-
+ EXPORT_SYMBOL(otg_set_transceiver);
+ #endif
+ 
+ static void usbh1_set_serial_xcvr(void)
+ {
+ 	pr_debug("%s: \n", __FUNCTION__);
+-	USBCTRL &= ~(UCTRL_H1SIC_MASK | UCTRL_BPE);	/* disable bypass mode */
++	USBCTRL &= ~(UCTRL_H1SIC_MASK | UCTRL_BPE); /* disable bypass mode */
+ 	USBCTRL |= UCTRL_H1SIC_SU6 |	/* single-ended / unidir. */
+ 	    UCTRL_H1WIE | UCTRL_H1DT |	/* disable H1 TLL */
+ 	    UCTRL_H1PM;		/* power mask */
+@@ -319,7 +312,7 @@ static void usbh1_set_serial_xcvr(void)
+ static void usbh2_set_ulpi_xcvr(void)
+ {
+ 	pr_debug("%s\n", __FUNCTION__);
+-	USBCTRL &= ~(UCTRL_H2SIC_MASK | UCTRL_BPE);	/* disable bypass mode */
++	USBCTRL &= ~(UCTRL_H2SIC_MASK | UCTRL_BPE); /* disable bypass mode */
+ 	USBCTRL |= UCTRL_H2WIE |	/* wakeup intr enable */
+ 	    UCTRL_H2UIE |	/* ULPI intr enable */
+ 	    UCTRL_H2DT |	/* disable H2 TLL */
+@@ -355,7 +348,8 @@ int fsl_usb_host_init(struct platform_de
+ 		return -EINVAL;
+ 
+ 	/* request_mem_region and ioremap registers */
+-	if ((rc = fsl_usb_mem_init(pdev))) {
++	rc = fsl_usb_mem_init(pdev);
++	if (rc) {
+ 		pdata->gpio_usb_inactive();	/* release our pins */
+ 		return rc;
+ 	}
+@@ -381,7 +375,6 @@ int fsl_usb_host_init(struct platform_de
+ 	pr_debug("%s: %s success\n", __FUNCTION__, pdata->name);
+ 	return 0;
+ }
+-
+ EXPORT_SYMBOL(fsl_usb_host_init);
+ 
+ void fsl_usb_host_uninit(struct fsl_usb2_platform_data *pdata)
+@@ -395,13 +388,13 @@ void fsl_usb_host_uninit(struct fsl_usb2
+ 	release_mem_region(pdata->r_start, pdata->r_len);
+ 
+ 	pdata->regs = NULL;
+-	pdata->r_start = pdata->r_len = 0;
++	pdata->r_start = 0;
++	pdata->r_len = 0;
+ 
+ 	pdata->gpio_usb_inactive();
+ 	if (pdata->xcvr_type == PORTSC_PTS_SERIAL)
+ 		clk_disable(usb_clk);
+ }
+-
+ EXPORT_SYMBOL(fsl_usb_host_uninit);
+ 
+ static void otg_set_serial_xcvr(void)
+@@ -439,7 +432,6 @@ void otg_set_serial_host(void)
+ 
+ 	USB_OTG_MIRROR = 0xa;
+ }
+-
+ EXPORT_SYMBOL(otg_set_serial_host);
+ 
+ void otg_set_serial_peripheral(void)
+@@ -466,7 +458,6 @@ void otg_set_serial_peripheral(void)
+ 
+ 	USB_OTG_MIRROR = 0xd;
+ }
+-
+ EXPORT_SYMBOL(otg_set_serial_peripheral);
+ 
+ static void otg_set_ulpi_xcvr(void)
+@@ -501,7 +492,7 @@ static void otg_set_ulpi_xcvr(void)
+ 	clk_disable(usb_clk);
+ }
+ 
+-static int otg_used = 0;
++static int otg_used;
+ 
+ int usbotg_init(struct platform_device *pdev)
+ {
+@@ -535,9 +526,9 @@ int usbotg_init(struct platform_device *
+ 		}
+ 
+ 		/* request_mem_region and ioremap registers */
+-		if ((rc = fsl_usb_mem_init(pdev))) {
++		rc = fsl_usb_mem_init(pdev);
++		if (rc)
+ 			return rc;
+-		}
+ 
+ 		if (xops->init)
+ 			xops->init(xops);
+@@ -562,7 +553,6 @@ int usbotg_init(struct platform_device *
+ 	pr_debug("%s: success\n", __FUNCTION__);
+ 	return 0;
+ }
+-
+ EXPORT_SYMBOL(usbotg_init);
+ 
+ void usbotg_uninit(struct fsl_usb2_platform_data *pdata)
+@@ -578,12 +568,12 @@ void usbotg_uninit(struct fsl_usb2_platf
+ 		release_mem_region(pdata->r_start, pdata->r_len);
+ 
+ 		pdata->regs = NULL;
+-		pdata->r_start = pdata->r_len = 0;
++		pdata->r_len = 0;
++		pdata->r_start = 0;
+ 
+ 		pdata->gpio_usb_inactive();
+ 		if (pdata->xcvr_type == PORTSC_PTS_SERIAL)
+ 			clk_disable(usb_clk);
+ 	}
+ }
+-
+ EXPORT_SYMBOL(usbotg_uninit);
+Index: linux-2.6.18/drivers/usb/gadget/arcotg_udc.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/gadget/arcotg_udc.c
++++ linux-2.6.18/drivers/usb/gadget/arcotg_udc.c
+@@ -43,18 +43,18 @@
+ #include <linux/fsl_devices.h>
+ #include <linux/usb/fsl_xcvr.h>
+ #include <linux/usb/otg.h>
++#include <linux/io.h>
++#include <linux/irq.h>
+ 
+ #include <asm/byteorder.h>
+-#include <asm/io.h>
+-#include <asm/irq.h>
+ #include <asm/system.h>
+ #include <asm/dma.h>
+ 
+ #include "arcotg_udc.h"
+ #include <asm/arch/arc_otg.h>
+ 
+-extern void gpio_usbotg_hs_active(void);
+-extern void gpio_usbotg_fs_active(void);
++void gpio_usbotg_hs_active(void);
++void gpio_usbotg_fs_active(void);
+ 
+ static void ep0stall(struct arcotg_udc *);
+ static int ep0_prime_status(struct arcotg_udc *, int);
+@@ -265,8 +265,7 @@ static void nuke(struct arcotg_ep *ep, i
+ /*------------------------------------------------------------------
+ 	Internal Hardware related function
+  ------------------------------------------------------------------*/
+-extern void fsl_platform_set_vbus_power(struct fsl_usb2_platform_data *pdata,
+-					int on);
++void fsl_platform_set_vbus_power(struct fsl_usb2_platform_data *pdata, int on);
+ 
+ /*
+  * init device controller
+@@ -299,10 +298,9 @@ static int dr_controller_setup(struct ar
+ 
+ 	/* Wait for reset to complete */
+ 	timeout = 10000000;
+-	while ((le32_to_cpu(usb_slave_regs->usbcmd) & USB_CMD_CTRL_RESET) &&
+-	       --timeout) {
++	while ((le32_to_cpu(usb_slave_regs->usbcmd) & USB_CMD_CTRL_RESET)
++			&& --timeout)
+ 		continue;
+-	}
+ 	if (timeout == 0) {
+ 		printk(KERN_ERR "%s: TIMEOUT\n", __FUNCTION__);
+ 		return -ETIMEDOUT;
+@@ -435,9 +433,8 @@ void dr_ep_setup(unsigned char ep_num, u
+ 	       && --timeout) {
+ 		continue;
+ 	}
+-	if (timeout == 0) {
++	if (timeout == 0)
+ 		printk(KERN_ERR "%s: TIMEOUT\n", __FUNCTION__);
+-	}
+ }
+ 
+ static void dr_ep_change_stall(unsigned char ep_num, unsigned char dir,
+@@ -835,7 +832,7 @@ static void arcotg_free_request(struct u
+  * @return Returns a new buffer, or null if one could not be allocated
+  */
+ static void *arcotg_alloc_buffer(struct usb_ep *_ep, unsigned bytes,
+-				 dma_addr_t * dma, gfp_t gfp_flags)
++				 dma_addr_t *dma, gfp_t gfp_flags)
+ {
+ 	void *retval = NULL;
+ 
+@@ -864,8 +861,7 @@ static void arcotg_free_buffer(struct us
+ 			       dma_addr_t dma, unsigned bytes)
+ {
+ 	pr_debug("udc: buf=0x%p  dma=0x%x\n", buf, dma);
+-	if (buf)
+-		kfree(buf);
++	kfree(buf);
+ }
+ 
+ /*-------------------------------------------------------------------------*/
+@@ -917,9 +913,8 @@ static int arcotg_queue_td(struct arcotg
+ 			    cpu_to_le32(USB_CMD_ATDTW)))
+ 			 && --timeout);
+ 
+-		if (timeout == 0) {
++		if (timeout == 0)
+ 			printk(KERN_ERR "%s: TIMEOUT\n", __FUNCTION__);
+-		}
+ 
+ 		/* Write ATDTW bit to 0 */
+ 		usb_slave_regs->usbcmd &= cpu_to_le32(~USB_CMD_ATDTW);
+@@ -1250,7 +1245,7 @@ static int _arcotg_ep_set_halt(struct us
+ 		pr_debug("udc: ep0_state now WAIT_FOR_SETUP\n");
+ 		udc->ep0_dir = 0;
+ 	}
+-      out:
++out:
+ 	pr_debug("udc:  %s %s halt rc=%d\n",
+ 		 ep->ep.name, value ? "set" : "clear", status);
+ 
+@@ -1824,8 +1819,8 @@ static void ep0_req_complete(struct arco
+ 	if (udc->usb_state == USB_STATE_ADDRESS) {
+ 		/* Set the new address */
+ 		u32 new_address = (u32) udc->device_address;
+-		usb_slave_regs->deviceaddr = cpu_to_le32(new_address <<
+-							 USB_DEVICE_ADDRESS_BIT_POS);
++		usb_slave_regs->deviceaddr = cpu_to_le32(
++				new_address << USB_DEVICE_ADDRESS_BIT_POS);
+ 		pr_debug("udc: set deviceaddr to %d\n",
+ 			 usb_slave_regs->
+ 			 deviceaddr >> USB_DEVICE_ADDRESS_BIT_POS);
+@@ -1893,12 +1888,10 @@ static void tripwire_handler(struct arco
+ 	usb_slave_regs->usbcmd = le32_to_cpu(temp);
+ 
+ 	timeout = 10000000;
+-	while ((usb_slave_regs->endptsetupstat & 1) && --timeout) {
++	while ((usb_slave_regs->endptsetupstat & 1) && --timeout)
+ 		continue;
+-	}
+-	if (timeout == 0) {
++	if (timeout == 0)
+ 		printk(KERN_ERR "%s: TIMEOUT\n", __FUNCTION__);
+-	}
+ }
+ 
+ /*!
+@@ -1932,8 +1925,8 @@ static int process_ep_req(struct arcotg_
+ 				     & DTD_PACKET_SIZE) >> DTD_LENGTH_BIT_POS);
+ 		actual -= remaining_length;
+ 
+-		if ((errors = le32_to_cpu(curr_td->size_ioc_sts) &
+-		     DTD_ERROR_MASK)) {
++		errors = le32_to_cpu(curr_td->size_ioc_sts);
++		if (errors & DTD_ERROR_MASK) {
+ 			if (errors & DTD_STATUS_HALTED) {
+ 				printk(KERN_ERR "dTD error %08x \n", errors);
+ 				/* Clear the errors and Halt condition */
+@@ -1967,9 +1960,9 @@ static int process_ep_req(struct arcotg_
+ 			return status;
+ 		} else if (remaining_length)
+ 			if (direction) {
+-				pr_debug
+-				    ("udc: Transmit dTD remaining length not zero "
+-				     "(rl=%d)\n", remaining_length);
++				pr_debug("udc: Transmit dTD remaining"
++						" length not zero (rl=%d)\n",
++						remaining_length);
+ 				status = -EPROTO;
+ 				break;
+ 			} else {
+@@ -2043,8 +2036,8 @@ static void dtd_complete_irq(struct arco
+ 					 queue) {
+ 			status = process_ep_req(udc, i, curr_req);
+ 			if (status == REQ_UNCOMPLETE) {
+-				pr_debug
+-				    ("udc: Not all tds are completed in the req\n");
++				pr_debug("udc: Not all tds are completed "
++						"in the req\n");
+ 				break;
+ 			}
+ 
+@@ -2159,12 +2152,10 @@ static void reset_irq(struct arcotg_udc 
+ 
+ 	timeout = 10000000;
+ 	/* Wait until all endptprime bits cleared */
+-	while ((usb_slave_regs->endpointprime) && --timeout) {
++	while ((usb_slave_regs->endpointprime) && --timeout)
+ 		continue;
+-	}
+-	if (timeout == 0) {
++	if (timeout == 0)
+ 		printk(KERN_ERR "%s: TIMEOUT\n", __FUNCTION__);
+-	}
+ 
+ 	/* Write 1s to the Flush register */
+ 	usb_slave_regs->endptflush = 0xFFFFFFFF;
+@@ -2302,8 +2293,8 @@ int usb_gadget_register_driver(struct us
+ 
+ 	if (!driver || (driver->speed != USB_SPEED_FULL
+ 			&& driver->speed != USB_SPEED_HIGH)
+-	    		|| !driver->bind || !driver->unbind ||
+-	    		!driver->disconnect || !driver->setup)
++			|| !driver->bind || !driver->unbind ||
++			!driver->disconnect || !driver->setup)
+ 		return -EINVAL;
+ 
+ 	if (udc->driver)
+@@ -2428,30 +2419,33 @@ EXPORT_SYMBOL(usb_gadget_unregister_driv
+ 
+ static const char proc_filename[] = "driver/arcotg_udc";
+ 
+-static inline const char * _get_PORTSCX_PTS_FSLS(u32 tmp_reg) {
++static inline const char *_get_PORTSCX_PTS_FSLS(u32 tmp_reg)
++{
+ 	switch (tmp_reg & PORTSCX_PTS_FSLS) {
+-		case PORTSCX_PTS_UTMI: return "UTMI";
+-		case PORTSCX_PTS_ULPI: return "ULPI ";
+-		case PORTSCX_PTS_FSLS: return "FS/LS Serial";
+-		default: return "None";
++	case PORTSCX_PTS_UTMI: return "UTMI";
++	case PORTSCX_PTS_ULPI: return "ULPI ";
++	case PORTSCX_PTS_FSLS: return "FS/LS Serial";
++	default: return "None";
+ 	}
+ }
+ 
+-static inline const char * _get_PORTSCX_PORT_SPEED_UNDEF(u32 tmp_reg) {
++static inline const char *_get_PORTSCX_PORT_SPEED_UNDEF(u32 tmp_reg)
++{
+ 	switch (tmp_reg & PORTSCX_PORT_SPEED_UNDEF) {
+-		case PORTSCX_PORT_SPEED_FULL: return "Full Speed";
+-		case PORTSCX_PORT_SPEED_LOW: return "Low Speed";
+-		case PORTSCX_PORT_SPEED_HIGH: return "High Speed";
+-		default: return "Undefined";
++	case PORTSCX_PORT_SPEED_FULL: return "Full Speed";
++	case PORTSCX_PORT_SPEED_LOW: return "Low Speed";
++	case PORTSCX_PORT_SPEED_HIGH: return "High Speed";
++	default: return "Undefined";
+ 	}
+ }
+ 
+-static inline const char * _get_USB_MODE_CTRL_MODE_HOST(u32 tmp_reg) {
++static inline const char *_get_USB_MODE_CTRL_MODE_HOST(u32 tmp_reg)
++{
+ 	switch (tmp_reg & USB_MODE_CTRL_MODE_HOST) {
+-		case USB_MODE_CTRL_MODE_IDLE: return "Idle";
+-		case USB_MODE_CTRL_MODE_DEVICE: return "Device Controller";
+-		case USB_MODE_CTRL_MODE_HOST: return "Host Controller";
+-		default: return "None"
++	case USB_MODE_CTRL_MODE_IDLE: return "Idle";
++	case USB_MODE_CTRL_MODE_DEVICE: return "Device Controller";
++	case USB_MODE_CTRL_MODE_HOST: return "Host Controller";
++	default: return "None"
+ 	}
+ }
+ 
+@@ -2594,7 +2588,7 @@ static int fsl_proc_read(char *page, cha
+ 	size -= t;
+ 	next += t;
+ 
+-	/* ------arcotg_udc, arcotg_ep, arcotg_request structure information ----- */
++	/* arcotg_udc, arcotg_ep, arcotg_request structure information */
+ 	ep = &udc->eps[0];
+ 	t = scnprintf(next, size, "For %s Maxpkt is 0x%x index is 0x%x\n",
+ 		      ep->ep.name, ep_maxpacket(ep), ep_index(ep));
+@@ -2608,7 +2602,8 @@ static int fsl_proc_read(char *page, cha
+ 	} else {
+ 		list_for_each_entry(req, &ep->queue, queue) {
+ 			t = scnprintf(next, size,
+-				      "req %p actual 0x%x length 0x%x  buf %p\n",
++				      "req %p actual 0x%x "
++				      "length 0x%x  buf %p\n",
+ 				      &req->req, req->req.actual,
+ 				      req->req.length, req->req.buf);
+ 			size -= t;
+@@ -2797,7 +2792,7 @@ static int struct_ep_setup(struct arcotg
+ 		ep->desc = &arcotg_ep0_desc;
+ 		ep->ep.maxpacket = USB_MAX_CTRL_PAYLOAD;
+ 	} else {
+-		ep->ep.maxpacket = (unsigned short)~0;
++		ep->ep.maxpacket = (unsigned short) ~0;
+ 		ep->desc = NULL;
+ 	}
+ 
+@@ -2878,9 +2873,8 @@ static int __devinit fsl_udc_probe(struc
+ 	pr_debug("udc: otg_get_transceiver returns 0x%p", udc->transceiver);
+ #endif
+ 
+-	if (pdev->resource[1].flags != IORESOURCE_IRQ) {
++	if (pdev->resource[1].flags != IORESOURCE_IRQ)
+ 		return -ENODEV;
+-	}
+ 
+ 	rsrc_start = pdev->resource[0].start;
+ 	rsrc_len = pdev->resource[0].end - pdev->resource[0].start + 1;
+Index: linux-2.6.18/drivers/usb/gadget/arcotg_udc.h
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/gadget/arcotg_udc.h
++++ linux-2.6.18/drivers/usb/gadget/arcotg_udc.h
+@@ -438,9 +438,8 @@ struct ep_td_struct {
+ #define  DTD_RESERVED_FIELDS                  (0x80007300)
+ #define  DTD_PACKET_SIZE                      (0x7FFF0000)
+ #define  DTD_LENGTH_BIT_POS                   (16)
+-#define  DTD_ERROR_MASK                       (DTD_STATUS_HALTED | \
+-                                               DTD_STATUS_DATA_BUFF_ERR | \
+-                                               DTD_STATUS_TRANSACTION_ERR)
++#define  DTD_ERROR_MASK (DTD_STATUS_HALTED | DTD_STATUS_DATA_BUFF_ERR \
++		| DTD_STATUS_TRANSACTION_ERR)
+ 
+ /* -----------------------------------------------------------------------*/
+ /* ##### enum data
+@@ -554,7 +553,7 @@ struct arcotg_udc {
+ 
+ #define ep_is_in(EP)	( (ep_index(EP) == 0) ? (EP->udc->ep0_dir == \
+ 				USB_DIR_IN ):((EP)->desc->bEndpointAddress \
+-				& USB_DIR_IN)==USB_DIR_IN)
++				& USB_DIR_IN) == USB_DIR_IN)
+ 
+ #define get_ep_by_pipe(udc, pipe)	((pipe == 1)? &udc->eps[0]: \
+ 					&udc->eps[pipe])
+Index: linux-2.6.18/drivers/usb/host/ehci-arc.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ehci-arc.c
++++ linux-2.6.18/drivers/usb/host/ehci-arc.c
+@@ -32,7 +32,8 @@
+ #include <linux/fsl_devices.h>
+ #include <linux/usb/otg.h>
+ #include <linux/usb/fsl_xcvr.h>
+-#include <asm/io.h>
++#include <linux/io.h>
++
+ #include <asm/arch/fsl_usb.h>
+ 
+ #include "ehci-fsl.h"
+@@ -43,7 +44,7 @@
+ #define dbg(fmt, ...) do {} while (0)
+ #define vdbg(fmt, ...) do {} while (0)
+ 
+-extern void fsl_platform_set_vbus_power(struct fsl_usb2_platform_data *pdata,
++void fsl_platform_set_vbus_power(struct fsl_usb2_platform_data *pdata,
+ 					int on);
+ 
+ /* PCI-based HCs are common, but plenty of non-PCI HCs are used too */
+Index: linux-2.6.18/drivers/usb/host/ehci.h
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ehci.h
++++ linux-2.6.18/drivers/usb/host/ehci.h
+@@ -120,9 +120,9 @@ struct ehci_hcd {			/* one per controlle
+ 	u8			sbrn;		/* packed release number */
+ 
+        /*
+-        * OTG controllers and transceivers need software interaction;
+-        * other external transceivers should be software-transparent
+-        */
++	* OTG controllers and transceivers need software interaction;
++	* other external transceivers should be software-transparent
++	*/
+        struct otg_transceiver   *transceiver;
+ 
+ 	/* irq statistics */
+Index: linux-2.6.18/drivers/usb/otg/fsl_otg.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/otg/fsl_otg.c
++++ linux-2.6.18/drivers/usb/otg/fsl_otg.c
+@@ -23,9 +23,9 @@
+ #include <linux/usb/ch9.h>
+ #include <linux/usb_gadget.h>
+ #include <linux/time.h>
++#include <linux/io.h>
++#include <linux/irq.h>
+ 
+-#include <asm/io.h>
+-#include <asm/irq.h>
+ #include <asm/system.h>
+ 
+ #include <linux/fsl_devices.h>
+@@ -46,7 +46,7 @@ static spinlock_t usb_dr_regs_lock;
+ #undef HA_DATA_PULSE
+ 
+ volatile static struct usb_dr_mmap *usb_dr_regs;
+-static struct fsl_otg *fsl_otg_dev = NULL;
++static struct fsl_otg *fsl_otg_dev;
+ static int srp_wait_done;
+ 
+ /* FSM timers */
+@@ -477,7 +477,7 @@ int fsl_otg_start_host(struct otg_fsm *f
+ 			otg_dev->host_working = 0;
+ 		}
+ 	}
+-      end:
++end:
+ 	return retval;
+ }
+ 
+@@ -612,7 +612,7 @@ static int fsl_otg_set_power(struct otg_
+ 	if (!fsl_otg_dev)
+ 		return -ENODEV;
+ 	if (otg_p->state == OTG_STATE_B_PERIPHERAL)
+-		printk("FSL OTG:Draw %d mA\n", mA);
++		printk(KERN_INFO "FSL OTG:Draw %d mA\n", mA);
+ 
+ 	return 0;
+ }
+@@ -660,30 +660,27 @@ irqreturn_t fsl_otg_isr(int irq, void *d
+ 	otg->default_a = (fsm->id == 0);
+ 
+ 	/* process OTG interrupts */
+-	if (otg_int_src) {
+-		if (otg_int_src & OTGSC_IS_USB_ID) {
+-			fsm->id = (otg_sc & OTGSC_STS_USB_ID) ? 1 : 0;
+-			otg->default_a = (fsm->id == 0);
+-			if (otg->host)
+-				otg->host->is_b_host = fsm->id;
+-			if (otg->gadget)
+-				otg->gadget->is_a_peripheral = !fsm->id;
+-			VDBG("IRQ=ID now=%d", fsm->id);
+-
+-			if (fsm->id) {	/* switch to gadget */
+-				schedule_delayed_work(&((struct fsl_otg *)
+-							dev_id)->otg_event, 25);
+-			} else {	/* switch to host */
+-				cancel_delayed_work(&
+-						    ((struct fsl_otg *)dev_id)->
+-						    otg_event);
+-				fsl_otg_start_gadget(fsm, 0);
+-				otg_drv_vbus(fsm, 1);
+-				fsl_otg_start_host(fsm, 1);
+-			}
+-
+-			return IRQ_HANDLED;
++	if (otg_int_src && (otg_int_src & OTGSC_IS_USB_ID)) {
++		fsm->id = (otg_sc & OTGSC_STS_USB_ID) ? 1 : 0;
++		otg->default_a = (fsm->id == 0);
++		if (otg->host)
++			otg->host->is_b_host = fsm->id;
++		if (otg->gadget)
++			otg->gadget->is_a_peripheral = !fsm->id;
++		VDBG("IRQ=ID now=%d", fsm->id);
++
++		if (fsm->id) {	/* switch to gadget */
++			schedule_delayed_work(&((struct fsl_otg *)
++						dev_id)->otg_event, 25);
++		} else {	/* switch to host */
++			cancel_delayed_work(
++					&((struct fsl_otg *)dev_id)->otg_event);
++			fsl_otg_start_gadget(fsm, 0);
++			otg_drv_vbus(fsm, 1);
++			fsl_otg_start_host(fsm, 1);
+ 		}
++
++		return IRQ_HANDLED;
+ 	}
+ 
+ 	return IRQ_NONE;
+Index: linux-2.6.18/drivers/usb/otg/fsl_otg.h
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/otg/fsl_otg.h
++++ linux-2.6.18/drivers/usb/otg/fsl_otg.h
+@@ -15,15 +15,15 @@
+ #include <linux/usb/otg.h>
+ 
+  /* USB Command  Register Bit Masks */
+-#define USB_CMD_RUN_STOP		(0x1<<0  )
+-#define USB_CMD_CTRL_RESET		(0x1<<1  )
+-#define USB_CMD_PERIODIC_SCHEDULE_EN	(0x1<<4  )
+-#define USB_CMD_ASYNC_SCHEDULE_EN	(0x1<<5  )
+-#define USB_CMD_INT_AA_DOORBELL		(0x1<<6  )
+-#define USB_CMD_ASP			(0x3<<8  )
+-#define USB_CMD_ASYNC_SCH_PARK_EN	(0x1<<11 )
+-#define USB_CMD_SUTW			(0x1<<13 )
+-#define USB_CMD_ATDTW			(0x1<<14 )
++#define USB_CMD_RUN_STOP		(0x1<<0)
++#define USB_CMD_CTRL_RESET		(0x1<<1)
++#define USB_CMD_PERIODIC_SCHEDULE_EN	(0x1<<4)
++#define USB_CMD_ASYNC_SCHEDULE_EN	(0x1<<5)
++#define USB_CMD_INT_AA_DOORBELL		(0x1<<6)
++#define USB_CMD_ASP			(0x3<<8)
++#define USB_CMD_ASYNC_SCH_PARK_EN	(0x1<<11)
++#define USB_CMD_SUTW			(0x1<<13)
++#define USB_CMD_ATDTW			(0x1<<14)
+ #define USB_CMD_ITC			(0xFF<<16)
+ 
+ /* bit 15,3,2 are frame list size */
+@@ -55,30 +55,30 @@
+ #define USB_CMD_ITC_BIT_POS		(16)
+ 
+ /* USB Status Register Bit Masks */
+-#define USB_STS_INT			(0x1<<0 )
+-#define USB_STS_ERR			(0x1<<1 )
+-#define USB_STS_PORT_CHANGE		(0x1<<2 )
+-#define USB_STS_FRM_LST_ROLL		(0x1<<3 )
+-#define USB_STS_SYS_ERR			(0x1<<4 )
+-#define USB_STS_IAA			(0x1<<5 )
+-#define USB_STS_RESET_RECEIVED		(0x1<<6 )
+-#define USB_STS_SOF			(0x1<<7 )
+-#define USB_STS_DCSUSPEND		(0x1<<8 )
++#define USB_STS_INT			(0x1<<0)
++#define USB_STS_ERR			(0x1<<1)
++#define USB_STS_PORT_CHANGE		(0x1<<2)
++#define USB_STS_FRM_LST_ROLL		(0x1<<3)
++#define USB_STS_SYS_ERR			(0x1<<4)
++#define USB_STS_IAA			(0x1<<5)
++#define USB_STS_RESET_RECEIVED		(0x1<<6)
++#define USB_STS_SOF			(0x1<<7)
++#define USB_STS_DCSUSPEND		(0x1<<8)
+ #define USB_STS_HC_HALTED		(0x1<<12)
+ #define USB_STS_RCL			(0x1<<13)
+ #define USB_STS_PERIODIC_SCHEDULE	(0x1<<14)
+ #define USB_STS_ASYNC_SCHEDULE		(0x1<<15)
+ 
+ /* USB Interrupt Enable Register Bit Masks */
+-#define USB_INTR_INT_EN			(0x1<<0 )
+-#define USB_INTR_ERR_INT_EN		(0x1<<1 )
+-#define USB_INTR_PC_DETECT_EN		(0x1<<2 )
+-#define USB_INTR_FRM_LST_ROLL_EN	(0x1<<3 )
+-#define USB_INTR_SYS_ERR_EN		(0x1<<4 )
+-#define USB_INTR_ASYN_ADV_EN		(0x1<<5 )
+-#define USB_INTR_RESET_EN		(0x1<<6 )
+-#define USB_INTR_SOF_EN			(0x1<<7 )
+-#define USB_INTR_DEVICE_SUSPEND		(0x1<<8 )
++#define USB_INTR_INT_EN			(0x1<<0)
++#define USB_INTR_ERR_INT_EN		(0x1<<1)
++#define USB_INTR_PC_DETECT_EN		(0x1<<2)
++#define USB_INTR_FRM_LST_ROLL_EN	(0x1<<3)
++#define USB_INTR_SYS_ERR_EN		(0x1<<4)
++#define USB_INTR_ASYN_ADV_EN		(0x1<<5)
++#define USB_INTR_RESET_EN		(0x1<<6)
++#define USB_INTR_SOF_EN			(0x1<<7)
++#define USB_INTR_DEVICE_SUSPEND		(0x1<<8)
+ 
+ /* Device Address bit masks */
+ #define USB_DEVICE_ADDRESS_MASK		(0x7F<<25)
+@@ -127,7 +127,7 @@
+ #define TB_SRP_INIT	(100)	/* b_srp_init,maximum 100 ms, section:5.3.8 */
+ 
+ /* SRP Fail Time  */
+-#define TB_SRP_FAIL	(7000)	/* b_srp_init,Fail time 5~30s, section:6.8.2.2 */
++#define TB_SRP_FAIL	(7000)	/* b_srp_init,Fail time 5~30s, 6.8.2.2 */
+ 
+ /* SRP result wait time */
+ #define TB_SRP_WAIT	(60)
+@@ -149,7 +149,7 @@
+ /* SE0 Time Before SRP */
+ #define TB_SE0_SRP	(2)	/* b_idle,minimum 2 ms, section:5.3.2 */
+ 
+-#define SET_OTG_STATE(otg_ptr, newstate)	((otg_ptr)->state=newstate)
++#define SET_OTG_STATE(otg_ptr, newstate)	((otg_ptr)->state = newstate)
+ 
+ struct usb_dr_mmap {
+ 	/* Capability register */
+@@ -205,7 +205,7 @@ struct fsl_otg_timer {
+ 	struct list_head list;
+ };
+ 
+-struct fsl_otg_timer inline *otg_timer_initializer
++inline struct fsl_otg_timer *otg_timer_initializer
+     (void (*function) (unsigned long), unsigned long expires,
+      unsigned long data) {
+ 	struct fsl_otg_timer *timer;
+Index: linux-2.6.18/drivers/usb/otg/otg_fsm.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/otg/otg_fsm.c
++++ linux-2.6.18/drivers/usb/otg/otg_fsm.c
+@@ -11,7 +11,7 @@
+  * http://www.gnu.org/copyleft/gpl.html
+  */
+ 
+-#include <asm/types.h>
++#include <linux/types.h>
+ #include <linux/kernel.h>
+ #include <linux/usb/otg.h>
+ #include <linux/spinlock.h>
+@@ -22,7 +22,7 @@
+ #include "otg_fsm.h"
+ 
+ /* Defined by device specific driver, for different timer implementation */
+-extern void *a_wait_vrise_tmr, *a_wait_bcon_tmr, *a_aidl_bdis_tmr,
++void *a_wait_vrise_tmr, *a_wait_bcon_tmr, *a_aidl_bdis_tmr,
+     *b_ase0_brst_tmr, *b_se0_srp_tmr, *b_srp_fail_tmr, *a_wait_enum_tmr;
+ 
+ const char *state_string(enum usb_otg_state state)
+@@ -103,7 +103,7 @@ static int otg_set_protocol(struct otg_f
+ 	return 0;
+ }
+ 
+-static int state_changed = 0;
++static int state_changed;
+ 
+ /* Called when leaving a state.  Do state clean up jobs here */
+ void otg_leave_state(struct otg_fsm *fsm, enum usb_otg_state old_state)
+@@ -335,9 +335,8 @@ int otg_statemachine(struct otg_fsm *fsm
+ 		break;
+ 	case OTG_STATE_A_WAIT_VRISE:
+ 		if (fsm->id || fsm->a_bus_drop || fsm->a_vbus_vld ||
+-		    fsm->a_wait_vrise_tmout) {
++		    fsm->a_wait_vrise_tmout)
+ 			otg_set_state(fsm, OTG_STATE_A_WAIT_BCON);
+-		}
+ 		break;
+ 	case OTG_STATE_A_WAIT_BCON:
+ 		if (!fsm->a_vbus_vld)
+Index: linux-2.6.18/drivers/usb/otg/otg_fsm.h
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/otg/otg_fsm.h
++++ linux-2.6.18/drivers/usb/otg/otg_fsm.h
+@@ -13,23 +13,24 @@
+ 
+ #ifdef DEBUG
+ 
+-#define DBG(fmt, args...) printk("j=%lu  [%s]  " fmt "\n", \
++#define DBG(fmt, args...) printk(KERN_DEBUG "j=%lu  [%s]  " fmt "\n", \
+ 		jiffies, __FUNCTION__, ## args)
+ 
+ #else
+-#define DBG(fmt, args...)	do{}while(0)
++#define DBG(fmt, args...)	do {} while (0)
+ #endif
+ 
+ #ifdef VERBOSE
+ #define VDBG		DBG
+ #else
+-#define VDBG(stuff...)	do{}while(0)
++#define VDBG(stuff...)	do {} while (0)
+ #endif
+ 
+ #ifdef VERBOSE
+-#define MPC_LOC printk("Current Location [%s]:[%d]\n", __FILE__, __LINE__)
++#define MPC_LOC printk(KERN_INFO "Current Location [%s]:[%d]\n", \
++		__FILE__, __LINE__)
+ #else
+-#define MPC_LOC do{}while(0)
++#define MPC_LOC do {} while (0)
+ #endif
+ 
+ #define PROTO_UNDEF	(0)
+@@ -92,8 +93,8 @@ struct otg_fsm_ops {
+ 	void (*start_pulse) (void);
+ 	void (*add_timer) (void *timer);
+ 	void (*del_timer) (void *timer);
+-	int (*start_host) (struct otg_fsm * fsm, int on);
+-	int (*start_gadget) (struct otg_fsm * fsm, int on);
++	int (*start_host) (struct otg_fsm *fsm, int on);
++	int (*start_gadget) (struct otg_fsm *fsm, int on);
+ };
+ 
+ static inline void otg_chrg_vbus(struct otg_fsm *fsm, int on)
+Index: linux-2.6.18/include/asm-arm/arch-mxc/arc_otg.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-mxc/arc_otg.h
++++ linux-2.6.18/include/asm-arm/arch-mxc/arc_otg.h
+@@ -163,8 +163,8 @@
+ 
+ #define PORTSC_W1C_BITS                     \
+        ( PORTSC_CONNECT_STATUS_CHANGE |     \
+-         PORTSC_PORT_EN_DIS_CHANGE    |     \
+-         PORTSC_OVER_CURRENT_CHG )
++	 PORTSC_PORT_EN_DIS_CHANGE    |     \
++	 PORTSC_OVER_CURRENT_CHG )
+ 
+ /* UOG_OTGSC Register Bits */
+ /* control bits: */
+@@ -200,7 +200,7 @@
+ #define  OTGSC_IE_1ms_TIMER		(1 << 29)
+ #define  OTGSC_IE_DATA_PULSE		(1 << 30)
+ 
+-#if 1				/* FIXME these here for compatibility between my names and Leo's */
++#if 1	/* FIXME these here for compatibility between my names and Leo's */
+ /* OTG interrupt enable bit masks */
+ #define  OTGSC_INTERRUPT_ENABLE_BITS_MASK	OTGSC_IE_MASK
+ #define  OTGSC_INTSTS_MASK			OTGSC_IS_MASK
+Index: linux-2.6.18/include/linux/fsl_devices.h
+===================================================================
+--- linux-2.6.18.orig/include/linux/fsl_devices.h
++++ linux-2.6.18/include/linux/fsl_devices.h
+@@ -112,7 +112,7 @@ struct fsl_usb2_platform_data {
+        int (*platform_verify) (struct platform_device *);
+        u32 xcvr_type;	  /* PORTSC_PTS_* */
+        char *transceiver;      /* transceiver name */
+-       // DDD combine usbmode and view into 1 register-base variable
++       /* DDD combine usbmode and view into 1 register-base variable */
+        u32 usbmode;	    /* address of usbmode register */
+        u32 viewport;	   /* address of ulpiview register */
+        u32 r_start;	    /* start of MEM resource */
+Index: linux-2.6.18/arch/arm/mach-mx2/mx27ads_gpio.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-mx2/mx27ads_gpio.c
++++ linux-2.6.18/arch/arm/mach-mx2/mx27ads_gpio.c
+@@ -197,7 +197,7 @@ int gpio_usbh1_active(void)
+ 	    gpio_request_mux(MX27_PIN_USBH1_TXDP, GPIO_MUX_PRIMARY) ||
+ 	    gpio_request_mux(MX27_PIN_USBH1_RXDM, GPIO_MUX_PRIMARY) ||
+ 	    gpio_request_mux(MX27_PIN_USBH1_RXDP, GPIO_MUX_PRIMARY))
+-	        return -EINVAL;
++		return -EINVAL;
+ 
+ 	__raw_writew(PBC_BCTRL3_FSH_MOD, PBC_BCTRL3_CLEAR_REG);
+ 	__raw_writew(PBC_BCTRL3_FSH_VBUS_EN, PBC_BCTRL3_CLEAR_REG);
+@@ -224,32 +224,32 @@ EXPORT_SYMBOL(gpio_usbh1_inactive);
+ int gpio_usbh2_active(void)
+ {
+        if (gpio_set_puen(MX27_PIN_USBH2_CLK, 0) ||
+-           gpio_set_puen(MX27_PIN_USBH2_DIR, 0) ||
+-           gpio_set_puen(MX27_PIN_USBH2_DATA7, 0) ||
+-           gpio_set_puen(MX27_PIN_USBH2_NXT, 0) ||
+-           gpio_set_puen(MX27_PIN_USBH2_STP, 0) ||
+-           gpio_set_puen(MX27_PIN_CSPI2_SS2, 0) ||
+-           gpio_set_puen(MX27_PIN_CSPI2_SS1, 0) ||
+-           gpio_set_puen(MX27_PIN_CSPI2_SS0, 0) ||
+-           gpio_set_puen(MX27_PIN_CSPI2_SCLK, 0) ||
+-           gpio_set_puen(MX27_PIN_CSPI2_MISO, 0) ||
+-           gpio_set_puen(MX27_PIN_CSPI2_MOSI, 0) ||
+-           gpio_set_puen(MX27_PIN_CSPI1_SS2, 0))
+-               return -EINVAL;
++	       gpio_set_puen(MX27_PIN_USBH2_DIR, 0) ||
++	       gpio_set_puen(MX27_PIN_USBH2_DATA7, 0) ||
++	       gpio_set_puen(MX27_PIN_USBH2_NXT, 0) ||
++	       gpio_set_puen(MX27_PIN_USBH2_STP, 0) ||
++	       gpio_set_puen(MX27_PIN_CSPI2_SS2, 0) ||
++	       gpio_set_puen(MX27_PIN_CSPI2_SS1, 0) ||
++	       gpio_set_puen(MX27_PIN_CSPI2_SS0, 0) ||
++	       gpio_set_puen(MX27_PIN_CSPI2_SCLK, 0) ||
++	       gpio_set_puen(MX27_PIN_CSPI2_MISO, 0) ||
++	       gpio_set_puen(MX27_PIN_CSPI2_MOSI, 0) ||
++	       gpio_set_puen(MX27_PIN_CSPI1_SS2, 0))
++	       return -EINVAL;
+ 
+        if (gpio_request_mux(MX27_PIN_USBH2_CLK, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_USBH2_DIR, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_USBH2_DATA7, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_USBH2_NXT, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_USBH2_STP, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_CSPI2_SS2, GPIO_MUX_ALT) ||
+-           gpio_request_mux(MX27_PIN_CSPI2_SS1, GPIO_MUX_ALT) ||
+-           gpio_request_mux(MX27_PIN_CSPI2_SS0, GPIO_MUX_ALT) ||
+-           gpio_request_mux(MX27_PIN_CSPI2_SCLK, GPIO_MUX_ALT) ||
+-           gpio_request_mux(MX27_PIN_CSPI2_MISO, GPIO_MUX_ALT) ||
+-           gpio_request_mux(MX27_PIN_CSPI2_MOSI, GPIO_MUX_ALT) ||
+-           gpio_request_mux(MX27_PIN_CSPI1_SS2, GPIO_MUX_ALT))
+-               return -EINVAL;
++	       gpio_request_mux(MX27_PIN_USBH2_DIR, GPIO_MUX_PRIMARY) ||
++	       gpio_request_mux(MX27_PIN_USBH2_DATA7, GPIO_MUX_PRIMARY) ||
++	       gpio_request_mux(MX27_PIN_USBH2_NXT, GPIO_MUX_PRIMARY) ||
++	       gpio_request_mux(MX27_PIN_USBH2_STP, GPIO_MUX_PRIMARY) ||
++	       gpio_request_mux(MX27_PIN_CSPI2_SS2, GPIO_MUX_ALT) ||
++	       gpio_request_mux(MX27_PIN_CSPI2_SS1, GPIO_MUX_ALT) ||
++	       gpio_request_mux(MX27_PIN_CSPI2_SS0, GPIO_MUX_ALT) ||
++	       gpio_request_mux(MX27_PIN_CSPI2_SCLK, GPIO_MUX_ALT) ||
++	       gpio_request_mux(MX27_PIN_CSPI2_MISO, GPIO_MUX_ALT) ||
++	       gpio_request_mux(MX27_PIN_CSPI2_MOSI, GPIO_MUX_ALT) ||
++	       gpio_request_mux(MX27_PIN_CSPI1_SS2, GPIO_MUX_ALT))
++	       return -EINVAL;
+ 
+        __raw_writew(PBC_BCTRL3_HSH_EN, PBC_BCTRL3_CLEAR_REG);
+        return 0;
+@@ -290,22 +290,22 @@ EXPORT_SYMBOL(gpio_usbh2_inactive);
+ int gpio_usbotg_hs_active(void)
+ {
+        if (gpio_request_mux(MX27_PIN_USBOTG_DATA5, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_USBOTG_DATA6, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_USBOTG_DATA0, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_USBOTG_DATA2, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_USBOTG_DATA1, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_USBOTG_DATA3, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_USBOTG_DATA4, GPIO_MUX_PRIMARY) ||
+-
+-           gpio_request_mux(MX27_PIN_USBOTG_DIR, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_USBOTG_STP, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_USBOTG_NXT, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_USBOTG_CLK, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_USBOTG_DATA7, GPIO_MUX_PRIMARY) ||
+-
+-           gpio_request_mux(MX27_PIN_USB_OC_B, GPIO_MUX_PRIMARY) ||
+-           gpio_request_mux(MX27_PIN_USB_PWR, GPIO_MUX_PRIMARY))
+-               return -EINVAL;
++	       gpio_request_mux(MX27_PIN_USBOTG_DATA6, GPIO_MUX_PRIMARY) ||
++	       gpio_request_mux(MX27_PIN_USBOTG_DATA0, GPIO_MUX_PRIMARY) ||
++	       gpio_request_mux(MX27_PIN_USBOTG_DATA2, GPIO_MUX_PRIMARY) ||
++	       gpio_request_mux(MX27_PIN_USBOTG_DATA1, GPIO_MUX_PRIMARY) ||
++	       gpio_request_mux(MX27_PIN_USBOTG_DATA3, GPIO_MUX_PRIMARY) ||
++	       gpio_request_mux(MX27_PIN_USBOTG_DATA4, GPIO_MUX_PRIMARY) ||
++
++	       gpio_request_mux(MX27_PIN_USBOTG_DIR, GPIO_MUX_PRIMARY) ||
++	       gpio_request_mux(MX27_PIN_USBOTG_STP, GPIO_MUX_PRIMARY) ||
++	       gpio_request_mux(MX27_PIN_USBOTG_NXT, GPIO_MUX_PRIMARY) ||
++	       gpio_request_mux(MX27_PIN_USBOTG_CLK, GPIO_MUX_PRIMARY) ||
++	       gpio_request_mux(MX27_PIN_USBOTG_DATA7, GPIO_MUX_PRIMARY) ||
++
++	       gpio_request_mux(MX27_PIN_USB_OC_B, GPIO_MUX_PRIMARY) ||
++	       gpio_request_mux(MX27_PIN_USB_PWR, GPIO_MUX_PRIMARY))
++	       return -EINVAL;
+ 
+        __raw_writew(PBC_BCTRL3_OTG_HS_EN, PBC_BCTRL3_CLEAR_REG);
+        __raw_writew(PBC_BCTRL3_OTG_VBUS_EN, PBC_BCTRL3_CLEAR_REG);
+@@ -762,7 +762,7 @@ void gpio_ata_active(void)
+ 	gpio_request_mux(MX27_PIN_PC_POE, GPIO_MUX_ALT);
+ 
+ 	__raw_writew(PBC_BCTRL2_ATAFEC_EN | PBC_BCTRL2_ATAFEC_SEL |
+-	             PBC_BCTRL2_ATA_EN, PBC_BCTRL2_CLEAR_REG);
++			PBC_BCTRL2_ATA_EN, PBC_BCTRL2_CLEAR_REG);
+ 
+ }
+ EXPORT_SYMBOL(gpio_ata_active);
+@@ -774,7 +774,7 @@ EXPORT_SYMBOL(gpio_ata_active);
+ void gpio_ata_inactive(void)
+ {
+ 	__raw_writew(PBC_BCTRL2_ATAFEC_EN | PBC_BCTRL2_ATAFEC_SEL |
+-	             PBC_BCTRL2_ATA_EN, PBC_BCTRL2_SET_REG);
++			PBC_BCTRL2_ATA_EN, PBC_BCTRL2_SET_REG);
+ 
+ 	gpio_free_mux(MX27_PIN_ATA_DATA0);
+ 	gpio_free_mux(MX27_PIN_ATA_DATA1);
+Index: linux-2.6.18/include/linux/usb/otg.h
+===================================================================
+--- linux-2.6.18.orig/include/linux/usb/otg.h
++++ linux-2.6.18/include/linux/usb/otg.h
+@@ -1,5 +1,3 @@
+-// include/linux/usb/otg.h
+-
+ /*
+  * These APIs may be used between USB controllers.  USB device drivers
+  * (for either host or peripheral roles) don't use these calls; they
+Index: linux-2.6.18/mvl_patches/pro50-0978.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0978.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(978);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

@@ -1,0 +1,697 @@
+#! /usr/bin/env bash
+# Patch: -common_arm_freescale_mx27ads_hrt
+# Date: Tue Mar 11 17:35:07 2008
+# Source:  http://opensource.freescale.com/pub/scm/linux-2.6-mx.git   
+# MR: 25950
+# Type: Integration   
+# Disposition:  merged from bsp-imx27ads-rel3 branch of opensource.freescale.com/pub/scm/linux-2.6-mx.git   
+# Signed-off-by:  Aleksey Makarov <amakarov@ru.mvista.com>   
+# Description:   
+#     Clocksource and clockchips support for i.mx27ads board.  
+#     The support was backported from 2.6.22.6 to 2.6.18 so 
+#     an additional timer was introduced to support periodic mode.
+#     RT preemption mode was supported. 
+#     The fix for the bug 25950 was introduced.
+# 
+
+PATCHNUM=973
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source:  http://opensource.freescale.com/pub/scm/linux-2.6-mx.git   
+MR: 25950
+Type: Integration   
+Disposition:  merged from bsp-imx27ads-rel3 branch of opensource.freescale.com/pub/scm/linux-2.6-mx.git   
+Signed-off-by:  Aleksey Makarov <amakarov@ru.mvista.com>   
+Description:   
+    Clocksource and clockchips support for i.mx27ads board.  
+    The support was backported from 2.6.22.6 to 2.6.18 so 
+    an additional timer was introduced to support periodic mode.
+    RT preemption mode was supported. 
+    The fix for the bug 25950 was introduced.
+
+Index: linux-2.6.18/arch/arm/mach-mx2/time.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/mach-mx2/time.c
++++ linux-2.6.18/arch/arm/mach-mx2/time.c
+@@ -3,9 +3,12 @@
+  */
+ 
+ /*
+- * This program is free software; you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License version 2 as
+- * published by the Free Software Foundation.
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
+  */
+ 
+ /* System Timer Interrupt reconfigured to run in free-run mode.
+@@ -14,12 +17,16 @@
+  */
+ 
+ /*!
+- * @file time.c
+- * @brief This file contains OS tick implementations.
++ * @defgroup Timers_MX27 OS Tick Timer
++ * @ingroup MSL_MX27
++ */
++/*!
++ * @file mach-mx27/time.c
++ * @brief This file contains OS tick timer implementation.
+  *
+- * This file contains OS tick implementations.
++ * This file contains OS tick timer implementation.
+  *
+- * @ingroup Timers
++ * @ingroup Timers_MX27
+  */
+ 
+ #include <linux/module.h>
+@@ -27,92 +34,256 @@
+ #include <linux/interrupt.h>
+ #include <linux/irq.h>
+ #include <linux/io.h>
++#include <linux/clocksource.h>
++#include <linux/clockchips.h>
++#include <linux/mtd/xip.h>
+ #include <asm/hardware.h>
+ #include <asm/mach/time.h>
+-#include <asm/arch/common.h>
+ 
+-/* OS tick defines */
+-#define MXC_GPT_INT_TICK		MXC_INT_GPT
+-#define MXC_GPT_TCMP_TICK		MXC_GPT_TCMP(MXC_TIMER_GPT1)
+-#define MXC_GPT_TSTAT_TICK		MXC_GPT_TSTAT(MXC_TIMER_GPT1)
+-#define MXC_GPT_TCTL_TICK		MXC_GPT_TCTL(MXC_TIMER_GPT1)
+-#define MXC_GPT_TPRER_TICK		MXC_GPT_TPRER(MXC_TIMER_GPT1)
+-#define MXC_GPT_TCN_TICK		MXC_GPT_TCN(MXC_TIMER_GPT1)
++/*!
++ * GPT register address definitions
++ */
++#define GPT_BASE_ADDR		(IO_ADDRESS(GPT1_BASE_ADDR))
++#define MXC_GPT_GPTCR		(GPT_BASE_ADDR + 0x00)
++#define MXC_GPT_GPTPR		(GPT_BASE_ADDR + 0x04)
++#define MXC_GPT_GPTOCR		(GPT_BASE_ADDR + 0x08)
++#define MXC_GPT_GPTICR		(GPT_BASE_ADDR + 0x0C)
++#define MXC_GPT_GPTCNT		(GPT_BASE_ADDR + 0x10)
++#define MXC_GPT_GPTSR		(GPT_BASE_ADDR + 0x14)
++
++/*
++ * Registers for init timer
++ */
++#define GPT_BASE_ADDR_INIT	(IO_ADDRESS(GPT2_BASE_ADDR))
++#define MXC_GPT_GPTCR_INIT	(GPT_BASE_ADDR_INIT + 0x00)
++#define MXC_GPT_GPTPR_INIT	(GPT_BASE_ADDR_INIT + 0x04)
++#define MXC_GPT_GPTOCR_INIT	(GPT_BASE_ADDR_INIT + 0x08)
++#define MXC_GPT_GPTICR_INIT	(GPT_BASE_ADDR_INIT + 0x0C)
++#define MXC_GPT_GPTCNT_INIT	(GPT_BASE_ADDR_INIT + 0x10)
++#define MXC_GPT_GPTSR_INIT	(GPT_BASE_ADDR_INIT + 0x14)
++
++/*!
++ * GPT Control register bit definitions
++ */
++#define GPTCR_COMPEN			(1 << 4)
++#define GPTCR_SWR			(1 << 15)
++#define GPTCR_FRR			(1 << 8)
++#define GPTCR_CC			(1 << 10)
++
++#define GPTCR_CLKSRC_SHIFT		1
++#define GPTCR_CLKSRC_MASK		(7 << GPTCR_CLKSRC_SHIFT)
++#define GPTCR_CLKSRC_NOCLOCK		(0 << GPTCR_CLKSRC_SHIFT)
++#define GPTCR_CLKSRC_HIGHFREQ		(1 << GPTCR_CLKSRC_SHIFT)
++#define GPTCR_CLKSRC_CLKIN		(3 << GPTCR_CLKSRC_SHIFT)
++#define GPTCR_CLKSRC_CLK32K		(4 << GPTCR_CLKSRC_SHIFT)
++
++#define GPTCR_ENABLE			(1 << 0)
++
++#define	GPTSR_OF1			(1 << 0)
+ 
+ extern unsigned long clk_early_get_timer_rate(void);
+ 
++static void mxc_gpt_set_next_event(unsigned long cycles,
++				  struct clock_event_device *evt)
++{
++	unsigned long now, expires;
++	u32 reg;
++
++	now = __raw_readl(MXC_GPT_GPTCNT);
++	expires = now + cycles;
++	__raw_writel(expires, MXC_GPT_GPTOCR);
++	__raw_writel(GPTSR_OF1, MXC_GPT_GPTSR);
++
++	/* enable interrupt */
++	reg = __raw_readl(MXC_GPT_GPTCR);
++	reg |= GPTCR_COMPEN;
++	__raw_writel(reg, MXC_GPT_GPTCR);
++}
++
++static void mxc_gpt_set_mode(enum clock_event_mode mode,
++			     struct clock_event_device *evt)
++{
++	u32 reg;
++	switch (mode) {
++	case CLOCK_EVT_PERIODIC:
++		reg = __raw_readl(MXC_GPT_GPTCR_INIT);
++		__raw_writel(reg | GPTCR_ENABLE, MXC_GPT_GPTCR_INIT);
++		break;
++	case CLOCK_EVT_ONESHOT:
++		reg = __raw_readl(MXC_GPT_GPTCR_INIT);
++		__raw_writel(reg & ~GPTCR_ENABLE, MXC_GPT_GPTCR_INIT);
++		break;
++	case CLOCK_EVT_SHUTDOWN:
++		reg = __raw_readl(MXC_GPT_GPTCR_INIT);
++		__raw_writel(reg & ~GPTCR_ENABLE, MXC_GPT_GPTCR_INIT);
++		/* Disable interrupts */
++		reg = __raw_readl(MXC_GPT_GPTCR);
++		reg &= ~GPTCR_COMPEN;
++		__raw_writel(reg, MXC_GPT_GPTCR);
++		break;
++	}
++}
++
++static struct clock_event_device gpt_clockevent = {
++	.name = "mxc_gpt",
++	.capabilities   = CLOCK_CAP_TICK | CLOCK_CAP_UPDATE |
++		CLOCK_CAP_NEXTEVT | CLOCK_CAP_PROFILE,
++	.shift = 32,
++	.set_next_event = mxc_gpt_set_next_event,
++	.set_mode = mxc_gpt_set_mode,
++};
++
+ /*!
+  * This is the timer interrupt service routine to do required tasks.
++ * It also services the WDOG timer at the frequency of twice per WDOG
++ * timeout value. For example, if the WDOG's timeout value is 4 (2
++ * seconds since the WDOG runs at 0.5Hz), it will be serviced once
++ * every 2/2=1 second.
+  *
+  * @param  irq          GPT interrupt source number (not used)
+  * @param  dev_id       this parameter is not used
+  * @return always returns \b IRQ_HANDLED as defined in
+  *         include/linux/interrupt.h.
+  */
+-static irqreturn_t mxc_timer_interrupt(int irq, void *dev_id,
+-		struct pt_regs *regs)
++static irqreturn_t mxc_timer_interrupt(int irq, void *dev_id, struct pt_regs * regs)
+ {
+-	unsigned int next_match;
+-
+-	write_seqlock(&xtime_lock);
++	unsigned int gptsr;
++	u32 reg;
+ 
+-	do {
+-		timer_tick(regs);
+-		next_match = __raw_readl(MXC_GPT_TCMP_TICK) + LATCH;
+-		__raw_writel(GPT_TSTAT_COMP, MXC_GPT_TSTAT_TICK);
+-		__raw_writel(next_match, MXC_GPT_TCMP_TICK);
+-	} while ((signed long)(next_match - __raw_readl(MXC_GPT_TCN_TICK)) <=
+-		 0);
++	gptsr = __raw_readl(MXC_GPT_GPTSR);
++	if (gptsr & GPTSR_OF1) {
++		/* Disable interrupt */
++		reg = __raw_readl(MXC_GPT_GPTCR);
++		reg &= ~GPTCR_COMPEN;
++		__raw_writel(reg, MXC_GPT_GPTCR);
++		/* Clear interrupt */
++		__raw_writel(GPTSR_OF1, MXC_GPT_GPTSR);
+ 
+-	write_sequnlock(&xtime_lock);
++		gpt_clockevent.event_handler(regs);
++	}
+ 
+ 	return IRQ_HANDLED;
+ }
+ 
+ /*!
+- * The OS tick timer interrupt structure.
++ * The clockevents timer interrupt structure.
+  */
+ static struct irqaction timer_irq = {
+-	.name    = "MXC Timer Tick",
+-	.flags   = IRQF_DISABLED | IRQF_TIMER,
++	.name = "gpt-irq",
++	.flags = IRQF_DISABLED | IRQF_TIMER,
+ 	.handler = mxc_timer_interrupt,
+ };
+ 
+-/*!
+- * This function is used to initialize the GPT to produce an interrupt
+- * every 10 msec. It is called by the start_kernel() during system startup.
+- */
+-void mxc_init_time(void)
++static irqreturn_t mxc_timer_init_interrupt(int irq, void *dev_id, struct pt_regs * regs)
+ {
+-	u32 reg, v;
++	__raw_writel(GPTSR_OF1, MXC_GPT_GPTSR_INIT);
++	gpt_clockevent.event_handler(regs);
++	return IRQ_HANDLED;
++}
+ 
+-	__raw_writel(0, MXC_GPT_TCTL_TICK);
+-	__raw_writel(GPT_TCTL_SWR, MXC_GPT_TCTL_TICK);
++/*
++ * timer that works till clocksource mode set to oneshot
++ */
++static struct irqaction timer_init_irq = {
++	.name = "gpt-init-irq",
++	.flags = IRQF_DISABLED | IRQF_TIMER,
++	.handler = mxc_timer_init_interrupt,
++};
+ 
+-	while ((__raw_readl(MXC_GPT_TCTL_TICK) & GPT_TCTL_SWR) != 0)
+-		cpu_relax();
++static cycle_t __xipram mxc_gpt_read(void)
++{
++	return __raw_readl(MXC_GPT_GPTCNT);
++}
+ 
+-	reg = GPT_TCTL_FRR | GPT_TCTL_COMPEN | GPT_TCTL_SRC_PER1;
++static struct clocksource gpt_clocksrc = {
++	.name = "mxc_gpt",
++	.rating = 300,
++	.read = mxc_gpt_read,
++	.mask = CLOCKSOURCE_MASK(32),
++	.shift = 24,
++	.is_continuous  = 1,
++};
+ 
+-	__raw_writel(reg, MXC_GPT_TCTL_TICK);
++unsigned long _mach_read_cycles(void)
++{
++	return clocksource_read(&gpt_clocksrc);
++}
+ 
+-	v = clk_early_get_timer_rate();
++/*!
++ * This function is used to initialize the GPT as a clocksource and clockevent.
++ * It is called by the start_kernel() during system startup.
++ */
++void __init mxc_init_time(void)
++{
++	int ret;
++	unsigned long rate;
++	u32 reg, div;
++
++	/* Reset GPT */
++	__raw_writel(GPTCR_SWR, MXC_GPT_GPTCR);
++	while ((__raw_readl(MXC_GPT_GPTCR) & GPTCR_SWR) != 0)
++		mb();
++
++	/* Normal clk api are not yet initialized, so use early verion */
++	rate = clk_early_get_timer_rate();
++	if (rate == 0)
++		panic("MXC GPT: Can't get timer clock rate\n");
++
++#ifdef CLOCK_TICK_RATE
++	div = rate / CLOCK_TICK_RATE;
++	WARN_ON((div * CLOCK_TICK_RATE) != rate);
++#else				/* Hopefully CLOCK_TICK_RATE will go away soon */
++	div = 1;
++	while ((rate / div) > 20000000) {
++		div++;
++	}
++#endif
++	rate /= div;
++	__raw_writel(div - 1, MXC_GPT_GPTPR);
++
++	reg = GPTCR_FRR | GPTCR_CLKSRC_HIGHFREQ | GPTCR_ENABLE;
++	__raw_writel(reg, MXC_GPT_GPTCR);
++
++	gpt_clocksrc.mult = clocksource_hz2mult(rate, gpt_clocksrc.shift);
++	ret = clocksource_register(&gpt_clocksrc);
++	if (ret < 0) {
++		goto err;
++	}
+ 
+-	if ((v % CLOCK_TICK_RATE) != 0) {
+-		pr_info("\nWARNING: Can't generate CLOCK_TICK_RATE at %d Hz\n",
+-			CLOCK_TICK_RATE);
++	gpt_clockevent.mult = div_sc(rate, NSEC_PER_SEC, gpt_clockevent.shift);
++	gpt_clockevent.max_delta_ns = clockevent_delta2ns(-1, &gpt_clockevent);
++	gpt_clockevent.min_delta_ns = clockevent_delta2ns(50, &gpt_clockevent);
++
++	register_global_clockevent(&gpt_clockevent);
++
++	ret = setup_irq(MXC_INT_GPT, &timer_irq);
++	if (ret < 0) {
++		goto err;
+ 	}
+-	pr_info("Actual CLOCK_TICK_RATE is %d Hz\n",
+-		v / ((__raw_readl(MXC_GPT_TPRER_TICK) & 0x7FF) + 1));
+ 
+-	reg = __raw_readl(MXC_GPT_TCN_TICK);
+-	reg += LATCH;
+-	__raw_writel(reg, MXC_GPT_TCMP_TICK);
++	/* intitalise init timer */
++
++	__raw_writel(0, MXC_GPT_GPTCR_INIT);
++	__raw_writel(GPTCR_SWR, MXC_GPT_GPTCR_INIT);
++	while ((__raw_readl(MXC_GPT_GPTCR_INIT) & GPTCR_SWR) != 0)
++		mb();
++
++	__raw_writel(GPTCR_CLKSRC_HIGHFREQ | GPTCR_COMPEN | GPTCR_CC, MXC_GPT_GPTCR_INIT);
++	__raw_writel(GPTSR_OF1, MXC_GPT_GPTSR_INIT);
++	__raw_writel(LATCH, MXC_GPT_GPTOCR_INIT);
++
++	ret = setup_irq(MXC_INT_GPT2, &timer_init_irq);
++	if (ret < 0) {
++		goto err;
++	}
+ 
+-	setup_irq(MXC_GPT_INT_TICK, &timer_irq);
++	reg = __raw_readl(MXC_GPT_GPTCR_INIT);
++	__raw_writel(reg | GPTCR_ENABLE, MXC_GPT_GPTCR_INIT);
+ 
+-	reg = __raw_readl(MXC_GPT_TCTL_TICK) | GPT_TCTL_TEN;
+-	__raw_writel(reg, MXC_GPT_TCTL_TICK);
++	pr_info("MXC GPT timer initialized, rate = %lu\n", rate);
++	return;
++      err:
++	panic("Unable to initialize timer\n");
+ }
+ 
+ struct sys_timer mxc_timer = {
+Index: linux-2.6.18/arch/arm/Kconfig
+===================================================================
+--- linux-2.6.18.orig/arch/arm/Kconfig
++++ linux-2.6.18/arch/arm/Kconfig
+@@ -211,6 +211,8 @@ config ARCH_MXC
+ 	bool "Freescale MXC/iMX-based"
+ 	select ISA
+ 	select ARCH_MTD_XIP
++	select GENERIC_TIME
++	select GENERIC_CLOCKEVENTS
+ 	help
+ 	  Support for Freescale MXC/iMX-based family of processors
+ 
+Index: linux-2.6.18/include/asm-arm/arch-mxc/mx2.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-mxc/mx2.h
++++ /dev/null
+@@ -1,52 +0,0 @@
+-/*
+- * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
+- */
+-
+-/*
+- * This program is free software; you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License version 2 as
+- * published by the Free Software Foundation.
+- */
+-
+-#ifndef __ASM_ARCH_MX2_H__
+-#define __ASM_ARCH_MX2_H__
+-
+-#ifndef __ASM_ARCH_MXC_HARDWARE_H__
+-#error "Do not include directly."
+-#endif
+-
+-/*!
+- * defines the hardware clock tick rate
+- */
+-#define CLOCK_TICK_RATE         13300000
+-
+-/*
+- *****************************************
+- * GPT  Register definitions             *
+- *****************************************
+- */
+-#define GPT_BASE_ADDR(x)	(GPT ##x## _BASE_ADDR)
+-#define MXC_GPT_TCTL(x)		IO_ADDRESS(GPT_BASE_ADDR(x) + 0x00)
+-#define MXC_GPT_TPRER(x)	IO_ADDRESS(GPT_BASE_ADDR(x) + 0x04)
+-#define MXC_GPT_TCMP(x)		IO_ADDRESS(GPT_BASE_ADDR(x) + 0x08)
+-#define MXC_GPT_TCR(x)		IO_ADDRESS(GPT_BASE_ADDR(x) + 0x0C)
+-#define MXC_GPT_TCN(x)		IO_ADDRESS(GPT_BASE_ADDR(x) + 0x10)
+-#define MXC_GPT_TSTAT(x)	IO_ADDRESS(GPT_BASE_ADDR(x) + 0x14)
+-#define MXC_GPT_GPTCNT		MXC_GPT_TCN(MXC_TIMER_GPT1)
+-#define GPT_TSTAT_COMP		(1 << 0)
+-#define GPT_TSTAT_CAPT		(1 << 1)
+-#define GPT_TCTL_TEN		(1 << 0)
+-#define GPT_TCTL_SRC_PER1	(1 << 1)
+-#define GPT_TCTL_SRC_PER1_DIV4	(2 << 1)
+-#define GPT_TCTL_SRC_TIN	(3 << 1)
+-#define GPT_TCTL_SRC_32K	(4 << 1)
+-#define GPT_TCTL_COMPEN		(1 << 4)
+-#define GPT_TCTL_CAPTEN		(1 << 5)
+-#define GPT_TCTL_FRR		(1 << 8)
+-#define GPT_TCTL_OM		(1 << 9)
+-#define GPT_TCTL_CC		(1 << 10)
+-#define GPT_TCTL_SWR		(1 << 15)
+-
+-#include <asm/arch/mx27.h>
+-
+-#endif				/*  __ASM_ARCH_MX2_H__ */
+Index: linux-2.6.18/include/asm-arm/arch-mxc/hardware.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-mxc/hardware.h
++++ linux-2.6.18/include/asm-arm/arch-mxc/hardware.h
+@@ -20,7 +20,7 @@
+ #include <asm/sizes.h>
+ 
+ #ifdef CONFIG_ARCH_MX2
+-#include <asm/arch/mx2.h>
++#include <asm/arch/mx27.h>
+ #endif
+ 
+ #include <asm/arch/mxc.h>
+Index: linux-2.6.18/include/asm-arm/arch-mxc/mx27.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-mxc/mx27.h
++++ linux-2.6.18/include/asm-arm/arch-mxc/mx27.h
+@@ -16,11 +16,6 @@
+ #endif
+ 
+ /*!
+- * defines the hardware clock tick rate
+- */
+-#define CLOCK_TICK_RATE         13300000
+-
+-/*!
+  * UART Chip level Configuration that a user may not have to edit. These
+  * configuration vary depending on how the UART module is integrated with
+  * the ARM core
+Index: linux-2.6.18/include/asm-arm/arch-mxc/timex.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/arch-mxc/timex.h
++++ linux-2.6.18/include/asm-arm/arch-mxc/timex.h
+@@ -20,6 +20,9 @@
+ #ifndef __ASM_ARCH_MXC_TIMEX_H__
+ #define __ASM_ARCH_MXC_TIMEX_H__
+ 
+-#include <asm/hardware.h>	/* for CLOCK_TICK_RATE */
++#define CLOCK_TICK_RATE 13320000
++
++extern unsigned long _mach_read_cycles(void);
++#define mach_read_cycles() _mach_read_cycles()
+ 
+ #endif				/* __ASM_ARCH_MXC_TIMEX_H__ */
+Index: linux-2.6.18/mvl_patches/pro50-0973.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0973.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(973);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

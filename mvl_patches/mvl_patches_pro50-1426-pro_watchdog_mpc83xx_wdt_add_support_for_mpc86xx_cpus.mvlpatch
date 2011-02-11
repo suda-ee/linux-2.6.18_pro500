@@ -1,0 +1,483 @@
+#! /usr/bin/env bash
+# Patch: -pro_watchdog_mpc83xx_wdt_add_support_for_mpc86xx_cpus
+# Date: Mon Jul 21 10:32:03 2008
+# Source: local
+# MR: 28377
+# Type: Enhancement
+# Disposition: submitted to Wim Van Sebroeck, linuxppc-dev
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# [PRO WATCHDOG] mpc83xx_wdt: add support for MPC86xx CPUs
+# 
+# On MPC86xx the watchdog could be enabled only at power-on-reset, and
+# could not be disabled afterwards. We must ping the watchdog from the
+# kernel until the userspace handles it.
+# 
+# MPC83xx CPUs are only differ in a way that watchdog could be disabled
+# once, but after it was enabled via software it becomes just the same
+# as MPC86xx.
+# 
+# Thus, to support MPC86xx I added the kernel timer which pings the
+# watchdog until the userspace opens it.
+# 
+# Since we implemented the timer, now we're able to implement proper
+# handling for the CONFIG_WATCHDOG_NOWAYOUT case, for MPC83xx and MPC86xx.
+# 
+# Also move the probe code into subsys_initcall, because we want start
+# pinging the watchdog ASAP, and misc devices are available in
+# subsys_initcall.
+# 
+#  drivers/char/watchdog/Kconfig       |    4 +-
+#  drivers/char/watchdog/mpc83xx_wdt.c |   80 ++++++++++++++++++++++++++++++++---
+#  2 files changed, 74 insertions(+), 10 deletions(-)
+# 
+# 
+
+PATCHNUM=1426
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: local
+MR: 28377
+Type: Enhancement
+Disposition: submitted to Wim Van Sebroeck, linuxppc-dev
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+[PRO WATCHDOG] mpc83xx_wdt: add support for MPC86xx CPUs
+
+On MPC86xx the watchdog could be enabled only at power-on-reset, and
+could not be disabled afterwards. We must ping the watchdog from the
+kernel until the userspace handles it.
+
+MPC83xx CPUs are only differ in a way that watchdog could be disabled
+once, but after it was enabled via software it becomes just the same
+as MPC86xx.
+
+Thus, to support MPC86xx I added the kernel timer which pings the
+watchdog until the userspace opens it.
+
+Since we implemented the timer, now we're able to implement proper
+handling for the CONFIG_WATCHDOG_NOWAYOUT case, for MPC83xx and MPC86xx.
+
+Also move the probe code into subsys_initcall, because we want start
+pinging the watchdog ASAP, and misc devices are available in
+subsys_initcall.
+
+ drivers/char/watchdog/Kconfig       |    4 -
+ drivers/char/watchdog/mpc83xx_wdt.c |   80 ++++++++++++++++++++++++++++++++----
+ mvl_patches/pro50-1426.c            |   16 +++++++
+ 3 files changed, 90 insertions(+), 10 deletions(-)
+
+
+Index: linux-2.6.18/drivers/char/watchdog/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/char/watchdog/Kconfig
++++ linux-2.6.18/drivers/char/watchdog/Kconfig
+@@ -448,8 +448,8 @@ config 8xx_WDT
+ 	depends on WATCHDOG && 8xx
+ 
+ config 83xx_WDT
+-	tristate "MPC83xx Watchdog Timer"
+-	depends on WATCHDOG && PPC_83xx
++ 	tristate "MPC83xx/MPC86xx Watchdog Timer"
++ 	depends on WATCHDOG && (PPC_83xx || PPC_86xx)
+ 
+ config MV64X60_WDT
+ 	tristate "MV64X60 (Marvell Discovery) Watchdog Timer"
+Index: linux-2.6.18/drivers/char/watchdog/mpc83xx_wdt.c
+===================================================================
+--- linux-2.6.18.orig/drivers/char/watchdog/mpc83xx_wdt.c
++++ linux-2.6.18/drivers/char/watchdog/mpc83xx_wdt.c
+@@ -1,10 +1,12 @@
+ /*
+- * mpc83xx_wdt.c - MPC83xx watchdog userspace interface
++ * mpc83xx_wdt.c - MPC83xx/MPC86xx watchdog userspace interface
+  *
+  * Authors: Dave Updegraff <dave@cray.org>
+  * 	    Kumar Gala <galak@kernel.crashing.org>
+  * 		Attribution: from 83xx_wst: Florian Schirmer <jolt@tuxbox.org>
+  * 				..and from sc520_wdt
++ * Copyright (c) 2008  MontaVista Software, Inc.
++ *                     Anton Vorontsov <avorontsov@ru.mvista.com>
+  *
+  * Note: it appears that you can only actually ENABLE or DISABLE the thing
+  * once after POR. Once enabled, you cannot disable, and vice versa.
+@@ -18,6 +20,7 @@
+ #include <linux/fs.h>
+ #include <linux/init.h>
+ #include <linux/kernel.h>
++#include <linux/timer.h>
+ #include <linux/miscdevice.h>
+ #include <linux/module.h>
+ #include <linux/watchdog.h>
+@@ -39,6 +42,11 @@ struct mpc83xx_wdt {
+ 	u8 res2[0xF0];
+ };
+ 
++struct mpc83xx_wdt_type {
++	int prescaler;
++	bool hw_enabled;
++};
++
+ static struct mpc83xx_wdt __iomem *wd_base;
+ 
+ static u16 timeout = 0xffff;
+@@ -51,6 +59,11 @@ module_param(reset, bool, 0);
+ MODULE_PARM_DESC(reset, "Watchdog Interrupt/Reset Mode. "
+ 		 "0 = interrupt, 1 = reset");
+ 
++static int nowayout = WATCHDOG_NOWAYOUT;
++module_param(nowayout, int, 0);
++MODULE_PARM_DESC(nowayout, "Watchdog cannot be stopped once started "
++		 "(default=" __MODULE_STRING(WATCHDOG_NOWAYOUT) ")");
++
+ /*
+  * We always prescale, but if someone really doesn't want to they can set this
+  * to 0
+@@ -70,6 +83,22 @@ static void mpc83xx_wdt_keepalive(void)
+ 	spin_unlock(&wdt_spinlock);
+ }
+ 
++static void mpc83xx_wdt_timer_ping(unsigned long arg);
++static DEFINE_TIMER(wdt_timer, mpc83xx_wdt_timer_ping, 0, 0);
++
++static void mpc83xx_wdt_timer_ping(unsigned long arg)
++{
++	mpc83xx_wdt_keepalive();
++	/* We're pinging it twice faster than needed, just to be sure. */
++	mod_timer(&wdt_timer, jiffies + HZ * timeout_sec / 2);
++}
++
++static void mpc83xx_wdt_pr_warn(const char *msg)
++{
++	pr_crit("mpc83xx_wdt: %s, expect the %s soon!\n", msg,
++		reset ? "reset" : "machine check exception");
++}
++
+ static ssize_t mpc83xx_wdt_write(struct file *file, const char __user *buf,
+ 				 size_t count, loff_t *ppos)
+ {
+@@ -85,7 +114,8 @@ static int mpc83xx_wdt_open(struct inode
+ 		return -EBUSY;
+ 
+ 	/* Once we start the watchdog we can't stop it */
+-	__module_get(THIS_MODULE);
++	if (nowayout)
++		__module_get(THIS_MODULE);
+ 
+ 	/* Good, fire up the show */
+ 	if (prescale)
+@@ -97,13 +127,17 @@ static int mpc83xx_wdt_open(struct inode
+ 
+ 	out_be32(&wd_base->swcrr, tmp);
+ 
++	del_timer_sync(&wdt_timer);
++
+ 	return nonseekable_open(inode, file);
+ }
+ 
+ static int mpc83xx_wdt_release(struct inode *inode, struct file *file)
+ {
+-	printk(KERN_CRIT "Unexpected close, not stopping watchdog!\n");
+-	mpc83xx_wdt_keepalive();
++	if (!nowayout)
++		mpc83xx_wdt_timer_ping(0);
++	else
++		mpc83xx_wdt_pr_warn("watchdog closed");
+ 	clear_bit(0, &wdt_is_open);
+ 	return 0;
+ }
+@@ -151,15 +185,25 @@ static int __devinit mpc83xx_wdt_probe(s
+ 				       const struct of_device_id *match)
+ {
+ 	int ret;
++	struct device_node *np = ofdev->node;
++	struct mpc83xx_wdt_type *wdt_type = match->data;
+ 	u32 freq = fsl_get_sys_freq();
++	bool enabled;
+ 
+ 	if (!freq || freq == -1)
+ 		return -EINVAL;
+ 
+-	wd_base = of_iomap(ofdev->node, 0);
++	wd_base = of_iomap(np, 0);
+ 	if (!wd_base)
+ 		return -ENOMEM;
+ 
++	enabled = in_be32(&wd_base->swcrr) & SWCRR_SWEN;
++	if (!enabled && wdt_type->hw_enabled) {
++		pr_info("mpc83xx_wdt: could not be enabled in software\n");
++		ret = -ENOSYS;
++		goto err_unmap;
++	}
++
+ 	ret = misc_register(&mpc83xx_wdt_miscdev);
+ 	if (ret) {
+ 		pr_err("cannot register miscdev on minor=%d (err=%d)\n",
+@@ -169,13 +213,21 @@ static int __devinit mpc83xx_wdt_probe(s
+ 
+ 	/* Calculate the timeout in seconds */
+ 	if (prescale)
+-		timeout_sec = (timeout * 0x10000) / freq;
++		timeout_sec = (timeout * wdt_type->prescaler) / freq;
+ 	else
+ 		timeout_sec = timeout / freq;
+ 
+ 	pr_info("WDT driver for MPC83xx initialized. mode:%s timeout=%d "
+ 		"(%d seconds)\n", reset ? "reset" : "interrupt", timeout,
+ 		timeout_sec);
++
++	/*
++	 * If the watchdog was previously enabled or we're running on
++	 * MPC86xx, we should ping the wdt from the kernel until the
++	 * userspace handles it.
++	 */
++	if (enabled)
++		mpc83xx_wdt_timer_ping(0);
+ 	return 0;
+ err_unmap:
+ 	iounmap(wd_base);
+@@ -184,6 +236,8 @@ err_unmap:
+ 
+ static int __devexit mpc83xx_wdt_remove(struct of_device *ofdev)
+ {
++	mpc83xx_wdt_pr_warn("watchdog removed");
++	del_timer_sync(&wdt_timer);
+ 	misc_deregister(&mpc83xx_wdt_miscdev);
+ 	iounmap(wd_base);
+ 
+@@ -193,6 +247,16 @@ static int __devexit mpc83xx_wdt_remove(
+ static struct of_device_id mpc83xx_wdt_match[] = {
+ 	{
+ 		.compatible = "mpc83xx_wdt",
++		.data = &(struct mpc83xx_wdt_type) {
++			.prescaler = 0x10000,
++		},
++	},
++	{
++		.compatible = "fsl,mpc8610-wdt",
++		.data = &(struct mpc83xx_wdt_type) {
++			.prescaler = 0x10000,
++			.hw_enabled = true,
++		},
+ 	},
+ 	{},
+ };
+@@ -216,10 +280,10 @@ static void __exit mpc83xx_wdt_exit(void
+ 	of_unregister_platform_driver(&mpc83xx_wdt_driver);
+ }
+ 
+-module_init(mpc83xx_wdt_init);
++subsys_initcall(mpc83xx_wdt_init);
+ module_exit(mpc83xx_wdt_exit);
+ 
+ MODULE_AUTHOR("Dave Updegraff, Kumar Gala");
+-MODULE_DESCRIPTION("Driver for watchdog timer in MPC83xx uProcessor");
++MODULE_DESCRIPTION("Driver for watchdog timer in MPC83xx/MPC86xx uProcessors");
+ MODULE_LICENSE("GPL");
+ MODULE_ALIAS_MISCDEV(WATCHDOG_MINOR);
+Index: linux-2.6.18/mvl_patches/pro50-1426.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1426.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1426);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

@@ -1,0 +1,587 @@
+#! /usr/bin/env bash
+# Patch: -MVL_POWERPC_Add_interrupt_support_for_Marvell_mv64x60
+# Date: Wed Sep 26 11:17:46 2007
+# MR: 24856
+# Adjustments:
+#     Commit 197686dfe0038fd190326d118b743ff65ad20c0e removes
+#     arch/powerpc/sysdev/rom.c. We still have rom support, which
+#     should apparently be removed later.
+#     Also community lacks rtc_cmos_setup stuff.
+# From e44b8941908ec9ccf03b52713c9e7d3471bada8c Mon Sep 17 00:00:00 2001
+# From: Dale Farnsworth <dale@farnsworth.org>
+# Date: Sat, 12 May 2007 10:55:24 +1000
+# Subject: [PATCH] [POWERPC] Add interrupt support for Marvell mv64x60 chips
+# 
+# There are 3 interrupt groups each with its own status/mask registers.
+# We use a separate struct irq_chip for each interrupt group and handle
+# interrupts in two stages or levels: level 1 selects the appropriate
+# struct irq_chip, and level 2 selects individual interrupts within
+# that irq_chip.
+# 
+# Signed-off-by: Dale Farnsworth <dale@farnsworth.org>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=351
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+Adjustments:
+    Commit 197686dfe0038fd190326d118b743ff65ad20c0e removes
+    arch/powerpc/sysdev/rom.c. We still have rom support, which
+    should apparently be removed later.
+    Also community lacks rtc_cmos_setup stuff.
+From e44b8941908ec9ccf03b52713c9e7d3471bada8c Mon Sep 17 00:00:00 2001
+From: Dale Farnsworth <dale@farnsworth.org>
+Date: Sat, 12 May 2007 10:55:24 +1000
+Subject: [PATCH] [POWERPC] Add interrupt support for Marvell mv64x60 chips
+
+There are 3 interrupt groups each with its own status/mask registers.
+We use a separate struct irq_chip for each interrupt group and handle
+interrupts in two stages or levels: level 1 selects the appropriate
+struct irq_chip, and level 2 selects individual interrupts within
+that irq_chip.
+
+Signed-off-by: Dale Farnsworth <dale@farnsworth.org>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/sysdev/Makefile
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/Makefile
++++ linux-2.6.18/arch/powerpc/sysdev/Makefile
+@@ -12,6 +12,7 @@ obj-$(CONFIG_FSL_SOC)		+= fsl_soc.o
+ obj-$(CONFIG_FSL_PCIE)		+= fsl_pcie.o
+ obj-$(CONFIG_TSI108_BRIDGE)	+= tsi108_pci.o tsi108_dev.o
+ obj-$(CONFIG_QUICC_ENGINE)	+= qe_lib/
++obj-$(CONFIG_MV64X60)		+= mv64x60_pic.o
+ obj-$(CONFIG_MTD)		+= rom.o
+ obj-$(CONFIG_RTC_DRV_CMOS)	+= rtc_cmos_setup.o
+ 
+Index: linux-2.6.18/arch/powerpc/sysdev/mv64x60.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/sysdev/mv64x60.h
+@@ -0,0 +1,9 @@
++#ifndef __MV64X60_H__
++#define __MV64X60_H__
++
++#include <linux/init.h>
++
++extern void __init mv64x60_init_irq(void);
++extern unsigned int mv64x60_get_irq(void);
++
++#endif /* __MV64X60_H__ */
+Index: linux-2.6.18/arch/powerpc/sysdev/mv64x60_pic.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/arch/powerpc/sysdev/mv64x60_pic.c
+@@ -0,0 +1,305 @@
++/*
++ * Interrupt handling for Marvell mv64360/mv64460 host bridges (Discovery)
++ *
++ * Author: Dale Farnsworth <dale@farnsworth.org>
++ *
++ * 2007 (c) MontaVista, Software, Inc.  This file is licensed under
++ * the terms of the GNU General Public License version 2.  This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++
++#include <linux/stddef.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/irq.h>
++#include <linux/interrupt.h>
++#include <linux/spinlock.h>
++
++#include <asm/byteorder.h>
++#include <asm/io.h>
++#include <asm/prom.h>
++#include <asm/irq.h>
++
++#include "mv64x60.h"
++
++/* Interrupt Controller Interface Registers */
++#define MV64X60_IC_MAIN_CAUSE_LO	0x0004
++#define MV64X60_IC_MAIN_CAUSE_HI	0x000c
++#define MV64X60_IC_CPU0_INTR_MASK_LO	0x0014
++#define MV64X60_IC_CPU0_INTR_MASK_HI	0x001c
++#define MV64X60_IC_CPU0_SELECT_CAUSE	0x0024
++
++#define MV64X60_HIGH_GPP_GROUPS		0x0f000000
++#define MV64X60_SELECT_CAUSE_HIGH	0x40000000
++
++/* General Purpose Pins Controller Interface Registers */
++#define MV64x60_GPP_INTR_CAUSE		0x0008
++#define MV64x60_GPP_INTR_MASK		0x000c
++
++#define MV64x60_LEVEL1_LOW		0
++#define MV64x60_LEVEL1_HIGH		1
++#define MV64x60_LEVEL1_GPP		2
++
++#define MV64x60_LEVEL1_MASK		0x00000060
++#define MV64x60_LEVEL1_OFFSET		5
++
++#define MV64x60_LEVEL2_MASK		0x0000001f
++
++#define MV64x60_NUM_IRQS		96
++
++static DEFINE_SPINLOCK(mv64x60_lock);
++
++static void __iomem *mv64x60_irq_reg_base;
++static void __iomem *mv64x60_gpp_reg_base;
++
++/*
++ * Interrupt Controller Handling
++ *
++ * The interrupt controller handles three groups of interrupts:
++ *   main low:	IRQ0-IRQ31
++ *   main high:	IRQ32-IRQ63
++ *   gpp:	IRQ64-IRQ95
++ *
++ * This code handles interrupts in two levels.  Level 1 selects the
++ * interrupt group, and level 2 selects an IRQ within that group.
++ * Each group has its own irq_chip structure.
++ */
++
++static u32 mv64x60_cached_low_mask;
++static u32 mv64x60_cached_high_mask = MV64X60_HIGH_GPP_GROUPS;
++static u32 mv64x60_cached_gpp_mask;
++
++static struct irq_host *mv64x60_irq_host;
++
++/*
++ * mv64x60_chip_low functions
++ */
++
++static void mv64x60_mask_low(unsigned int virq)
++{
++	int level2 = irq_map[virq].hwirq & MV64x60_LEVEL2_MASK;
++	unsigned long flags;
++
++	spin_lock_irqsave(&mv64x60_lock, flags);
++	mv64x60_cached_low_mask &= ~(1 << level2);
++	out_le32(mv64x60_irq_reg_base + MV64X60_IC_CPU0_INTR_MASK_LO,
++		 mv64x60_cached_low_mask);
++	spin_unlock_irqrestore(&mv64x60_lock, flags);
++	(void)in_le32(mv64x60_irq_reg_base + MV64X60_IC_CPU0_INTR_MASK_LO);
++}
++
++static void mv64x60_unmask_low(unsigned int virq)
++{
++	int level2 = irq_map[virq].hwirq & MV64x60_LEVEL2_MASK;
++	unsigned long flags;
++
++	spin_lock_irqsave(&mv64x60_lock, flags);
++	mv64x60_cached_low_mask |= 1 << level2;
++	out_le32(mv64x60_irq_reg_base + MV64X60_IC_CPU0_INTR_MASK_LO,
++		 mv64x60_cached_low_mask);
++	spin_unlock_irqrestore(&mv64x60_lock, flags);
++	(void)in_le32(mv64x60_irq_reg_base + MV64X60_IC_CPU0_INTR_MASK_LO);
++}
++
++static struct irq_chip mv64x60_chip_low = {
++	.name		= "mv64x60_low",
++	.mask		= mv64x60_mask_low,
++	.mask_ack	= mv64x60_mask_low,
++	.unmask		= mv64x60_unmask_low,
++};
++
++/*
++ * mv64x60_chip_high functions
++ */
++
++static void mv64x60_mask_high(unsigned int virq)
++{
++	int level2 = irq_map[virq].hwirq & MV64x60_LEVEL2_MASK;
++	unsigned long flags;
++
++	spin_lock_irqsave(&mv64x60_lock, flags);
++	mv64x60_cached_high_mask &= ~(1 << level2);
++	out_le32(mv64x60_irq_reg_base + MV64X60_IC_CPU0_INTR_MASK_HI,
++		 mv64x60_cached_high_mask);
++	spin_unlock_irqrestore(&mv64x60_lock, flags);
++	(void)in_le32(mv64x60_irq_reg_base + MV64X60_IC_CPU0_INTR_MASK_HI);
++}
++
++static void mv64x60_unmask_high(unsigned int virq)
++{
++	int level2 = irq_map[virq].hwirq & MV64x60_LEVEL2_MASK;
++	unsigned long flags;
++
++	spin_lock_irqsave(&mv64x60_lock, flags);
++	mv64x60_cached_high_mask |= 1 << level2;
++	out_le32(mv64x60_irq_reg_base + MV64X60_IC_CPU0_INTR_MASK_HI,
++		 mv64x60_cached_high_mask);
++	spin_unlock_irqrestore(&mv64x60_lock, flags);
++	(void)in_le32(mv64x60_irq_reg_base + MV64X60_IC_CPU0_INTR_MASK_HI);
++}
++
++static struct irq_chip mv64x60_chip_high = {
++	.name		= "mv64x60_high",
++	.mask		= mv64x60_mask_high,
++	.mask_ack	= mv64x60_mask_high,
++	.unmask		= mv64x60_unmask_high,
++};
++
++/*
++ * mv64x60_chip_gpp functions
++ */
++
++static void mv64x60_mask_gpp(unsigned int virq)
++{
++	int level2 = irq_map[virq].hwirq & MV64x60_LEVEL2_MASK;
++	unsigned long flags;
++
++	spin_lock_irqsave(&mv64x60_lock, flags);
++	mv64x60_cached_gpp_mask &= ~(1 << level2);
++	out_le32(mv64x60_gpp_reg_base + MV64x60_GPP_INTR_MASK,
++		 mv64x60_cached_gpp_mask);
++	spin_unlock_irqrestore(&mv64x60_lock, flags);
++	(void)in_le32(mv64x60_gpp_reg_base + MV64x60_GPP_INTR_MASK);
++}
++
++static void mv64x60_mask_ack_gpp(unsigned int virq)
++{
++	int level2 = irq_map[virq].hwirq & MV64x60_LEVEL2_MASK;
++	unsigned long flags;
++
++	spin_lock_irqsave(&mv64x60_lock, flags);
++	mv64x60_cached_gpp_mask &= ~(1 << level2);
++	out_le32(mv64x60_gpp_reg_base + MV64x60_GPP_INTR_MASK,
++		 mv64x60_cached_gpp_mask);
++	out_le32(mv64x60_gpp_reg_base + MV64x60_GPP_INTR_CAUSE,
++		 ~(1 << level2));
++	spin_unlock_irqrestore(&mv64x60_lock, flags);
++	(void)in_le32(mv64x60_gpp_reg_base + MV64x60_GPP_INTR_CAUSE);
++}
++
++static void mv64x60_unmask_gpp(unsigned int virq)
++{
++	int level2 = irq_map[virq].hwirq & MV64x60_LEVEL2_MASK;
++	unsigned long flags;
++
++	spin_lock_irqsave(&mv64x60_lock, flags);
++	mv64x60_cached_gpp_mask |= 1 << level2;
++	out_le32(mv64x60_gpp_reg_base + MV64x60_GPP_INTR_MASK,
++		 mv64x60_cached_gpp_mask);
++	spin_unlock_irqrestore(&mv64x60_lock, flags);
++	(void)in_le32(mv64x60_gpp_reg_base + MV64x60_GPP_INTR_MASK);
++}
++
++static struct irq_chip mv64x60_chip_gpp = {
++	.name		= "mv64x60_gpp",
++	.mask		= mv64x60_mask_gpp,
++	.mask_ack	= mv64x60_mask_ack_gpp,
++	.unmask		= mv64x60_unmask_gpp,
++};
++
++/*
++ * mv64x60_host_ops functions
++ */
++
++static int mv64x60_host_match(struct irq_host *h, struct device_node *np)
++{
++	return mv64x60_irq_host->host_data == np;
++}
++
++static struct irq_chip *mv64x60_chips[] = {
++	[MV64x60_LEVEL1_LOW]  = &mv64x60_chip_low,
++	[MV64x60_LEVEL1_HIGH] = &mv64x60_chip_high,
++	[MV64x60_LEVEL1_GPP]  = &mv64x60_chip_gpp,
++};
++
++static int mv64x60_host_map(struct irq_host *h, unsigned int virq,
++			  irq_hw_number_t hwirq)
++{
++	int level1;
++
++	get_irq_desc(virq)->status |= IRQ_LEVEL;
++
++	level1 = (hwirq & MV64x60_LEVEL1_MASK) >> MV64x60_LEVEL1_OFFSET;
++	BUG_ON(level1 > MV64x60_LEVEL1_GPP);
++	set_irq_chip_and_handler(virq, mv64x60_chips[level1], handle_level_irq);
++
++	return 0;
++}
++
++static struct irq_host_ops mv64x60_host_ops = {
++	.match = mv64x60_host_match,
++	.map   = mv64x60_host_map,
++};
++
++/*
++ * Global functions
++ */
++
++void __init mv64x60_init_irq(void)
++{
++	struct device_node *np;
++	phys_addr_t paddr;
++	unsigned int size;
++	const unsigned int *reg;
++	unsigned long flags;
++
++	np = of_find_compatible_node(NULL, NULL, "marvell,mv64x60-gpp");
++	reg = of_get_property(np, "reg", &size);
++	paddr = of_translate_address(np, reg);
++	mv64x60_gpp_reg_base = ioremap(paddr, reg[1]);
++	of_node_put(np);
++
++	np = of_find_compatible_node(NULL, NULL, "marvell,mv64x60-pic");
++	reg = of_get_property(np, "reg", &size);
++	paddr = of_translate_address(np, reg);
++	of_node_put(np);
++	mv64x60_irq_reg_base = ioremap(paddr, reg[1]);
++
++	mv64x60_irq_host = irq_alloc_host(IRQ_HOST_MAP_LINEAR, MV64x60_NUM_IRQS,
++					  &mv64x60_host_ops, MV64x60_NUM_IRQS);
++
++	mv64x60_irq_host->host_data = np;
++
++	spin_lock_irqsave(&mv64x60_lock, flags);
++	out_le32(mv64x60_gpp_reg_base + MV64x60_GPP_INTR_MASK,
++		 mv64x60_cached_gpp_mask);
++	out_le32(mv64x60_irq_reg_base + MV64X60_IC_CPU0_INTR_MASK_LO,
++		 mv64x60_cached_low_mask);
++	out_le32(mv64x60_irq_reg_base + MV64X60_IC_CPU0_INTR_MASK_HI,
++		 mv64x60_cached_high_mask);
++
++	out_le32(mv64x60_gpp_reg_base + MV64x60_GPP_INTR_CAUSE, 0);
++	out_le32(mv64x60_irq_reg_base + MV64X60_IC_MAIN_CAUSE_LO, 0);
++	out_le32(mv64x60_irq_reg_base + MV64X60_IC_MAIN_CAUSE_HI, 0);
++	spin_unlock_irqrestore(&mv64x60_lock, flags);
++}
++
++unsigned int mv64x60_get_irq(void)
++{
++	u32 cause;
++	int level1;
++	irq_hw_number_t hwirq;
++	int virq = NO_IRQ;
++
++	cause = in_le32(mv64x60_irq_reg_base + MV64X60_IC_CPU0_SELECT_CAUSE);
++	if (cause & MV64X60_SELECT_CAUSE_HIGH) {
++		cause &= mv64x60_cached_high_mask;
++		level1 = MV64x60_LEVEL1_HIGH;
++		if (cause & MV64X60_HIGH_GPP_GROUPS) {
++			cause = in_le32(mv64x60_gpp_reg_base +
++					MV64x60_GPP_INTR_CAUSE);
++			cause &= mv64x60_cached_gpp_mask;
++			level1 = MV64x60_LEVEL1_GPP;
++		}
++	} else {
++		cause &= mv64x60_cached_low_mask;
++		level1 = MV64x60_LEVEL1_LOW;
++	}
++	if (cause) {
++		hwirq = (level1 << MV64x60_LEVEL1_OFFSET) | __ilog2(cause);
++		virq = irq_linear_revmap(mv64x60_irq_host, hwirq);
++	}
++
++	return virq;
++}
+Index: linux-2.6.18/mvl_patches/pro50-0351.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0351.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(351);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

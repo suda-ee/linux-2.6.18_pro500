@@ -1,0 +1,364 @@
+#! /usr/bin/env bash
+# Patch: -x86_remove_IO_APIC_VECTOR
+# Date: Wed Sep 26 15:08:58 2007
+# MR: 22395
+# commit b940d22d58c41b2ae491dca9232850f6f38f3653
+# Author: Eric W. Biederman <ebiederm@xmission.com>
+# Date:   Sun Oct 8 07:43:46 2006 -0600
+# 
+#     [PATCH] i386/x86_64: Remove global IO_APIC_VECTOR
+#     
+#     Which vector an irq is assigned to now varies dynamically and is
+#     not needed outside of io_apic.c.  So remove the possibility
+#     of accessing the information outside of io_apic.c and remove
+#     the silly macro that makes looking for users of irq_vector
+#     difficult.
+#     
+#     The fact this compiles ensures there aren't any more pieces
+#     of the old CONFIG_PCI_MSI weirdness that I failed to remove.
+#     
+#     Signed-off-by: Eric W. Biederman <ebiederm@xmission.com>
+#     Signed-off-by: Linus Torvalds <torvalds@osdl.org>
+# 
+
+PATCHNUM=428
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 22395
+commit b940d22d58c41b2ae491dca9232850f6f38f3653
+Author: Eric W. Biederman <ebiederm@xmission.com>
+Date:   Sun Oct 8 07:43:46 2006 -0600
+
+    [PATCH] i386/x86_64: Remove global IO_APIC_VECTOR
+    
+    Which vector an irq is assigned to now varies dynamically and is
+    not needed outside of io_apic.c.  So remove the possibility
+    of accessing the information outside of io_apic.c and remove
+    the silly macro that makes looking for users of irq_vector
+    difficult.
+    
+    The fact this compiles ensures there aren't any more pieces
+    of the old CONFIG_PCI_MSI weirdness that I failed to remove.
+    
+    Signed-off-by: Eric W. Biederman <ebiederm@xmission.com>
+    Signed-off-by: Linus Torvalds <torvalds@osdl.org>
+
+Index: linux-2.6.18/arch/i386/kernel/io_apic.c
+===================================================================
+--- linux-2.6.18.orig/arch/i386/kernel/io_apic.c
++++ linux-2.6.18/arch/i386/kernel/io_apic.c
+@@ -1250,8 +1250,8 @@ static int __assign_irq_vector(int irq)
+ 
+ 	BUG_ON((unsigned)irq >= NR_IRQ_VECTORS);
+ 
+-	if (IO_APIC_VECTOR(irq) > 0)
+-		return IO_APIC_VECTOR(irq);
++	if (irq_vector[irq] > 0)
++		return irq_vector[irq];
+ 
+ 	current_vector += 8;
+ 	if (current_vector == SYSCALL_VECTOR)
+@@ -1265,7 +1265,7 @@ static int __assign_irq_vector(int irq)
+ 	}
+ 
+ 	vector = current_vector;
+-	IO_APIC_VECTOR(irq) = vector;
++	irq_vector[irq] = vector;
+ 
+ 	return vector;
+ }
+@@ -2053,7 +2053,7 @@ static void ack_ioapic_quirk_irq(unsigne
+  * operation to prevent an edge-triggered interrupt escaping meanwhile.
+  * The idea is from Manfred Spraul.  --macro
+  */
+-	i = IO_APIC_VECTOR(irq);
++	i = irq_vector[irq];
+ 
+ 	v = apic_read(APIC_TMR + ((i & ~0x1f) >> 1));
+ 
+@@ -2072,7 +2072,7 @@ static void ack_ioapic_quirk_irq(unsigne
+ 
+ static int ioapic_retrigger_irq(unsigned int irq)
+ {
+-	send_IPI_self(IO_APIC_VECTOR(irq));
++	send_IPI_self(irq_vector[irq]);
+ 
+ 	return 1;
+ }
+@@ -2108,7 +2108,7 @@ static inline void init_IO_APIC_traps(vo
+ 	 */
+ 	for (irq = 0; irq < NR_IRQS ; irq++) {
+ 		int tmp = irq;
+-		if (IO_APIC_IRQ(tmp) && !IO_APIC_VECTOR(tmp)) {
++		if (IO_APIC_IRQ(tmp) && !irq_vector[tmp]) {
+ 			/*
+ 			 * Hmm.. We don't have an entry for this,
+ 			 * so default to an old-fashioned 8259
+Index: linux-2.6.18/arch/x86_64/kernel/io_apic.c
+===================================================================
+--- linux-2.6.18.orig/arch/x86_64/kernel/io_apic.c
++++ linux-2.6.18/arch/x86_64/kernel/io_apic.c
+@@ -823,8 +823,8 @@ static int __assign_irq_vector(int irq, 
+ 
+ 	BUG_ON((unsigned)irq >= NR_IRQ_VECTORS);
+ 
+-	if (IO_APIC_VECTOR(irq) > 0)
+-		old_vector = IO_APIC_VECTOR(irq);
++	if (irq_vector[irq] > 0)
++		old_vector = irq_vector[irq];
+ 	if ((old_vector > 0) && cpu_isset(old_vector >> 8, mask)) {
+ 		return old_vector;
+ 	}
+@@ -856,7 +856,7 @@ next:
+ 		}
+ 		per_cpu(vector_irq, cpu)[vector] = irq;
+ 		vector |= cpu << 8;
+-		IO_APIC_VECTOR(irq) = vector;
++		irq_vector[irq] = vector;
+ 		return vector;
+ 	}
+ 	return -ENOSPC;
+@@ -1610,7 +1610,7 @@ static inline void init_IO_APIC_traps(vo
+ 	 */
+ 	for (irq = 0; irq < NR_IRQS ; irq++) {
+ 		int tmp = irq;
+-		if (IO_APIC_IRQ(tmp) && !IO_APIC_VECTOR(tmp)) {
++		if (IO_APIC_IRQ(tmp) && !irq_vector[tmp]) {
+ 			/*
+ 			 * Hmm.. We don't have an entry for this,
+ 			 * so default to an old-fashioned 8259
+Index: linux-2.6.18/include/asm-i386/hw_irq.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-i386/hw_irq.h
++++ linux-2.6.18/include/asm-i386/hw_irq.h
+@@ -26,9 +26,6 @@
+  * Interrupt entry/exit code at both C and assembly level
+  */
+ 
+-extern u8 irq_vector[NR_IRQ_VECTORS];
+-#define IO_APIC_VECTOR(irq)	(irq_vector[irq])
+-
+ extern void (*interrupt[NR_IRQS])(void);
+ 
+ #ifdef CONFIG_SMP
+Index: linux-2.6.18/include/asm-x86_64/hw_irq.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-x86_64/hw_irq.h
++++ linux-2.6.18/include/asm-x86_64/hw_irq.h
+@@ -74,10 +74,8 @@
+ 
+ 
+ #ifndef __ASSEMBLY__
+-extern unsigned int irq_vector[NR_IRQ_VECTORS];
+ typedef int vector_irq_t[NR_VECTORS];
+ DECLARE_PER_CPU(vector_irq_t, vector_irq);
+-#define IO_APIC_VECTOR(irq)	(irq_vector[irq])
+ 
+ /*
+  * Various low-level irq details needed by irq.c, process.c,
+Index: linux-2.6.18/mvl_patches/pro50-0428.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0428.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(428);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

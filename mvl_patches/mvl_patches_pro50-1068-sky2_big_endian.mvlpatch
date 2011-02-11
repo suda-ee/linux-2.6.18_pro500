@@ -1,0 +1,431 @@
+#! /usr/bin/env bash
+# Patch: -sky2_big_endian
+# Date: Fri Apr 25 11:54:54 2008
+# Source: kernel.org
+# MR: 27394
+# Type: Defect Fix
+# Disposition: backport from 2.6.19-rc1 (f65b138ca94326bbffe06ddc28e65606a249e58e)
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# 
+# commit f65b138ca94326bbffe06ddc28e65606a249e58e
+# Author: Stephen Hemminger <shemminger@osdl.org>
+# Date:   Wed Sep 6 12:45:02 2006 -0700
+# 
+#     [PATCH] sky2: big endian
+#     
+#     Fix support for big endian platforms like PPC.
+#     Still not sure about VLAN acceleration (does it need swapping)?
+#     
+#     Signed-off-by: Stephen Hemminger <shemminger@osdl.org>
+#     Signed-off-by: Jeff Garzik <jeff@garzik.org>
+# 
+#  drivers/net/sky2.c |   43 ++++++++++++++++++++++---------------------
+#  drivers/net/sky2.h |   19 +++----------------
+#  2 files changed, 25 insertions(+), 37 deletions(-)
+# 
+
+PATCHNUM=1068
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: kernel.org
+MR: 27394
+Type: Defect Fix
+Disposition: backport from 2.6.19-rc1 (f65b138ca94326bbffe06ddc28e65606a249e58e)
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+
+commit f65b138ca94326bbffe06ddc28e65606a249e58e
+Author: Stephen Hemminger <shemminger@osdl.org>
+Date:   Wed Sep 6 12:45:02 2006 -0700
+
+    [PATCH] sky2: big endian
+    
+    Fix support for big endian platforms like PPC.
+    Still not sure about VLAN acceleration (does it need swapping)?
+    
+    Signed-off-by: Stephen Hemminger <shemminger@osdl.org>
+    Signed-off-by: Jeff Garzik <jeff@garzik.org>
+
+ drivers/net/sky2.c       |   43 ++++++++++++++++++++++---------------------
+ drivers/net/sky2.h       |   19 +++----------------
+ mvl_patches/pro50-1068.c |   16 ++++++++++++++++
+ 3 files changed, 41 insertions(+), 37 deletions(-)
+
+Index: linux-2.6.18/drivers/net/sky2.c
+===================================================================
+--- linux-2.6.18.orig/drivers/net/sky2.c
++++ linux-2.6.18/drivers/net/sky2.c
+@@ -821,7 +821,7 @@ static void rx_set_checksum(struct sky2_
+ 	struct sky2_rx_le *le;
+ 
+ 	le = sky2_next_rx(sky2);
+-	le->addr = (ETH_HLEN << 16) | ETH_HLEN;
++	le->addr = cpu_to_le32((ETH_HLEN << 16) | ETH_HLEN);
+ 	le->ctrl = 0;
+ 	le->opcode = OP_TCPSTART | HW_OWNER;
+ 
+@@ -1236,7 +1236,7 @@ static int sky2_xmit_frame(struct sk_buf
+ 	/* Send high bits if changed or crosses boundary */
+ 	if (addr64 != sky2->tx_addr64 || high32(mapping + len) != sky2->tx_addr64) {
+ 		le = get_tx_le(sky2);
+-		le->tx.addr = cpu_to_le32(addr64);
++		le->addr = cpu_to_le32(addr64);
+ 		le->ctrl = 0;
+ 		le->opcode = OP_ADDR64 | HW_OWNER;
+ 		sky2->tx_addr64 = high32(mapping + len);
+@@ -1251,8 +1251,7 @@ static int sky2_xmit_frame(struct sk_buf
+ 
+ 		if (mss != sky2->tx_last_mss) {
+ 			le = get_tx_le(sky2);
+-			le->tx.tso.size = cpu_to_le16(mss);
+-			le->tx.tso.rsvd = 0;
++			le->addr = cpu_to_le32(mss);
+ 			le->opcode = OP_LRGLEN | HW_OWNER;
+ 			le->ctrl = 0;
+ 			sky2->tx_last_mss = mss;
+@@ -1265,7 +1264,7 @@ static int sky2_xmit_frame(struct sk_buf
+ 	if (sky2->vlgrp && vlan_tx_tag_present(skb)) {
+ 		if (!le) {
+ 			le = get_tx_le(sky2);
+-			le->tx.addr = 0;
++			le->addr = 0;
+ 			le->opcode = OP_VLAN|HW_OWNER;
+ 			le->ctrl = 0;
+ 		} else
+@@ -1277,20 +1276,21 @@ static int sky2_xmit_frame(struct sk_buf
+ 
+ 	/* Handle TCP checksum offload */
+ 	if (skb->ip_summed == CHECKSUM_HW) {
+-		u16 hdr = skb->h.raw - skb->data;
+-		u16 offset = hdr + skb->csum;
++		unsigned offset = skb->h.raw - skb->data;
++		u32 tcpsum;
++
++		tcpsum = offset << 16;		/* sum start */
++		tcpsum |= offset + skb->csum;	/* sum write */
+ 
+ 		ctrl = CALSUM | WR_SUM | INIT_SUM | LOCK_SUM;
+ 		if (skb->nh.iph->protocol == IPPROTO_UDP)
+ 			ctrl |= UDPTCP;
+ 
+-		if (hdr != sky2->tx_csum_start || offset != sky2->tx_csum_offset) {
+-			sky2->tx_csum_start = hdr;
+-			sky2->tx_csum_offset = offset;
++		if (tcpsum != sky2->tx_tcpsum) {
++			sky2->tx_tcpsum = tcpsum;
+ 
+ 			le = get_tx_le(sky2);
+-			le->tx.csum.start = cpu_to_le16(hdr);
+-			le->tx.csum.offset = cpu_to_le16(offset);
++			le->addr = cpu_to_le32(tcpsum);
+ 			le->length = 0;	/* initial checksum value */
+ 			le->ctrl = 1;	/* one packet */
+ 			le->opcode = OP_TCPLISW | HW_OWNER;
+@@ -1298,7 +1298,7 @@ static int sky2_xmit_frame(struct sk_buf
+ 	}
+ 
+ 	le = get_tx_le(sky2);
+-	le->tx.addr = cpu_to_le32((u32) mapping);
++	le->addr = cpu_to_le32((u32) mapping);
+ 	le->length = cpu_to_le16(len);
+ 	le->ctrl = ctrl;
+ 	le->opcode = mss ? (OP_LARGESEND | HW_OWNER) : (OP_PACKET | HW_OWNER);
+@@ -1316,14 +1316,14 @@ static int sky2_xmit_frame(struct sk_buf
+ 		addr64 = high32(mapping);
+ 		if (addr64 != sky2->tx_addr64) {
+ 			le = get_tx_le(sky2);
+-			le->tx.addr = cpu_to_le32(addr64);
++			le->addr = cpu_to_le32(addr64);
+ 			le->ctrl = 0;
+ 			le->opcode = OP_ADDR64 | HW_OWNER;
+ 			sky2->tx_addr64 = addr64;
+ 		}
+ 
+ 		le = get_tx_le(sky2);
+-		le->tx.addr = cpu_to_le32((u32) mapping);
++		le->addr = cpu_to_le32((u32) mapping);
+ 		le->length = cpu_to_le16(frag->size);
+ 		le->ctrl = ctrl;
+ 		le->opcode = OP_BUFFER | HW_OWNER;
+@@ -1929,8 +1929,8 @@ static int sky2_status_intr(struct sky2_
+ 		dev = hw->dev[le->link];
+ 
+ 		sky2 = netdev_priv(dev);
+-		length = le->length;
+-		status = le->status;
++		length = le16_to_cpu(le->length);
++		status = le32_to_cpu(le->status);
+ 
+ 		switch (le->opcode & ~HW_OWNER) {
+ 		case OP_RXSTAT:
+@@ -1974,7 +1974,7 @@ static int sky2_status_intr(struct sky2_
+ 		case OP_RXCHKS:
+ 			skb = sky2->rx_ring[sky2->rx_next].skb;
+ 			skb->ip_summed = CHECKSUM_HW;
+-			skb->csum = le16_to_cpu(status);
++			skb->csum = status & 0xffff;
+ 			break;
+ 
+ 		case OP_TXINDEXLE:
+@@ -3287,12 +3287,13 @@ static int __devinit sky2_probe(struct p
+ 	hw->pm_cap = pm_cap;
+ 
+ #ifdef __BIG_ENDIAN
+-	/* byte swap descriptors in hardware */
++	/* The sk98lin vendor driver uses hardware byte swapping but
++	 * this driver uses software swapping.
++	 */
+ 	{
+ 		u32 reg;
+-
+ 		reg = sky2_pci_read32(hw, PCI_DEV_REG2);
+-		reg |= PCI_REV_DESC;
++		reg &= ~PCI_REV_DESC;
+ 		sky2_pci_write32(hw, PCI_DEV_REG2, reg);
+ 	}
+ #endif
+Index: linux-2.6.18/drivers/net/sky2.h
+===================================================================
+--- linux-2.6.18.orig/drivers/net/sky2.h
++++ linux-2.6.18/drivers/net/sky2.h
+@@ -1791,21 +1791,9 @@ enum {
+ 	OP_TXINDEXLE	= 0x68,
+ };
+ 
+-/* Yukon 2 hardware interface
+- * Not tested on big endian
+- */
++/* Yukon 2 hardware interface */
+ struct sky2_tx_le {
+-	union {
+-		__le32	addr;
+-		struct {
+-			__le16	offset;
+-			__le16	start;
+-		} csum  __attribute((packed));
+-		struct {
+-			__le16	size;
+-			__le16	rsvd;
+-		} tso  __attribute((packed));
+-	} tx;
++	__le32	addr;
+ 	__le16	length;	/* also vlan tag or checksum start */
+ 	u8	ctrl;
+ 	u8	opcode;
+@@ -1851,8 +1839,7 @@ struct sky2_port {
+ 	u32		     tx_addr64;
+ 	u16		     tx_pending;
+ 	u16		     tx_last_mss;
+-	u16		     tx_csum_start;
+-	u16		     tx_csum_offset;
++	u32		     tx_tcpsum;
+ 
+ 	struct ring_info     *rx_ring ____cacheline_aligned_in_smp;
+ 	struct sky2_rx_le    *rx_le;
+Index: linux-2.6.18/mvl_patches/pro50-1068.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1068.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1068);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

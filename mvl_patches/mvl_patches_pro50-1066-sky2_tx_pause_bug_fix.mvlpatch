@@ -1,0 +1,514 @@
+#! /usr/bin/env bash
+# Patch: -sky2_tx_pause_bug_fix
+# Date: Fri Apr 25 11:54:45 2008
+# Source: kernel.org
+# MR: 27394
+# Type: Defect Fix
+# Disposition: backport from 2.6.19-rc1 (2eaba1a280b6380f5b1238c53ce62e4381fc5f97)
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# 
+# commit 2eaba1a280b6380f5b1238c53ce62e4381fc5f97
+# Author: Stephen Hemminger <shemminger@osdl.org>
+# Date:   Wed Sep 6 12:44:47 2006 -0700
+# 
+#     [PATCH] sky2: tx pause bug fix
+#     
+#     Fix problems with transmit pause frames. The driver was telling the
+#     GMAC to flush (not process) pause frames. Manually disabling pause wasn't
+#     working because of problems in the setup.
+#     
+#     This maybe the cause of the lockup under load.
+#     	http://bugzilla.kernel.org/show_bug.cgi?id=6839
+#     
+#     Patch against netdev-2.6 git tree
+#     
+#     Signed-off-by: Stephen Hemminger <shemminger@osdl.org>
+#     Signed-off-by: Jeff Garzik <jeff@garzik.org>
+# 
+#  drivers/net/sky2.c |  123 ++++++++++++++++++----------------------------------
+#  drivers/net/sky2.h |    2 -
+#  2 files changed, 43 insertions(+), 82 deletions(-)
+# 
+
+PATCHNUM=1066
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: kernel.org
+MR: 27394
+Type: Defect Fix
+Disposition: backport from 2.6.19-rc1 (2eaba1a280b6380f5b1238c53ce62e4381fc5f97)
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+
+commit 2eaba1a280b6380f5b1238c53ce62e4381fc5f97
+Author: Stephen Hemminger <shemminger@osdl.org>
+Date:   Wed Sep 6 12:44:47 2006 -0700
+
+    [PATCH] sky2: tx pause bug fix
+    
+    Fix problems with transmit pause frames. The driver was telling the
+    GMAC to flush (not process) pause frames. Manually disabling pause wasn't
+    working because of problems in the setup.
+    
+    This maybe the cause of the lockup under load.
+    	http://bugzilla.kernel.org/show_bug.cgi?id=6839
+    
+    Patch against netdev-2.6 git tree
+    
+    Signed-off-by: Stephen Hemminger <shemminger@osdl.org>
+    Signed-off-by: Jeff Garzik <jeff@garzik.org>
+
+ drivers/net/sky2.c       |  123 ++++++++++++++++-------------------------------
+ drivers/net/sky2.h       |    2 
+ mvl_patches/pro50-1066.c |   16 ++++++
+ 3 files changed, 59 insertions(+), 82 deletions(-)
+
+Index: linux-2.6.18/drivers/net/sky2.c
+===================================================================
+--- linux-2.6.18.orig/drivers/net/sky2.c
++++ linux-2.6.18/drivers/net/sky2.c
+@@ -289,7 +289,7 @@ static void sky2_gmac_reset(struct sky2_
+ static void sky2_phy_init(struct sky2_hw *hw, unsigned port)
+ {
+ 	struct sky2_port *sky2 = netdev_priv(hw->dev[port]);
+-	u16 ctrl, ct1000, adv, pg, ledctrl, ledover;
++	u16 ctrl, ct1000, adv, pg, ledctrl, ledover, reg;
+ 
+ 	if (sky2->autoneg == AUTONEG_ENABLE &&
+ 	    !(hw->chip_id == CHIP_ID_YUKON_XL || hw->chip_id == CHIP_ID_YUKON_EC_U)) {
+@@ -358,6 +358,7 @@ static void sky2_phy_init(struct sky2_hw
+ 	ctrl = 0;
+ 	ct1000 = 0;
+ 	adv = PHY_AN_CSMA;
++	reg = 0;
+ 
+ 	if (sky2->autoneg == AUTONEG_ENABLE) {
+ 		if (hw->copper) {
+@@ -390,21 +391,46 @@ static void sky2_phy_init(struct sky2_hw
+ 		/* forced speed/duplex settings */
+ 		ct1000 = PHY_M_1000C_MSE;
+ 
+-		if (sky2->duplex == DUPLEX_FULL)
+-			ctrl |= PHY_CT_DUP_MD;
++		/* Disable auto update for duplex flow control and speed */
++		reg |= GM_GPCR_AU_ALL_DIS;
+ 
+ 		switch (sky2->speed) {
+ 		case SPEED_1000:
+ 			ctrl |= PHY_CT_SP1000;
++			reg |= GM_GPCR_SPEED_1000;
+ 			break;
+ 		case SPEED_100:
+ 			ctrl |= PHY_CT_SP100;
++			reg |= GM_GPCR_SPEED_100;
+ 			break;
+ 		}
+ 
++		if (sky2->duplex == DUPLEX_FULL) {
++			reg |= GM_GPCR_DUP_FULL;
++			ctrl |= PHY_CT_DUP_MD;
++		} else if (sky2->speed != SPEED_1000 && hw->chip_id != CHIP_ID_YUKON_EC_U) {
++			/* Turn off flow control for 10/100mbps */
++			sky2->rx_pause = 0;
++			sky2->tx_pause = 0;
++		}
++
++		if (!sky2->rx_pause)
++			reg |= GM_GPCR_FC_RX_DIS;
++
++		if (!sky2->tx_pause)
++			reg |= GM_GPCR_FC_TX_DIS;
++
++		/* Forward pause packets to GMAC? */
++		if (sky2->tx_pause || sky2->rx_pause)
++			sky2_write8(hw, SK_REG(port, GMAC_CTRL), GMC_PAUSE_ON);
++		else
++			sky2_write8(hw, SK_REG(port, GMAC_CTRL), GMC_PAUSE_OFF);
++
+ 		ctrl |= PHY_CT_RESET;
+ 	}
+ 
++	gma_write16(hw, port, GM_GP_CTRL, reg);
++
+ 	if (hw->chip_id != CHIP_ID_YUKON_FE)
+ 		gm_phy_write(hw, port, PHY_MARV_1000T_CTRL, ct1000);
+ 
+@@ -508,6 +534,7 @@ static void sky2_phy_init(struct sky2_hw
+ 			gm_phy_write(hw, port, PHY_MARV_LED_OVER, ledover);
+ 
+ 	}
++
+ 	/* Enable phy interrupt on auto-negotiation complete (or link up) */
+ 	if (sky2->autoneg == AUTONEG_ENABLE)
+ 		gm_phy_write(hw, port, PHY_MARV_INT_MASK, PHY_M_IS_AN_COMPL);
+@@ -570,49 +597,11 @@ static void sky2_mac_init(struct sky2_hw
+ 			 gm_phy_read(hw, 1, PHY_MARV_INT_MASK) != 0);
+ 	}
+ 
+-	if (sky2->autoneg == AUTONEG_DISABLE) {
+-		reg = gma_read16(hw, port, GM_GP_CTRL);
+-		reg |= GM_GPCR_AU_ALL_DIS;
+-		gma_write16(hw, port, GM_GP_CTRL, reg);
+-		gma_read16(hw, port, GM_GP_CTRL);
+-
+-		switch (sky2->speed) {
+-		case SPEED_1000:
+-			reg &= ~GM_GPCR_SPEED_100;
+-			reg |= GM_GPCR_SPEED_1000;
+-			break;
+-		case SPEED_100:
+-			reg &= ~GM_GPCR_SPEED_1000;
+-			reg |= GM_GPCR_SPEED_100;
+-			break;
+-		case SPEED_10:
+-			reg &= ~(GM_GPCR_SPEED_1000 | GM_GPCR_SPEED_100);
+-			break;
+-		}
+-
+-		if (sky2->duplex == DUPLEX_FULL)
+-			reg |= GM_GPCR_DUP_FULL;
+-
+-		/* turn off pause in 10/100mbps half duplex */
+-		else if (sky2->speed != SPEED_1000 &&
+-			 hw->chip_id != CHIP_ID_YUKON_EC_U)
+-			sky2->tx_pause = sky2->rx_pause = 0;
+-	} else
+-		reg = GM_GPCR_SPEED_1000 | GM_GPCR_SPEED_100 | GM_GPCR_DUP_FULL;
+-
+-	if (!sky2->tx_pause && !sky2->rx_pause) {
+-		sky2_write32(hw, SK_REG(port, GMAC_CTRL), GMC_PAUSE_OFF);
+-		reg |=
+-		    GM_GPCR_FC_TX_DIS | GM_GPCR_FC_RX_DIS | GM_GPCR_AU_FCT_DIS;
+-	} else if (sky2->tx_pause && !sky2->rx_pause) {
+-		/* disable Rx flow-control */
+-		reg |= GM_GPCR_FC_RX_DIS | GM_GPCR_AU_FCT_DIS;
+-	}
+-
+-	gma_write16(hw, port, GM_GP_CTRL, reg);
+-
+ 	sky2_read16(hw, SK_REG(port, GMAC_IRQ_SRC));
+ 
++	/* Enable Transmit FIFO Underrun */
++	sky2_write8(hw, SK_REG(port, GMAC_IRQ_MSK), GMAC_DEF_MSK);
++
+ 	spin_lock_bh(&sky2->phy_lock);
+ 	sky2_phy_init(hw, port);
+ 	spin_unlock_bh(&sky2->phy_lock);
+@@ -1520,40 +1509,10 @@ static void sky2_link_up(struct sky2_por
+ 	unsigned port = sky2->port;
+ 	u16 reg;
+ 
+-	/* Enable Transmit FIFO Underrun */
+-	sky2_write8(hw, SK_REG(port, GMAC_IRQ_MSK), GMAC_DEF_MSK);
+-
+-	reg = gma_read16(hw, port, GM_GP_CTRL);
+-	if (sky2->autoneg == AUTONEG_DISABLE) {
+-		reg |= GM_GPCR_AU_ALL_DIS;
+-
+-		/* Is write/read necessary?  Copied from sky2_mac_init */
+-		gma_write16(hw, port, GM_GP_CTRL, reg);
+-		gma_read16(hw, port, GM_GP_CTRL);
+-
+-		switch (sky2->speed) {
+-		case SPEED_1000:
+-			reg &= ~GM_GPCR_SPEED_100;
+-			reg |= GM_GPCR_SPEED_1000;
+-			break;
+-		case SPEED_100:
+-			reg &= ~GM_GPCR_SPEED_1000;
+-			reg |= GM_GPCR_SPEED_100;
+-			break;
+-		case SPEED_10:
+-			reg &= ~(GM_GPCR_SPEED_1000 | GM_GPCR_SPEED_100);
+-			break;
+-		}
+-	} else
+-		reg &= ~GM_GPCR_AU_ALL_DIS;
+-
+-	if (sky2->duplex == DUPLEX_FULL || sky2->autoneg == AUTONEG_ENABLE)
+-		reg |= GM_GPCR_DUP_FULL;
+-
+ 	/* enable Rx/Tx */
++	reg = gma_read16(hw, port, GM_GP_CTRL);
+ 	reg |= GM_GPCR_RX_ENA | GM_GPCR_TX_ENA;
+ 	gma_write16(hw, port, GM_GP_CTRL, reg);
+-	gma_read16(hw, port, GM_GP_CTRL);
+ 
+ 	gm_phy_write(hw, port, PHY_MARV_INT_MASK, PHY_M_DEF_MSK);
+ 
+@@ -1607,7 +1566,6 @@ static void sky2_link_down(struct sky2_p
+ 	reg = gma_read16(hw, port, GM_GP_CTRL);
+ 	reg &= ~(GM_GPCR_RX_ENA | GM_GPCR_TX_ENA);
+ 	gma_write16(hw, port, GM_GP_CTRL, reg);
+-	gma_read16(hw, port, GM_GP_CTRL);	/* PCI post */
+ 
+ 	if (sky2->rx_pause && !sky2->tx_pause) {
+ 		/* restore Asymmetric Pause bit */
+@@ -1624,6 +1582,7 @@ static void sky2_link_down(struct sky2_p
+ 
+ 	if (netif_msg_link(sky2))
+ 		printk(KERN_INFO PFX "%s: Link is down.\n", sky2->netdev->name);
++
+ 	sky2_phy_init(hw, port);
+ }
+ 
+@@ -1664,8 +1623,11 @@ static int sky2_autoneg_done(struct sky2
+ 	sky2->rx_pause = (aux & PHY_M_PS_RX_P_EN) != 0;
+ 	sky2->tx_pause = (aux & PHY_M_PS_TX_P_EN) != 0;
+ 
+-	if ((sky2->tx_pause || sky2->rx_pause)
+-	    && !(sky2->speed < SPEED_1000 && sky2->duplex == DUPLEX_HALF))
++	if (sky2->duplex == DUPLEX_HALF && sky2->speed != SPEED_1000
++	    && hw->chip_id != CHIP_ID_YUKON_EC_U)
++		sky2->rx_pause = sky2->tx_pause = 0;
++
++	if (sky2->rx_pause || sky2->tx_pause)
+ 		sky2_write8(hw, SK_REG(port, GMAC_CTRL), GMC_PAUSE_ON);
+ 	else
+ 		sky2_write8(hw, SK_REG(port, GMAC_CTRL), GMC_PAUSE_OFF);
+@@ -1691,7 +1653,7 @@ static void sky2_phy_intr(struct sky2_hw
+ 		printk(KERN_INFO PFX "%s: phy interrupt status 0x%x 0x%x\n",
+ 		       sky2->netdev->name, istatus, phystat);
+ 
+-	if (istatus & PHY_M_IS_AN_COMPL) {
++	if (sky2->autoneg == AUTONEG_ENABLE && (istatus & PHY_M_IS_AN_COMPL)) {
+ 		if (sky2_autoneg_done(sky2, phystat) == 0)
+ 			sky2_link_up(sky2);
+ 		goto out;
+@@ -2891,7 +2853,6 @@ static int sky2_set_pauseparam(struct ne
+ 			       struct ethtool_pauseparam *ecmd)
+ {
+ 	struct sky2_port *sky2 = netdev_priv(dev);
+-	int err = 0;
+ 
+ 	sky2->autoneg = ecmd->autoneg;
+ 	sky2->tx_pause = ecmd->tx_pause != 0;
+@@ -2899,7 +2860,7 @@ static int sky2_set_pauseparam(struct ne
+ 
+ 	sky2_phy_reinit(sky2);
+ 
+-	return err;
++	return 0;
+ }
+ 
+ static int sky2_get_coalesce(struct net_device *dev,
+Index: linux-2.6.18/drivers/net/sky2.h
+===================================================================
+--- linux-2.6.18.orig/drivers/net/sky2.h
++++ linux-2.6.18/drivers/net/sky2.h
+@@ -1566,7 +1566,7 @@ enum {
+ 
+ 	GMR_FS_ANY_ERR	= GMR_FS_RX_FF_OV | GMR_FS_CRC_ERR |
+ 			  GMR_FS_FRAGMENT | GMR_FS_LONG_ERR |
+-		  	  GMR_FS_MII_ERR | GMR_FS_GOOD_FC | GMR_FS_BAD_FC |
++		  	  GMR_FS_MII_ERR | GMR_FS_BAD_FC |
+ 			  GMR_FS_UN_SIZE | GMR_FS_JABBER,
+ };
+ 
+Index: linux-2.6.18/mvl_patches/pro50-1066.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1066.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1066);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

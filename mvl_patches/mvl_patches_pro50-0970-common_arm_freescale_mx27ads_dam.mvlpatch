@@ -1,0 +1,1166 @@
+#! /usr/bin/env bash
+# Patch: -common_arm_freescale_mx27ads_dam
+# Date: Tue Mar 11 17:34:02 2008
+# Source:  http://opensource.freescale.com/pub/scm/linux-2.6-mx.git  
+# MR: 26156 
+# Type: Integration  
+# Disposition:  merged from bsp-imx27ads-rel2 branch of opensource.freescale.com/pub/scm/linux-2.6-mx.git  
+# Signed-off-by:  Aleksey Makarov <amakarov@ru.mvista.com>  
+# Description:  
+#     Digital Audio Mux support for i.mx27ads board. 
+# 
+
+PATCHNUM=970
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source:  http://opensource.freescale.com/pub/scm/linux-2.6-mx.git  
+MR: 26156 
+Type: Integration  
+Disposition:  merged from bsp-imx27ads-rel2 branch of opensource.freescale.com/pub/scm/linux-2.6-mx.git  
+Signed-off-by:  Aleksey Makarov <amakarov@ru.mvista.com>  
+Description:  
+    Digital Audio Mux support for i.mx27ads board. 
+
+Index: linux-2.6.18/drivers/mxc/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/mxc/Kconfig
++++ linux-2.6.18/drivers/mxc/Kconfig
+@@ -4,6 +4,7 @@ if ARCH_MXC
+ 
+ menu "MXC support drivers"
+ 
++source "drivers/mxc/dam/Kconfig"
+ source "drivers/mxc/ssi/Kconfig"
+ source "drivers/mxc/pmic/Kconfig"
+ 
+Index: linux-2.6.18/drivers/mxc/Makefile
+===================================================================
+--- linux-2.6.18.orig/drivers/mxc/Makefile
++++ linux-2.6.18/drivers/mxc/Makefile
+@@ -1,2 +1,3 @@
++obj-$(CONFIG_MXC_DAM)			+= dam/
+ obj-$(CONFIG_MXC_SSI)               	+= ssi/
+ obj-$(CONFIG_MXC_PMIC)			+= pmic/
+Index: linux-2.6.18/drivers/mxc/dam/Kconfig
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/mxc/dam/Kconfig
+@@ -0,0 +1,14 @@
++#
++# DAM API configuration
++#
++
++menu "MXC Digital Audio Multiplexer support"
++
++config MXC_DAM
++	tristate "DAM support"
++	depends on ARCH_MXC
++	---help---
++	  Say Y to get the Digital Audio Multiplexer services API available on MXC platform.
++
++endmenu
++
+Index: linux-2.6.18/drivers/mxc/dam/Makefile
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/mxc/dam/Makefile
+@@ -0,0 +1,7 @@
++#
++# Makefile for the kernel Digital Audio MUX (DAM) device driver.
++#
++
++obj-$(CONFIG_MXC_DAM) += dam_v1.o
++
++
+Index: linux-2.6.18/drivers/mxc/dam/dam.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/mxc/dam/dam.h
+@@ -0,0 +1,258 @@
++/*
++ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++
++ /*!
++  * @defgroup DAM Digital Audio Multiplexer (AUDMUX) Driver
++  */
++
++ /*!
++  * @file dam.h
++  * @brief This is the brief documentation for this dam.h file.
++  *
++  * This header file contains DAM driver functions prototypes.
++  *
++  * @ingroup DAM
++  */
++
++#ifndef __MXC_DAM_H__
++#define __MXC_DAM_H__
++
++/*!
++ * This enumeration describes the Digital Audio Multiplexer mode.
++ */
++typedef enum {
++
++	/*!
++	 * Normal mode
++	 */
++	normal_mode = 0,
++
++	/*!
++	 * Internal network mode
++	 */
++	internal_network_mode = 1,
++
++	/*!
++	 * CE bus network mode
++	 */
++	CE_bus_network_mode = 2
++} dam_mode;
++
++/*!
++ * This enumeration describes the port.
++ */
++typedef enum {
++
++	/*!
++	 * The port 1
++	 */
++	port_1 = 0,
++
++	/*!
++	 * The port 2
++	 */
++	port_2 = 1,
++
++	/*!
++	 * The port 3
++	 */
++	port_3 = 2,
++
++	/*!
++	 * The port 4
++	 */
++	port_4 = 3,
++
++	/*!
++	 * The port 5
++	 */
++	port_5 = 4,
++
++	/*!
++	 * The port 6
++	 */
++	port_6 = 5,
++
++	/*!
++	 * The port 7
++	 */
++	port_7 = 6
++} dam_port;
++
++/*!
++ * This enumeration describes the signal direction.
++ */
++typedef enum {
++
++	/*!
++	 * Signal In
++	 */
++	signal_in = 0,
++
++	/*!
++	 * Signal Out
++	 */
++	signal_out = 1
++} signal_direction;
++
++/*!
++ * Test purpose definition
++ */
++#define TEST_DAM 1
++
++#ifdef TEST_DAM
++
++#define DAM_IOCTL 0x55
++#define DAM_CONFIG_SSI1_MC13783 _IOWR(DAM_IOCTL, 1, int)
++#define DAM_CONFIG_SSI2_MC13783 _IOWR(DAM_IOCTL, 2, int)
++#define DAM_CONFIG_SSI_NETWORK_MODE_MC13783 _IOWR(DAM_IOCTL, 3, int)
++#endif
++
++/*!
++ * This function selects the operation mode of the port.
++ *
++ * @param        port              the DAM port to configure
++ * @param        the_mode          the operation mode of the port
++ * @return       This function returns the result of the operation
++ *               (0 if successful, -1 otherwise).
++ */
++int dam_select_mode(dam_port port, dam_mode the_mode);
++
++/*!
++ * This function controls Receive clock signal direction for the port.
++ *
++ * @param        port              the DAM port to configure
++ * @param        direction         the Rx clock signal direction
++ */
++void dam_select_RxClk_direction(dam_port port, signal_direction direction);
++
++/*!
++ * This function controls Receive clock signal source for the port.
++ *
++ * @param        p_config          the DAM port to configure
++ * @param        from_RxClk        the signal comes from RxClk or TxClk of
++ *                                 the source port
++ * @param        p_source          the source port
++ */
++void dam_select_RxClk_source(dam_port p_config, bool from_RxClk,
++			     dam_port p_source);
++
++/*!
++ * This function selects the source port for the RxD data.
++ *
++ * @param        p_config          the DAM port to configure
++ * @param        p_source          the source port
++ */
++void dam_select_RxD_source(dam_port p_config, dam_port p_source);
++
++/*!
++ * This function controls Receive Frame Sync signal direction for the port.
++ *
++ * @param        port              the DAM port to configure
++ * @param        direction         the Rx Frame Sync signal direction
++ */
++void dam_select_RxFS_direction(dam_port port, signal_direction direction);
++
++/*!
++ * This function controls Receive Frame Sync signal source for the port.
++ *
++ * @param        p_config          the DAM port to configure
++ * @param        from_RxFS         the signal comes from RxFS or TxFS of
++ *                                 the source port
++ * @param        p_source          the source port
++ */
++void dam_select_RxFS_source(dam_port p_config, bool from_RxFS,
++			    dam_port p_source);
++
++/*!
++ * This function controls Transmit clock signal direction for the port.
++ *
++ * @param        port              the DAM port to configure
++ * @param        direction         the Tx clock signal direction
++ */
++void dam_select_TxClk_direction(dam_port port, signal_direction direction);
++
++/*!
++ * This function controls Transmit clock signal source for the port.
++ *
++ * @param        p_config          the DAM port to configure
++ * @param        from_RxClk        the signal comes from RxClk or TxClk of
++ *                                 the source port
++ * @param        p_source          the source port
++ */
++void dam_select_TxClk_source(dam_port p_config, bool from_RxClk,
++			     dam_port p_source);
++
++/*!
++ * This function controls Transmit Frame Sync signal direction for the port.
++ *
++ * @param        port              the DAM port to configure
++ * @param        direction         the Tx Frame Sync signal direction
++ */
++void dam_select_TxFS_direction(dam_port port, signal_direction direction);
++
++/*!
++ * This function controls Transmit Frame Sync signal source for the port.
++ *
++ * @param        p_config          the DAM port to configure
++ * @param        from_RxFS         the signal comes from RxFS or TxFS of
++ *                                 the source port
++ * @param        p_source          the source port
++ */
++void dam_select_TxFS_source(dam_port p_config, bool from_RxFS,
++			    dam_port p_source);
++
++/*!
++ * This function sets a bit mask that selects the port from which of
++ * the RxD signals are to be ANDed together for internal network mode.
++ * Bit 6 represents RxD from Port7 and bit0 represents RxD from Port1.
++ * 1 excludes RxDn from ANDing. 0 includes RxDn for ANDing.
++ *
++ * @param        port              the DAM port to configure
++ * @param        bit_mask          the bit mask
++ * @return       This function returns the result of the operation
++ *               (0 if successful, -1 otherwise).
++ */
++int dam_set_internal_network_mode_mask(dam_port port, unsigned char bit_mask);
++
++/*!
++ * This function controls whether or not the port is in synchronous mode.
++ * When the synchronous mode is selected, the receive and the transmit sections
++ * use common clock and frame sync signals.
++ * When the synchronous mode is not selected, separate clock and frame sync
++ * signals are used for the transmit and the receive sections.
++ * The defaut value is the synchronous mode selected.
++ *
++ * @param        port              the DAM port to configure
++ * @param        synchronous       the state to assign
++ */
++void dam_set_synchronous(dam_port port, bool synchronous);
++
++/*!
++ * This function swaps the transmit and receive signals from (Da-TxD, Db-RxD) to
++ * (Da-RxD, Db-TxD).
++ * This default signal configuration is Da-TxD, Db-RxD.
++ *
++ * @param        port              the DAM port to configure
++ * @param        value             the switch state
++ */
++void dam_switch_Tx_Rx(dam_port port, bool value);
++
++/*!
++ * This function resets the two registers of the selected port.
++ *
++ * @param        port              the DAM port to reset
++ */
++void dam_reset_register(dam_port port);
++
++#endif
+Index: linux-2.6.18/drivers/mxc/dam/dam_v1.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/drivers/mxc/dam/dam_v1.c
+@@ -0,0 +1,618 @@
++/*
++ * Copyright 2004-2006 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * The code contained herein is licensed under the GNU General Public
++ * License. You may obtain a copy of the GNU General Public License
++ * Version 2 or later at the following locations:
++ *
++ * http://www.opensource.org/licenses/gpl-license.html
++ * http://www.gnu.org/copyleft/gpl.html
++ */
++
++/*!
++ * @file dam_v1.c
++ * @brief This is the brief documentation for this dam_v1.c file.
++ *
++ * This file contains the implementation of the DAM driver main services
++ *
++ * @ingroup DAM
++ */
++
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/device.h>
++#include <linux/slab.h>
++#include <linux/fs.h>
++#include <asm/uaccess.h>
++#include <asm/io.h>
++
++#include "dam.h"
++
++/*!
++ * This include to define bool type, false and true definitions.
++ */
++#include <asm/hardware.h>
++
++#define DAM_VIRT_BASE_ADDR	IO_ADDRESS(AUDMUX_BASE_ADDR)
++
++#define ModifyRegister32(a,b,c)	do{\
++	__raw_writel( ((__raw_readl(c)) & (~(a))) | (b),(c) );\
++}while(0)
++
++#ifndef _reg_DAM_HPCR1
++#define    _reg_DAM_HPCR1   (*((volatile unsigned long *) \
++                            (DAM_VIRT_BASE_ADDR + 0x00)))
++#endif
++
++#ifndef _reg_DAM_HPCR2
++#define    _reg_DAM_HPCR2   (*((volatile unsigned long *) \
++                            (DAM_VIRT_BASE_ADDR + 0x04)))
++#endif
++
++#ifndef _reg_DAM_HPCR3
++#define    _reg_DAM_HPCR3   (*((volatile unsigned long *) \
++                            (DAM_VIRT_BASE_ADDR + 0x08)))
++#endif
++
++#ifndef _reg_DAM_PPCR1
++#define    _reg_DAM_PPCR1   (*((volatile unsigned long *) \
++                            (DAM_VIRT_BASE_ADDR + 0x10)))
++#endif
++
++#ifndef _reg_DAM_PPCR2
++#define    _reg_DAM_PPCR2  (*((volatile unsigned long *) \
++                           (DAM_VIRT_BASE_ADDR + 0x14)))
++#endif
++
++#ifndef _reg_DAM_PPCR3
++#define    _reg_DAM_PPCR3   (*((volatile unsigned long *) \
++                            (DAM_VIRT_BASE_ADDR + 0x1c)))
++#endif
++
++#ifndef _reg_DAM_HPCR
++#define    _reg_DAM_HPCR(a)   ((volatile unsigned long *) \
++                              (DAM_VIRT_BASE_ADDR + (a)*4))
++#endif
++
++#ifndef _reg_DAM_PPCR
++#define    _reg_DAM_PPCR(a)   ((volatile unsigned long *) \
++                              (DAM_VIRT_BASE_ADDR + 0x0c + (0x04 << (a-3)) ))
++#endif
++
++/*!
++ * HPCR/PPCR Registers bit shift definitions
++ */
++#define dam_transmit_frame_sync_direction_shift  31
++#define dam_transmit_clock_direction_shift       30
++#define dam_transmit_frame_sync_select_shift     26
++#define dam_transmit_clock_select_shift          26
++#define dam_receive_frame_sync_direction_shift   25
++#define dam_receive_clock_direction_shift        24
++#define dam_receive_clock_select_shift           20
++#define dam_receive_frame_sync_select_shift      20
++
++#define dam_receive_data_select_shift            13
++#define dam_synchronous_mode_shift               12
++
++#define dam_transmit_receive_switch_shift        10
++
++#define dam_mode_shift                            8
++#define dam_internal_network_mode_shift           0
++
++/*!
++ * HPCR/PPCR Register bit masq definitions
++ */
++//#define dam_selection_mask              0xF
++#define dam_fs_selection_mask             0xF
++#define dam_clk_selection_mask            0xF
++#define dam_dat_selection_mask		        0x7
++//#define dam_mode_masq                   0x03
++#define dam_internal_network_mode_mask    0xFF
++
++/*!
++ * HPCR/PPCR Register reset value definitions
++ */
++#define dam_hpcr_default_value 0x00001000
++#define dam_ppcr_default_value 0x00001000
++
++#define DAM_NAME   "dam"
++static struct class *mxc_dam_class;
++
++EXPORT_SYMBOL(dam_select_mode);
++EXPORT_SYMBOL(dam_select_RxClk_direction);
++EXPORT_SYMBOL(dam_select_RxClk_source);
++EXPORT_SYMBOL(dam_select_RxD_source);
++EXPORT_SYMBOL(dam_select_RxFS_direction);
++EXPORT_SYMBOL(dam_select_RxFS_source);
++EXPORT_SYMBOL(dam_select_TxClk_direction);
++EXPORT_SYMBOL(dam_select_TxClk_source);
++EXPORT_SYMBOL(dam_select_TxFS_direction);
++EXPORT_SYMBOL(dam_select_TxFS_source);
++EXPORT_SYMBOL(dam_set_internal_network_mode_mask);
++EXPORT_SYMBOL(dam_set_synchronous);
++EXPORT_SYMBOL(dam_switch_Tx_Rx);
++EXPORT_SYMBOL(dam_reset_register);
++
++/*!
++ * DAM major
++ */
++#ifdef TEST_DAM
++static int major_dam;
++
++typedef struct _mxc_cfg {
++	int reg;
++	int val;
++} mxc_cfg;
++
++#endif
++
++/*!
++ * This function selects the operation mode of the port.
++ *
++ * @param        port              the DAM port to configure
++ * @param        the_mode          the operation mode of the port
++ *
++ * @return       This function returns the result of the operation
++ *               (0 if successful, -1 otherwise).
++ */
++int dam_select_mode(dam_port port, dam_mode the_mode)
++{
++	int result;
++	result = 0;
++
++	if (port >= 3)
++		the_mode = normal_mode;
++	ModifyRegister32(1 << dam_mode_shift,
++			 the_mode << dam_mode_shift, _reg_DAM_HPCR(port));
++
++	return result;
++}
++
++/*!
++ * This function controls Receive clock signal direction for the port.
++ *
++ * @param        port              the DAM port to configure
++ * @param        direction         the Rx clock signal direction
++ */
++void dam_select_RxClk_direction(dam_port port, signal_direction direction)
++{
++	if (port < 3) {
++		ModifyRegister32(1 << dam_receive_clock_direction_shift,
++				 direction << dam_receive_clock_direction_shift,
++				 _reg_DAM_HPCR(port));
++	} else {
++		ModifyRegister32(1 << dam_receive_clock_direction_shift,
++				 direction << dam_receive_clock_direction_shift,
++				 _reg_DAM_PPCR(port));
++	}
++	return;
++}
++
++/*!
++ * This function controls Receive clock signal source for the port.
++ *
++ * @param        p_config          the DAM port to configure
++ * @param        from_RxClk        the signal comes from RxClk or TxClk of
++ *                                 the source port
++ * @param        p_source          the source port
++ */
++void dam_select_RxClk_source(dam_port p_config,
++			     bool from_RxClk, dam_port p_source)
++{
++	if (p_config < 3) {
++		ModifyRegister32(dam_clk_selection_mask <<
++				 dam_receive_clock_select_shift,
++				 ((from_RxClk << 3) | p_source) <<
++				 dam_receive_clock_select_shift,
++				 _reg_DAM_HPCR(p_config));
++	} else {
++		ModifyRegister32(dam_clk_selection_mask <<
++				 dam_receive_clock_select_shift,
++				 ((from_RxClk << 3) | p_source) <<
++				 dam_receive_clock_select_shift,
++				 _reg_DAM_PPCR(p_config));
++	}
++	return;
++}
++
++/*!
++ * This function selects the source port for the RxD data.
++ *
++ * @param        p_config          the DAM port to configure
++ * @param        p_source          the source port
++ */
++void dam_select_RxD_source(dam_port p_config, dam_port p_source)
++{
++	if (p_config < 3) {
++		ModifyRegister32(dam_dat_selection_mask <<
++				 dam_receive_data_select_shift,
++				 p_source << dam_receive_data_select_shift,
++				 _reg_DAM_HPCR(p_config));
++	} else {
++		ModifyRegister32(dam_dat_selection_mask <<
++				 dam_receive_data_select_shift,
++				 p_source << dam_receive_data_select_shift,
++				 _reg_DAM_PPCR(p_config));
++	}
++	return;
++}
++
++/*!
++ * This function controls Receive Frame Sync signal direction for the port.
++ *
++ * @param        port              the DAM port to configure
++ * @param        direction         the Rx Frame Sync signal direction
++ */
++void dam_select_RxFS_direction(dam_port port, signal_direction direction)
++{
++	if (port < 3) {
++		ModifyRegister32(1 << dam_receive_frame_sync_direction_shift,
++				 direction <<
++				 dam_receive_frame_sync_direction_shift,
++				 _reg_DAM_HPCR(port));
++	} else {
++		ModifyRegister32(1 << dam_receive_frame_sync_direction_shift,
++				 direction <<
++				 dam_receive_frame_sync_direction_shift,
++				 _reg_DAM_PPCR(port));
++	}
++	return;
++}
++
++/*!
++ * This function controls Receive Frame Sync signal source for the port.
++ *
++ * @param        p_config          the DAM port to configure
++ * @param        from_RxFS         the signal comes from RxFS or TxFS of
++ *                                 the source port
++ * @param        p_source          the source port
++ */
++void dam_select_RxFS_source(dam_port p_config,
++			    bool from_RxFS, dam_port p_source)
++{
++	if (p_config < 3) {
++		ModifyRegister32(dam_fs_selection_mask <<
++				 dam_receive_frame_sync_select_shift,
++				 ((from_RxFS << 3) | p_source) <<
++				 dam_receive_frame_sync_select_shift,
++				 _reg_DAM_HPCR(p_config));
++	} else {
++		ModifyRegister32(dam_fs_selection_mask <<
++				 dam_receive_frame_sync_select_shift,
++				 ((from_RxFS << 3) | p_source) <<
++				 dam_receive_frame_sync_select_shift,
++				 _reg_DAM_PPCR(p_config));
++	}
++	return;
++}
++
++/*!
++ * This function controls Transmit clock signal direction for the port.
++ *
++ * @param        port              the DAM port to configure
++ * @param        direction         the Tx clock signal direction
++ */
++void dam_select_TxClk_direction(dam_port port, signal_direction direction)
++{
++	if (port < 3) {
++		ModifyRegister32(1 << dam_transmit_clock_direction_shift,
++				 direction <<
++				 dam_transmit_clock_direction_shift,
++				 _reg_DAM_HPCR(port));
++	} else {
++		ModifyRegister32(1 << dam_transmit_clock_direction_shift,
++				 direction <<
++				 dam_transmit_clock_direction_shift,
++				 _reg_DAM_PPCR(port));
++	}
++	return;
++}
++
++/*!
++ * This function controls Transmit clock signal source for the port.
++ *
++ * @param        p_config          the DAM port to configure
++ * @param        from_RxClk        the signal comes from RxClk or TxClk of
++ *                                 the source port
++ * @param        p_source          the source port
++ */
++void dam_select_TxClk_source(dam_port p_config,
++			     bool from_RxClk, dam_port p_source)
++{
++	if (p_config < 3) {
++		ModifyRegister32(dam_clk_selection_mask <<
++				 dam_transmit_clock_select_shift,
++				 ((from_RxClk << 3) | p_source) <<
++				 dam_transmit_clock_select_shift,
++				 _reg_DAM_HPCR(p_config));
++	} else {
++		ModifyRegister32(dam_clk_selection_mask <<
++				 dam_transmit_clock_select_shift,
++				 ((from_RxClk << 3) | p_source) <<
++				 dam_transmit_clock_select_shift,
++				 _reg_DAM_PPCR(p_config));
++	}
++	return;
++}
++
++/*!
++ * This function controls Transmit Frame Sync signal direction for the port.
++ *
++ * @param        port              the DAM port to configure
++ * @param        direction         the Tx Frame Sync signal direction
++ */
++void dam_select_TxFS_direction(dam_port port, signal_direction direction)
++{
++	if (port < 3) {
++		ModifyRegister32(1 << dam_transmit_frame_sync_direction_shift,
++				 direction <<
++				 dam_transmit_frame_sync_direction_shift,
++				 _reg_DAM_HPCR(port));
++	} else {
++		ModifyRegister32(1 << dam_transmit_frame_sync_direction_shift,
++				 direction <<
++				 dam_transmit_frame_sync_direction_shift,
++				 _reg_DAM_HPCR(port));
++	}
++	return;
++}
++
++/*!
++ * This function controls Transmit Frame Sync signal source for the port.
++ *
++ * @param        p_config          the DAM port to configure
++ * @param        from_RxFS         the signal comes from RxFS or TxFS of
++ *                                 the source port
++ * @param        p_source          the source port
++ */
++void dam_select_TxFS_source(dam_port p_config,
++			    bool from_RxFS, dam_port p_source)
++{
++	if (p_config < 3) {
++		ModifyRegister32(dam_fs_selection_mask <<
++				 dam_transmit_frame_sync_select_shift,
++				 ((from_RxFS << 3) | p_source) <<
++				 dam_transmit_frame_sync_select_shift,
++				 _reg_DAM_HPCR(p_config));
++	} else {
++		ModifyRegister32(dam_fs_selection_mask <<
++				 dam_transmit_frame_sync_select_shift,
++				 ((from_RxFS << 3) | p_source) <<
++				 dam_transmit_frame_sync_select_shift,
++				 _reg_DAM_PPCR(p_config));
++	}
++	return;
++}
++
++/*!
++ * This function sets a bit mask that selects the port from which of the RxD
++ * signals are to be ANDed together for internal network mode.
++ * Bit 6 represents RxD from Port7 and bit0 represents RxD from Port1.
++ * 1 excludes RxDn from ANDing. 0 includes RxDn for ANDing.
++ *
++ * @param        port              the DAM port to configure
++ * @param        bit_mask          the bit mask
++ *
++ * @return       This function returns the result of the operation
++ *               (0 if successful, -1 otherwise).
++ */
++int dam_set_internal_network_mode_mask(dam_port port, unsigned char bit_mask)
++{
++	int result;
++	result = 0;
++
++	ModifyRegister32(dam_internal_network_mode_mask <<
++			 dam_internal_network_mode_shift,
++			 bit_mask << dam_internal_network_mode_shift,
++			 _reg_DAM_HPCR(port));
++	return result;
++}
++
++/*!
++ * This function controls whether or not the port is in synchronous mode.
++ * When the synchronous mode is selected, the receive and the transmit sections
++ * use common clock and frame sync signals.
++ * When the synchronous mode is not selected, separate clock and frame sync
++ * signals are used for the transmit and the receive sections.
++ * The defaut value is the synchronous mode selected.
++ *
++ * @param        port              the DAM port to configure
++ * @param        synchronous       the state to assign
++ */
++void dam_set_synchronous(dam_port port, bool synchronous)
++{
++	if (port < 3) {
++		ModifyRegister32(1 << dam_synchronous_mode_shift,
++				 synchronous << dam_synchronous_mode_shift,
++				 _reg_DAM_HPCR(port));
++	} else {
++		ModifyRegister32(1 << dam_synchronous_mode_shift,
++				 synchronous << dam_synchronous_mode_shift,
++				 _reg_DAM_PPCR(port));
++	}
++	return;
++}
++
++/*!
++ * This function swaps the transmit and receive signals from (Da-TxD, Db-RxD)
++ * to (Da-RxD, Db-TxD).
++ * This default signal configuration is Da-TxD, Db-RxD.
++ *
++ * @param        port              the DAM port to configure
++ * @param        value             the switch state
++ */
++void dam_switch_Tx_Rx(dam_port port, bool value)
++{
++	if (port < 3) {
++		ModifyRegister32(1 << dam_transmit_receive_switch_shift,
++				 value << dam_transmit_receive_switch_shift,
++				 _reg_DAM_HPCR(port));
++	} else {
++		ModifyRegister32(1 << dam_transmit_receive_switch_shift,
++				 value << dam_transmit_receive_switch_shift,
++				 _reg_DAM_PPCR(port));
++	}
++	return;
++}
++
++/*!
++ * This function resets the two registers of the selected port.
++ *
++ * @param        port              the DAM port to reset
++ */
++void dam_reset_register(dam_port port)
++{
++	if (port < 3) {
++		ModifyRegister32(0xFFFFFFFF, dam_hpcr_default_value,
++				 _reg_DAM_HPCR(port));
++	} else {
++		ModifyRegister32(0xFFFFFFFF, dam_ppcr_default_value,
++				 _reg_DAM_PPCR(port));
++	}
++	return;
++}
++
++#ifdef TEST_DAM
++
++/*!
++ * This function implements IOCTL controls on a DAM device.
++ *
++ * @param        inode       pointer on the node
++ * @param        file        pointer on the file
++ * @param        cmd         the command
++ * @param        arg         the parameter :\n
++ * DAM_CONFIG_SSI1:\n
++ * data from port 1 to port 4, clock and FS from port 1 (SSI1)\n
++ * DAM_CONFIG_SSI2:\n
++ * data from port 2 to port 5, clock and FS from port 2 (SSI2)\n
++ * DAM_CONFIG_SSI_NETWORK_MODE:\n
++ * network mode for mix digital with data from port 1 to port4,\n
++ * data from port 2 to port 4, clock and FS from port 1 (SSI1)
++ *
++ * @return       This function returns 0 if successful.
++ */
++static int dam_ioctl(struct inode *inode,
++		     struct file *file, unsigned int cmd, unsigned long arg)
++{
++	return 0;
++}
++
++/*!
++ * This function implements the open method on a DAM device.
++ *
++ * @param        inode       pointer on the node
++ * @param        file        pointer on the file
++ *
++ * @return       This function returns 0.
++ */
++static int dam_open(struct inode *inode, struct file *file)
++{
++	/* DBG_PRINTK("ssi : dam_open()\n"); */
++	return 0;
++}
++
++/*!
++ * This function implements the release method on a DAM device.
++ *
++ * @param        inode       pointer on the node
++ * @param        file        pointer on the file
++ *
++ * @return       This function returns 0.
++ */
++static int dam_free(struct inode *inode, struct file *file)
++{
++	/* DBG_PRINTK("ssi : dam_free()\n"); */
++	return 0;
++}
++
++/*!
++ * This structure defines file operations for a DAM device.
++ */
++static struct file_operations dam_fops = {
++
++	/*!
++	 * the owner
++	 */
++	.owner = THIS_MODULE,
++
++	/*!
++	 * the ioctl operation
++	 */
++	.ioctl = dam_ioctl,
++
++	/*!
++	 * the open operation
++	 */
++	.open = dam_open,
++
++	/*!
++	 * the release operation
++	 */
++	.release = dam_free,
++};
++
++#endif
++
++/*!
++ * This function implements the init function of the DAM device.
++ * This function is called when the module is loaded.
++ *
++ * @return       This function returns 0.
++ */
++static int __init dam_init(void)
++{
++#ifdef TEST_DAM
++	struct class_device *temp_class;
++
++	major_dam = register_chrdev(0, DAM_NAME, &dam_fops);
++	if (major_dam < 0) {
++		printk(KERN_WARNING "Unable to get a major for dam");
++		return major_dam;
++	}
++
++	mxc_dam_class = class_create(THIS_MODULE, DAM_NAME);
++	if (IS_ERR(mxc_dam_class)) {
++		goto err_out;
++	}
++
++	temp_class = class_device_create(mxc_dam_class, NULL,
++					 MKDEV(major_dam, 0), NULL, DAM_NAME);
++	if (IS_ERR(temp_class)) {
++		goto err_out;
++	}
++#endif
++	printk(KERN_DEBUG "dam : successfully loaded\n");
++	return 0;
++
++      err_out:
++	printk(KERN_ERR "Error creating dam class device.\n");
++	class_device_destroy(mxc_dam_class, MKDEV(major_dam, 0));
++	class_destroy(mxc_dam_class);
++	unregister_chrdev(major_dam, DAM_NAME);
++	return -1;
++}
++
++/*!
++ * This function implements the exit function of the SPI device.
++ * This function is called when the module is unloaded.
++ *
++ */
++static void __exit dam_exit(void)
++{
++#ifdef TEST_DAM
++	class_device_destroy(mxc_dam_class, MKDEV(major_dam, 0));
++	class_destroy(mxc_dam_class);
++	unregister_chrdev(major_dam, DAM_NAME);
++	printk(KERN_DEBUG "dam : successfully unloaded\n");
++#endif
++}
++
++module_init(dam_init);
++module_exit(dam_exit);
++
++MODULE_DESCRIPTION("DAM char device driver");
++MODULE_AUTHOR("Freescale Semiconductor, Inc.");
++MODULE_LICENSE("GPL");
+Index: linux-2.6.18/mvl_patches/pro50-0970.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0970.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(970);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

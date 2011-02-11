@@ -1,0 +1,539 @@
+#! /usr/bin/env bash
+# Patch: -ALSA_ASoC_pxa2xx_Tosa_machine_support
+# Date: Mon Jul 21 10:26:31 2008
+# MR: 26835
+# Disposition: Backport from 2.6.21-rc1
+# Adjustments:
+# 
+# From 1b49cb987030c09ca763c1dabd5c5e33f669e530 Mon Sep 17 00:00:00 2001
+# From: Liam Girdwood <liam.girdwood@wolfsonmicro.com>
+# Date: Thu, 12 Oct 2006 14:33:09 +0200
+# Subject: [PATCH] [ALSA] ASoC pxa2xx Tosa machine support
+# 
+# This patch adds Alsa audio support to the Sharp Zaurus SL-C6000 (Tosa)
+# machine.
+# From: Liam Girdwood <liam.girdwood@wolfsonmicro.com>
+# Signed-off-by: Dirk Opfer <Dirk@Opfer-Online.de>
+# Signed-off-by: Richard Purdie <rpurdie@rpsys.net>
+# Signed-off-by: Liam Girdwood <liam.girdwood@wolfsonmicro.com>
+# Signed-off-by: Takashi Iwai <tiwai@suse.de>
+# Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+
+PATCHNUM=1289
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26835
+Disposition: Backport from 2.6.21-rc1
+Adjustments:
+
+From 1b49cb987030c09ca763c1dabd5c5e33f669e530 Mon Sep 17 00:00:00 2001
+From: Liam Girdwood <liam.girdwood@wolfsonmicro.com>
+Date: Thu, 12 Oct 2006 14:33:09 +0200
+Subject: [PATCH] [ALSA] ASoC pxa2xx Tosa machine support
+
+This patch adds Alsa audio support to the Sharp Zaurus SL-C6000 (Tosa)
+machine.
+From: Liam Girdwood <liam.girdwood@wolfsonmicro.com>
+Signed-off-by: Dirk Opfer <Dirk@Opfer-Online.de>
+Signed-off-by: Richard Purdie <rpurdie@rpsys.net>
+Signed-off-by: Liam Girdwood <liam.girdwood@wolfsonmicro.com>
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+Index: linux-2.6.18/sound/soc/pxa/tosa.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/pxa/tosa.c
+@@ -0,0 +1,287 @@
++/*
++ * tosa.c  --  SoC audio for Tosa
++ *
++ * Copyright 2005 Wolfson Microelectronics PLC.
++ * Copyright 2005 Openedhand Ltd.
++ *
++ * Authors: Liam Girdwood <liam.girdwood@wolfsonmicro.com>
++ *          Richard Purdie <richard@openedhand.com>
++ *
++ *  This program is free software; you can redistribute  it and/or modify it
++ *  under  the terms of  the GNU General  Public License as published by the
++ *  Free Software Foundation;  either version 2 of the  License, or (at your
++ *  option) any later version.
++ *
++ *  Revision history
++ *    30th Nov 2005   Initial version.
++ *
++ * GPIO's
++ *  1 - Jack Insertion
++ *  5 - Hookswitch (headset answer/hang up switch)
++ *
++ */
++
++#include <linux/module.h>
++#include <linux/moduleparam.h>
++#include <linux/device.h>
++
++#include <sound/driver.h>
++#include <sound/core.h>
++#include <sound/pcm.h>
++#include <sound/soc.h>
++#include <sound/soc-dapm.h>
++
++#include <asm/mach-types.h>
++#include <asm/hardware/tmio.h>
++#include <asm/arch/pxa-regs.h>
++#include <asm/arch/hardware.h>
++#include <asm/arch/audio.h>
++#include <asm/arch/tosa.h>
++
++#include "../codecs/wm9712.h"
++#include "pxa2xx-pcm.h"
++
++static struct snd_soc_machine tosa;
++
++#define TOSA_HP        0
++#define TOSA_MIC_INT   1
++#define TOSA_HEADSET   2
++#define TOSA_HP_OFF    3
++#define TOSA_SPK_ON    0
++#define TOSA_SPK_OFF   1
++
++static int tosa_jack_func;
++static int tosa_spk_func;
++
++static void tosa_ext_control(struct snd_soc_codec *codec)
++{
++	int spk = 0, mic_int = 0, hp = 0, hs = 0;
++
++	/* set up jack connection */
++	switch (tosa_jack_func) {
++	case TOSA_HP:
++		hp = 1;
++		break;
++	case TOSA_MIC_INT:
++		mic_int = 1;
++		break;
++	case TOSA_HEADSET:
++		hs = 1;
++		break;
++	}
++
++	if (tosa_spk_func == TOSA_SPK_ON)
++		spk = 1;
++
++	snd_soc_dapm_set_endpoint(codec, "Speaker", spk);
++	snd_soc_dapm_set_endpoint(codec, "Mic (Internal)", mic_int);
++	snd_soc_dapm_set_endpoint(codec, "Headphone Jack", hp);
++	snd_soc_dapm_set_endpoint(codec, "Headset Jack", hs);
++	snd_soc_dapm_sync_endpoints(codec);
++}
++
++static int tosa_startup(struct snd_pcm_substream *substream)
++{
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct snd_soc_codec *codec = rtd->socdev->codec;
++
++	/* check the jack status at stream startup */
++	tosa_ext_control(codec);
++	return 0;
++}
++
++static struct snd_soc_ops tosa_ops = {
++	.startup = tosa_startup,
++};
++
++static int tosa_get_jack(struct snd_kcontrol *kcontrol,
++	struct snd_ctl_elem_value *ucontrol)
++{
++	ucontrol->value.integer.value[0] = tosa_jack_func;
++	return 0;
++}
++
++static int tosa_set_jack(struct snd_kcontrol *kcontrol,
++	struct snd_ctl_elem_value *ucontrol)
++{
++	struct snd_soc_codec *codec =  snd_kcontrol_chip(kcontrol);
++
++	if (tosa_jack_func == ucontrol->value.integer.value[0])
++		return 0;
++
++	tosa_jack_func = ucontrol->value.integer.value[0];
++	tosa_ext_control(codec);
++	return 1;
++}
++
++static int tosa_get_spk(struct snd_kcontrol *kcontrol,
++	struct snd_ctl_elem_value *ucontrol)
++{
++	ucontrol->value.integer.value[0] = tosa_spk_func;
++	return 0;
++}
++
++static int tosa_set_spk(struct snd_kcontrol *kcontrol,
++	struct snd_ctl_elem_value *ucontrol)
++{
++	struct snd_soc_codec *codec =  snd_kcontrol_chip(kcontrol);
++
++	if (tosa_spk_func == ucontrol->value.integer.value[0])
++		return 0;
++
++	tosa_spk_func = ucontrol->value.integer.value[0];
++	tosa_ext_control(codec);
++	return 1;
++}
++
++/* tosa dapm event handlers */
++static int tosa_hp_event(struct snd_soc_dapm_widget *w, int event)
++{
++	if (SND_SOC_DAPM_EVENT_ON(event))
++		set_tc6393_gpio(&tc6393_device.dev,TOSA_TC6393_L_MUTE);
++	else
++		reset_tc6393_gpio(&tc6393_device.dev,TOSA_TC6393_L_MUTE);
++	return 0;
++}
++
++/* tosa machine dapm widgets */
++static const struct snd_soc_dapm_widget tosa_dapm_widgets[] = {
++SND_SOC_DAPM_HP("Headphone Jack", tosa_hp_event),
++SND_SOC_DAPM_HP("Headset Jack", NULL),
++SND_SOC_DAPM_MIC("Mic (Internal)", NULL),
++SND_SOC_DAPM_SPK("Speaker", NULL),
++};
++
++/* tosa audio map */
++static const char *audio_map[][3] = {
++
++	/* headphone connected to HPOUTL, HPOUTR */
++	{"Headphone Jack", NULL, "HPOUTL"},
++	{"Headphone Jack", NULL, "HPOUTR"},
++
++	/* ext speaker connected to LOUT2, ROUT2 */
++	{"Speaker", NULL, "LOUT2"},
++	{"Speaker", NULL, "ROUT2"},
++
++	/* internal mic is connected to mic1, mic2 differential - with bias */
++	{"MIC1", NULL, "Mic Bias"},
++	{"MIC2", NULL, "Mic Bias"},
++	{"Mic Bias", NULL, "Mic (Internal)"},
++
++	/* headset is connected to HPOUTR, and LINEINR with bias */
++	{"Headset Jack", NULL, "HPOUTR"},
++	{"LINEINR", NULL, "Mic Bias"},
++	{"Mic Bias", NULL, "Headset Jack"},
++
++	{NULL, NULL, NULL},
++};
++
++static const char *jack_function[] = {"Headphone", "Mic", "Line", "Headset",
++	"Off"};
++static const char *spk_function[] = {"On", "Off"};
++static const struct soc_enum tosa_enum[] = {
++	SOC_ENUM_SINGLE_EXT(5, jack_function),
++	SOC_ENUM_SINGLE_EXT(2, spk_function),
++};
++
++static const struct snd_kcontrol_new tosa_controls[] = {
++	SOC_ENUM_EXT("Jack Function", tosa_enum[0], tosa_get_jack,
++		tosa_set_jack),
++	SOC_ENUM_EXT("Speaker Function", tosa_enum[1], tosa_get_spk,
++		tosa_set_spk),
++};
++
++static int tosa_ac97_init(struct snd_soc_codec *codec)
++{
++	int i, err;
++
++	snd_soc_dapm_set_endpoint(codec, "OUT3", 0);
++	snd_soc_dapm_set_endpoint(codec, "MONOOUT", 0);
++
++	/* add tosa specific controls */
++	for (i = 0; i < ARRAY_SIZE(tosa_controls); i++) {
++		err = snd_ctl_add(codec->card,
++				snd_soc_cnew(&tosa_controls[i],codec, NULL));
++		if (err < 0)
++			return err;
++	}
++
++	/* add tosa specific widgets */
++	for (i = 0; i < ARRAY_SIZE(tosa_dapm_widgets); i++) {
++		snd_soc_dapm_new_control(codec, &tosa_dapm_widgets[i]);
++	}
++
++	/* set up tosa specific audio path audio_map */
++	for (i = 0; audio_map[i][0] != NULL; i++) {
++		snd_soc_dapm_connect_input(codec, audio_map[i][0],
++			audio_map[i][1], audio_map[i][2]);
++	}
++
++	snd_soc_dapm_sync_endpoints(codec);
++	return 0;
++}
++
++static struct snd_soc_dai_link tosa_dai[] = {
++{
++	.name = "AC97",
++	.stream_name = "AC97 HiFi",
++	.cpu_dai = &pxa_ac97_dai[PXA2XX_DAI_AC97_HIFI],
++	.codec_dai = &wm9712_dai[WM9712_DAI_AC97_HIFI],
++	.init = tosa_ac97_init,
++},
++{
++	.name = "AC97 Aux",
++	.stream_name = "AC97 Aux",
++	.cpu_dai = &pxa_ac97_dai[PXA2XX_DAI_AC97_AUX],
++	.codec_dai = &wm9712_dai[WM9712_DAI_AC97_AUX],
++},
++};
++
++static struct snd_soc_machine tosa = {
++	.name = "Tosa",
++	.dai_link = tosa_dai,
++	.num_links = ARRAY_SIZE(tosa_dai),
++	.ops = &tosa_ops,
++};
++
++static struct snd_soc_device tosa_snd_devdata = {
++	.machine = &tosa,
++	.platform = &pxa2xx_soc_platform,
++	.codec_dev = &soc_codec_dev_wm9712,
++};
++
++static struct platform_device *tosa_snd_device;
++
++static int __init tosa_init(void)
++{
++	int ret;
++
++	if (!machine_is_tosa())
++		return -ENODEV;
++
++	tosa_snd_device = platform_device_alloc("soc-audio", -1);
++	if (!tosa_snd_device)
++		return -ENOMEM;
++
++	platform_set_drvdata(tosa_snd_device, &tosa_snd_devdata);
++	tosa_snd_devdata.dev = &tosa_snd_device->dev;
++	ret = platform_device_add(tosa_snd_device);
++
++	if (ret)
++		platform_device_put(tosa_snd_device);
++
++	return ret;
++}
++
++static void __exit tosa_exit(void)
++{
++	platform_device_unregister(tosa_snd_device);
++}
++
++module_init(tosa_init);
++module_exit(tosa_exit);
++
++/* Module information */
++MODULE_AUTHOR("Richard Purdie");
++MODULE_DESCRIPTION("ALSA SoC Tosa");
++MODULE_LICENSE("GPL");
+Index: linux-2.6.18/mvl_patches/pro50-1289.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1289.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1289);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

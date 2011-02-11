@@ -1,0 +1,355 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_Clean_up_zImage_handling_of_the_command_li
+# Date: Wed Sep 26 11:14:56 2007
+# MR: 24856
+# From 3af82a8b00f98ca54e4c860eeb2b9ede6d8cadf4 Mon Sep 17 00:00:00 2001
+# From: David Gibson <david@gibson.dropbear.id.au>
+# Date: Thu, 22 Mar 2007 17:02:21 +1100
+# Subject: [PATCH] [POWERPC] Clean up zImage handling of the command line
+# 
+# This cleans up how the zImage code manipulates the kernel
+# command line.  Notable improvements from the old handling:
+# 	- Command line manipulation is consolidated into a new
+# prep_cmdline() function, rather than being scattered across start()
+# and some helper functions
+# 	- Less stack space use: we use just a single global command
+# line buffer, which can be initialized by an external tool as before,
+# we no longer need another command line sized buffer on the stack.
+# 	- Easier to support platforms whose firmware passes a
+# commandline, but not a device tree.  Platform code can now point new
+# loader_info fields to the firmware's command line, rather than having
+# to do early manipulation of the /chosen bootargs property which may
+# then be rewritten again by the core.
+# 
+# Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=294
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From 3af82a8b00f98ca54e4c860eeb2b9ede6d8cadf4 Mon Sep 17 00:00:00 2001
+From: David Gibson <david@gibson.dropbear.id.au>
+Date: Thu, 22 Mar 2007 17:02:21 +1100
+Subject: [PATCH] [POWERPC] Clean up zImage handling of the command line
+
+This cleans up how the zImage code manipulates the kernel
+command line.  Notable improvements from the old handling:
+	- Command line manipulation is consolidated into a new
+prep_cmdline() function, rather than being scattered across start()
+and some helper functions
+	- Less stack space use: we use just a single global command
+line buffer, which can be initialized by an external tool as before,
+we no longer need another command line sized buffer on the stack.
+	- Easier to support platforms whose firmware passes a
+commandline, but not a device tree.  Platform code can now point new
+loader_info fields to the firmware's command line, rather than having
+to do early manipulation of the /chosen bootargs property which may
+then be rewritten again by the core.
+
+Signed-off-by: David Gibson <david@gibson.dropbear.id.au>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/boot/main.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/main.c
++++ linux-2.6.18/arch/powerpc/boot/main.c
+@@ -205,31 +205,22 @@ static struct addr_range prep_initrd(str
+  * edit the command line passed to vmlinux (by setting /chosen/bootargs).
+  * The buffer is put in it's own section so that tools may locate it easier.
+  */
+-static char builtin_cmdline[COMMAND_LINE_SIZE]
++static char cmdline[COMMAND_LINE_SIZE]
+ 	__attribute__((__section__("__builtin_cmdline")));
+ 
+-static void get_cmdline(char *buf, int size)
++static void prep_cmdline(void *chosen)
+ {
+-	void *devp;
+-	int len = strlen(builtin_cmdline);
++	if (cmdline[0] == '\0')
++		getprop(chosen, "bootargs", cmdline, COMMAND_LINE_SIZE-1);
+ 
+-	buf[0] = '\0';
++	printf("\n\rLinux/PowerPC load: %s", cmdline);
++	/* If possible, edit the command line */
++	if (console_ops.edit_cmdline)
++		console_ops.edit_cmdline(cmdline, COMMAND_LINE_SIZE);
++	printf("\n\r");
+ 
+-	if (len > 0) { /* builtin_cmdline overrides dt's /chosen/bootargs */
+-		len = min(len, size-1);
+-		strncpy(buf, builtin_cmdline, len);
+-		buf[len] = '\0';
+-	}
+-	else if ((devp = finddevice("/chosen")))
+-		getprop(devp, "bootargs", buf, size);
+-}
+-
+-static void set_cmdline(char *buf)
+-{
+-	void *devp;
+-
+-	if ((devp = finddevice("/chosen")))
+-		setprop(devp, "bootargs", buf, strlen(buf) + 1);
++	/* Put the command line back into the devtree for the kernel */
++	setprop_str(chosen, "bootargs", cmdline);
+ }
+ 
+ struct platform_ops platform_ops;
+@@ -241,10 +232,16 @@ void start(void)
+ {
+ 	struct addr_range vmlinux, initrd;
+ 	kernel_entry_t kentry;
+-	char cmdline[COMMAND_LINE_SIZE];
+ 	unsigned long ft_addr = 0;
+ 	void *chosen;
+ 
++	/* Do this first, because malloc() could clobber the loader's
++	 * command line.  Only use the loader command line if a
++	 * built-in command line wasn't set by an external tool */
++	if ((loader_info.cmdline_len > 0) && (cmdline[0] == '\0'))
++		memmove(cmdline, loader_info.cmdline,
++			min(loader_info.cmdline_len, COMMAND_LINE_SIZE-1));
++
+ 	if (console_ops.open && (console_ops.open() < 0))
+ 		exit();
+ 	if (platform_ops.fixups)
+@@ -261,18 +258,7 @@ void start(void)
+ 	vmlinux = prep_kernel();
+ 	initrd = prep_initrd(vmlinux, chosen,
+ 			     loader_info.initrd_addr, loader_info.initrd_size);
+-
+-	/* If cmdline came from zimage wrapper or if we can edit the one
+-	 * in the dt, print it out and edit it, if possible.
+-	 */
+-	if ((strlen(builtin_cmdline) > 0) || console_ops.edit_cmdline) {
+-		get_cmdline(cmdline, COMMAND_LINE_SIZE);
+-		printf("\n\rLinux/PowerPC load: %s", cmdline);
+-		if (console_ops.edit_cmdline)
+-			console_ops.edit_cmdline(cmdline, COMMAND_LINE_SIZE);
+-		printf("\n\r");
+-		set_cmdline(cmdline);
+-	}
++	prep_cmdline(chosen);
+ 
+ 	printf("Finalizing device tree...");
+ 	if (dt_ops.finalize)
+Index: linux-2.6.18/arch/powerpc/boot/ops.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/ops.h
++++ linux-2.6.18/arch/powerpc/boot/ops.h
+@@ -70,6 +70,8 @@ struct serial_console_data {
+ struct loader_info {
+ 	void *promptr;
+ 	unsigned long initrd_addr, initrd_size;
++	char *cmdline;
++	int cmdline_len;
+ };
+ extern struct loader_info loader_info;
+ 
+Index: linux-2.6.18/mvl_patches/pro50-0294.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0294.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(294);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

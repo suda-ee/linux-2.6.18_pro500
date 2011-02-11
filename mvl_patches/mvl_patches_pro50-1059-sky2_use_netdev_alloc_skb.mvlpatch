@@ -1,0 +1,359 @@
+#! /usr/bin/env bash
+# Patch: -sky2_use_netdev_alloc_skb
+# Date: Fri Apr 25 11:54:14 2008
+# Source: kernel.org
+# MR: 27394
+# Type: Enhancement
+# Disposition: backport from 2.6.19-rc1 (497d7c8681dec5084b2e79193c2aaeddc789477f)
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# 
+# commit 497d7c8681dec5084b2e79193c2aaeddc789477f
+# Author: shemminger@osdl.org <shemminger@osdl.org>
+# Date:   Mon Aug 28 10:00:46 2006 -0700
+# 
+#     [PATCH] sky2: use netdev_alloc_skb
+#     
+#     Use netdev_alloc_skb for buffer allocation to allow for headroom.
+#     This prevents bugs in code paths that assume extra space at the
+#     front and makes sky2 behave like other drivers.
+#     
+#     Signed-off-by: Stephen Hemminger <shemminger@osdl.org>
+#     Signed-off-by: Jeff Garzik <jeff@garzik.org>
+# 
+#  drivers/net/sky2.c |   29 ++++++++++++++++-------------
+#  1 files changed, 16 insertions(+), 13 deletions(-)
+# 
+
+PATCHNUM=1059
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: kernel.org
+MR: 27394
+Type: Enhancement
+Disposition: backport from 2.6.19-rc1 (497d7c8681dec5084b2e79193c2aaeddc789477f)
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+
+commit 497d7c8681dec5084b2e79193c2aaeddc789477f
+Author: shemminger@osdl.org <shemminger@osdl.org>
+Date:   Mon Aug 28 10:00:46 2006 -0700
+
+    [PATCH] sky2: use netdev_alloc_skb
+    
+    Use netdev_alloc_skb for buffer allocation to allow for headroom.
+    This prevents bugs in code paths that assume extra space at the
+    front and makes sky2 behave like other drivers.
+    
+    Signed-off-by: Stephen Hemminger <shemminger@osdl.org>
+    Signed-off-by: Jeff Garzik <jeff@garzik.org>
+
+ drivers/net/sky2.c       |   29 ++++++++++++++++-------------
+ mvl_patches/pro50-1059.c |   16 ++++++++++++++++
+ 2 files changed, 32 insertions(+), 13 deletions(-)
+
+Index: linux-2.6.18/drivers/net/sky2.c
+===================================================================
+--- linux-2.6.18.orig/drivers/net/sky2.c
++++ linux-2.6.18/drivers/net/sky2.c
+@@ -951,14 +951,16 @@ static void sky2_vlan_rx_kill_vid(struct
+ /*
+  * It appears the hardware has a bug in the FIFO logic that
+  * cause it to hang if the FIFO gets overrun and the receive buffer
+- * is not aligned. ALso alloc_skb() won't align properly if slab
+- * debugging is enabled.
++ * is not 64 byte aligned. The buffer returned from netdev_alloc_skb is
++ * aligned except if slab debugging is enabled.
+  */
+-static inline struct sk_buff *sky2_alloc_skb(unsigned int size, gfp_t gfp_mask)
++static inline struct sk_buff *sky2_alloc_skb(struct net_device *dev,
++					     unsigned int length,
++					     gfp_t gfp_mask)
+ {
+ 	struct sk_buff *skb;
+ 
+-	skb = alloc_skb(size + RX_SKB_ALIGN, gfp_mask);
++	skb = __netdev_alloc_skb(dev, length + RX_SKB_ALIGN, gfp_mask);
+ 	if (likely(skb)) {
+ 		unsigned long p	= (unsigned long) skb->data;
+ 		skb_reserve(skb, ALIGN(p, RX_SKB_ALIGN) - p);
+@@ -994,7 +996,8 @@ static int sky2_rx_start(struct sky2_por
+ 	for (i = 0; i < sky2->rx_pending; i++) {
+ 		struct ring_info *re = sky2->rx_ring + i;
+ 
+-		re->skb = sky2_alloc_skb(sky2->rx_bufsize, GFP_KERNEL);
++		re->skb = sky2_alloc_skb(sky2->netdev, sky2->rx_bufsize,
++					 GFP_KERNEL);
+ 		if (!re->skb)
+ 			goto nomem;
+ 
+@@ -1823,15 +1826,16 @@ static int sky2_change_mtu(struct net_de
+  * For small packets or errors, just reuse existing skb.
+  * For larger packets, get new buffer.
+  */
+-static struct sk_buff *sky2_receive(struct sky2_port *sky2,
++static struct sk_buff *sky2_receive(struct net_device *dev,
+ 				    u16 length, u32 status)
+ {
++ 	struct sky2_port *sky2 = netdev_priv(dev);
+ 	struct ring_info *re = sky2->rx_ring + sky2->rx_next;
+ 	struct sk_buff *skb = NULL;
+ 
+ 	if (unlikely(netif_msg_rx_status(sky2)))
+ 		printk(KERN_DEBUG PFX "%s: rx slot %u status 0x%x len %d\n",
+-		       sky2->netdev->name, sky2->rx_next, status, length);
++		       dev->name, sky2->rx_next, status, length);
+ 
+ 	sky2->rx_next = (sky2->rx_next + 1) % sky2->rx_pending;
+ 	prefetch(sky2->rx_ring + sky2->rx_next);
+@@ -1842,11 +1846,11 @@ static struct sk_buff *sky2_receive(stru
+ 	if (!(status & GMR_FS_RX_OK))
+ 		goto resubmit;
+ 
+-	if (length > sky2->netdev->mtu + ETH_HLEN)
++	if (length > dev->mtu + ETH_HLEN)
+ 		goto oversize;
+ 
+ 	if (length < copybreak) {
+-		skb = alloc_skb(length + 2, GFP_ATOMIC);
++		skb = netdev_alloc_skb(dev, length + 2);
+ 		if (!skb)
+ 			goto resubmit;
+ 
+@@ -1861,7 +1865,7 @@ static struct sk_buff *sky2_receive(stru
+ 	} else {
+ 		struct sk_buff *nskb;
+ 
+-		nskb = sky2_alloc_skb(sky2->rx_bufsize, GFP_ATOMIC);
++		nskb = sky2_alloc_skb(dev, sky2->rx_bufsize, GFP_ATOMIC);
+ 		if (!nskb)
+ 			goto resubmit;
+ 
+@@ -1891,7 +1895,7 @@ error:
+ 
+ 	if (netif_msg_rx_err(sky2) && net_ratelimit())
+ 		printk(KERN_INFO PFX "%s: rx error, status 0x%x length %d\n",
+-		       sky2->netdev->name, status, length);
++		       dev->name, status, length);
+ 
+ 	if (status & (GMR_FS_LONG_ERR | GMR_FS_UN_SIZE))
+ 		sky2->net_stats.rx_length_errors++;
+@@ -1945,11 +1949,10 @@ static int sky2_status_intr(struct sky2_
+ 
+ 		switch (le->opcode & ~HW_OWNER) {
+ 		case OP_RXSTAT:
+-			skb = sky2_receive(sky2, length, status);
++			skb = sky2_receive(dev, length, status);
+ 			if (!skb)
+ 				break;
+ 
+-			skb->dev = dev;
+ 			skb->protocol = eth_type_trans(skb, dev);
+ 			dev->last_rx = jiffies;
+ 
+Index: linux-2.6.18/mvl_patches/pro50-1059.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1059.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1059);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

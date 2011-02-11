@@ -1,0 +1,679 @@
+#! /usr/bin/env bash
+# Patch: -x86_64_irq_vector_for_all_cpus
+# Date: Wed Sep 26 15:09:01 2007
+# MR: 22395
+# commit c7111c1318ee8890f385813f232fdb32643e2653
+# Author: Eric W. Biederman <ebiederm@xmission.com>
+# Date:   Sun Oct 8 07:47:55 2006 -0600
+# 
+#     [PATCH] x86_64 irq: Allocate a vector across all cpus for genapic_flat.
+#     
+#     The problem we can't take advantage of lowest priority delivery mode if
+#     the vectors are allocated for only one cpu at a time.  Nor can we work
+#     around hardware that assumes lowest priority delivery mode is always
+#     used with several cpus.
+#     
+#     So this patch introduces the concept of a vector_allocation_domain.  A
+#     set of cpus that will receive an irq on the same vector.  Currently the
+#     code for implementing this is placed in the genapic structure so we can
+#     vary this depending on how we are using the io_apics.
+#     
+#     This allows us to restore the previous behaviour of genapic_flat without
+#     removing the benefits of having separate vector allocation for large
+#     machines.
+#     
+#     This should also fix the problem report where a hyperthreaded cpu was
+#     receving the irq on the wrong hyperthread when in logical delivery mode
+#     because the previous behaviour is restored.
+#     
+#     This patch properly records our allocation of the first 16 irqs to the
+#     first 16 available vectors on all cpus.  This should be fine but it may
+#     run into problems with multiple interrupts at the same interrupt level.
+#     Except for some badly maintained comments in the code and the behaviour
+#     of the interrupt allocator I have no real understanding of that problem.
+#     
+#     Signed-off-by: Eric W. Biederman <ebiederm@xmission.com>
+#     Acked-by: Muli Ben-Yehuda <muli@il.ibm.com>
+#     Signed-off-by: Linus Torvalds <torvalds@osdl.org>
+# 
+
+PATCHNUM=429
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 22395
+commit c7111c1318ee8890f385813f232fdb32643e2653
+Author: Eric W. Biederman <ebiederm@xmission.com>
+Date:   Sun Oct 8 07:47:55 2006 -0600
+
+    [PATCH] x86_64 irq: Allocate a vector across all cpus for genapic_flat.
+    
+    The problem we can't take advantage of lowest priority delivery mode if
+    the vectors are allocated for only one cpu at a time.  Nor can we work
+    around hardware that assumes lowest priority delivery mode is always
+    used with several cpus.
+    
+    So this patch introduces the concept of a vector_allocation_domain.  A
+    set of cpus that will receive an irq on the same vector.  Currently the
+    code for implementing this is placed in the genapic structure so we can
+    vary this depending on how we are using the io_apics.
+    
+    This allows us to restore the previous behaviour of genapic_flat without
+    removing the benefits of having separate vector allocation for large
+    machines.
+    
+    This should also fix the problem report where a hyperthreaded cpu was
+    receving the irq on the wrong hyperthread when in logical delivery mode
+    because the previous behaviour is restored.
+    
+    This patch properly records our allocation of the first 16 irqs to the
+    first 16 available vectors on all cpus.  This should be fine but it may
+    run into problems with multiple interrupts at the same interrupt level.
+    Except for some badly maintained comments in the code and the behaviour
+    of the interrupt allocator I have no real understanding of that problem.
+    
+    Signed-off-by: Eric W. Biederman <ebiederm@xmission.com>
+    Acked-by: Muli Ben-Yehuda <muli@il.ibm.com>
+    Signed-off-by: Linus Torvalds <torvalds@osdl.org>
+
+Index: linux-2.6.18/arch/x86_64/kernel/genapic_cluster.c
+===================================================================
+--- linux-2.6.18.orig/arch/x86_64/kernel/genapic_cluster.c
++++ linux-2.6.18/arch/x86_64/kernel/genapic_cluster.c
+@@ -63,6 +63,13 @@ static cpumask_t cluster_target_cpus(voi
+ 	return cpumask_of_cpu(0);
+ }
+ 
++static cpumask_t cluster_vector_allocation_domain(int cpu)
++{
++	cpumask_t domain = CPU_MASK_NONE;
++	cpu_set(cpu, domain);
++	return domain;
++}
++
+ static void cluster_send_IPI_mask(cpumask_t mask, int vector)
+ {
+ 	send_IPI_mask_sequence(mask, vector);
+@@ -120,6 +127,7 @@ struct genapic apic_cluster = {
+ 	.int_dest_mode = (APIC_DEST_PHYSICAL != 0),
+ 	.int_delivery_dest = APIC_DEST_PHYSICAL | APIC_DM_FIXED,
+ 	.target_cpus = cluster_target_cpus,
++	.vector_allocation_domain = cluster_vector_allocation_domain,
+ 	.apic_id_registered = cluster_apic_id_registered,
+ 	.init_apic_ldr = cluster_init_apic_ldr,
+ 	.send_IPI_all = cluster_send_IPI_all,
+Index: linux-2.6.18/arch/x86_64/kernel/genapic_flat.c
+===================================================================
+--- linux-2.6.18.orig/arch/x86_64/kernel/genapic_flat.c
++++ linux-2.6.18/arch/x86_64/kernel/genapic_flat.c
+@@ -22,6 +22,20 @@ static cpumask_t flat_target_cpus(void)
+ 	return cpu_online_map;
+ }
+ 
++static cpumask_t flat_vector_allocation_domain(int cpu)
++{
++	/* Careful. Some cpus do not strictly honor the set of cpus
++	 * specified in the interrupt destination when using lowest
++	 * priority interrupt delivery mode.
++	 *
++	 * In particular there was a hyperthreading cpu observed to
++	 * deliver interrupts to the wrong hyperthread when only one
++	 * hyperthread was specified in the interrupt desitination.
++	 */
++	cpumask_t domain = { { [0] = APIC_ALL_CPUS, } };
++	return domain;
++}
++
+ /*
+  * Set up the logical destination ID.
+  *
+@@ -123,6 +137,7 @@ struct genapic apic_flat =  {
+ 	.int_dest_mode = (APIC_DEST_LOGICAL != 0),
+ 	.int_delivery_dest = APIC_DEST_LOGICAL | APIC_DM_LOWEST,
+ 	.target_cpus = flat_target_cpus,
++	.vector_allocation_domain = flat_vector_allocation_domain,
+ 	.apic_id_registered = flat_apic_id_registered,
+ 	.init_apic_ldr = flat_init_apic_ldr,
+ 	.send_IPI_all = flat_send_IPI_all,
+@@ -143,6 +158,14 @@ static cpumask_t physflat_target_cpus(vo
+ 	return cpumask_of_cpu(0);
+ }
+ 
++static cpumask_t physflat_vector_allocation_domain(int cpu)
++{
++	cpumask_t domain = CPU_MASK_NONE;
++	cpu_set(cpu, domain);
++	return domain;
++}
++
++
+ static void physflat_send_IPI_mask(cpumask_t cpumask, int vector)
+ {
+ 	send_IPI_mask_sequence(cpumask, vector);
+@@ -182,6 +205,7 @@ struct genapic apic_physflat =  {
+ 	.int_dest_mode = (APIC_DEST_PHYSICAL != 0),
+ 	.int_delivery_dest = APIC_DEST_PHYSICAL | APIC_DM_FIXED,
+ 	.target_cpus = physflat_target_cpus,
++	.vector_allocation_domain = physflat_vector_allocation_domain,
+ 	.apic_id_registered = flat_apic_id_registered,
+ 	.init_apic_ldr = flat_init_apic_ldr,/*not needed, but shouldn't hurt*/
+ 	.send_IPI_all = physflat_send_IPI_all,
+Index: linux-2.6.18/arch/x86_64/kernel/io_apic.c
+===================================================================
+--- linux-2.6.18.orig/arch/x86_64/kernel/io_apic.c
++++ linux-2.6.18/arch/x86_64/kernel/io_apic.c
+@@ -47,7 +47,7 @@
+ #include <asm/msidef.h>
+ #include <asm/hypertransport.h>
+ 
+-static int assign_irq_vector(int irq, cpumask_t mask);
++static int assign_irq_vector(int irq, cpumask_t mask, cpumask_t *result);
+ 
+ #define __apicdebuginit  __init
+ 
+@@ -150,12 +150,10 @@ static void set_ioapic_affinity_irq(unsi
+ 
+ 	cpus_and(mask, tmp, CPU_MASK_ALL);
+ 
+-	vector = assign_irq_vector(irq, mask);
++	vector = assign_irq_vector(irq, mask, &tmp);
+ 	if (vector < 0)
+ 		return;
+ 
+-	cpus_clear(tmp);
+-	cpu_set(vector >> 8, tmp);
+ 	dest = cpu_mask_to_apicid(tmp);
+ 
+ 	/*
+@@ -164,7 +162,7 @@ static void set_ioapic_affinity_irq(unsi
+ 	dest = SET_APIC_LOGICAL_ID(dest);
+ 
+ 	spin_lock_irqsave(&ioapic_lock, flags);
+-	__target_IO_APIC_irq(irq, dest, vector & 0xff);
++	__target_IO_APIC_irq(irq, dest, vector);
+ 	set_native_irq_info(irq, mask);
+ 	spin_unlock_irqrestore(&ioapic_lock, flags);
+ }
+@@ -799,9 +797,45 @@ static inline int IO_APIC_irq_trigger(in
+ }
+ 
+ /* irq_vectors is indexed by the sum of all RTEs in all I/O APICs. */
+-unsigned int irq_vector[NR_IRQ_VECTORS] __read_mostly = { FIRST_EXTERNAL_VECTOR, 0 };
++static u8 irq_vector[NR_IRQ_VECTORS] __read_mostly = {
++	[0] = FIRST_EXTERNAL_VECTOR + 0,
++	[1] = FIRST_EXTERNAL_VECTOR + 1,
++	[2] = FIRST_EXTERNAL_VECTOR + 2,
++	[3] = FIRST_EXTERNAL_VECTOR + 3,
++	[4] = FIRST_EXTERNAL_VECTOR + 4,
++	[5] = FIRST_EXTERNAL_VECTOR + 5,
++	[6] = FIRST_EXTERNAL_VECTOR + 6,
++	[7] = FIRST_EXTERNAL_VECTOR + 7,
++	[8] = FIRST_EXTERNAL_VECTOR + 8,
++	[9] = FIRST_EXTERNAL_VECTOR + 9,
++	[10] = FIRST_EXTERNAL_VECTOR + 10,
++	[11] = FIRST_EXTERNAL_VECTOR + 11,
++	[12] = FIRST_EXTERNAL_VECTOR + 12,
++	[13] = FIRST_EXTERNAL_VECTOR + 13,
++	[14] = FIRST_EXTERNAL_VECTOR + 14,
++	[15] = FIRST_EXTERNAL_VECTOR + 15,
++};
++
++static cpumask_t irq_domain[NR_IRQ_VECTORS] __read_mostly = {
++	[0] = CPU_MASK_ALL,
++	[1] = CPU_MASK_ALL,
++	[2] = CPU_MASK_ALL,
++	[3] = CPU_MASK_ALL,
++	[4] = CPU_MASK_ALL,
++	[5] = CPU_MASK_ALL,
++	[6] = CPU_MASK_ALL,
++	[7] = CPU_MASK_ALL,
++	[8] = CPU_MASK_ALL,
++	[9] = CPU_MASK_ALL,
++	[10] = CPU_MASK_ALL,
++	[11] = CPU_MASK_ALL,
++	[12] = CPU_MASK_ALL,
++	[13] = CPU_MASK_ALL,
++	[14] = CPU_MASK_ALL,
++	[15] = CPU_MASK_ALL,
++};
+ 
+-static int __assign_irq_vector(int irq, cpumask_t mask)
++static int __assign_irq_vector(int irq, cpumask_t mask, cpumask_t *result)
+ {
+ 	/*
+ 	 * NOTE! The local APIC isn't very good at handling
+@@ -825,14 +859,22 @@ static int __assign_irq_vector(int irq, 
+ 
+ 	if (irq_vector[irq] > 0)
+ 		old_vector = irq_vector[irq];
+-	if ((old_vector > 0) && cpu_isset(old_vector >> 8, mask)) {
+-		return old_vector;
++	if (old_vector > 0) {
++		cpus_and(*result, irq_domain[irq], mask);
++		if (!cpus_empty(*result))
++			return old_vector;
+ 	}
+ 
+ 	for_each_cpu_mask(cpu, mask) {
++		cpumask_t domain;
++		int first, new_cpu;
+ 		int vector, offset;
+-		vector = pos[cpu].vector;
+-		offset = pos[cpu].offset;
++
++		domain = vector_allocation_domain(cpu);
++		first = first_cpu(domain);
++
++		vector = pos[first].vector;
++		offset = pos[first].offset;
+ next:
+ 		vector += 8;
+ 		if (vector >= FIRST_SYSTEM_VECTOR) {
+@@ -840,35 +882,40 @@ next:
+ 			offset = (offset + 1) % 8;
+ 			vector = FIRST_DEVICE_VECTOR + offset;
+ 		}
+-		if (unlikely(pos[cpu].vector == vector))
++		if (unlikely(pos[first].vector == vector))
+ 			continue;
+ 		if (vector == IA32_SYSCALL_VECTOR)
+ 			goto next;
+-		if (per_cpu(vector_irq, cpu)[vector] != -1)
+-			goto next;
++		for_each_cpu_mask(new_cpu, domain)
++			if (per_cpu(vector_irq, cpu)[vector] != -1)
++				goto next;
+ 		/* Found one! */
+-		pos[cpu].vector = vector;
+-		pos[cpu].offset = offset;
++		for_each_cpu_mask(new_cpu, domain) {
++			pos[cpu].vector = vector;
++			pos[cpu].offset = offset;
++		}
+ 		if (old_vector >= 0) {
+-			int old_cpu = old_vector >> 8;
+-			old_vector &= 0xff;
+-			per_cpu(vector_irq, old_cpu)[old_vector] = -1;
++			int old_cpu;
++			for_each_cpu_mask(old_cpu, domain)
++				per_cpu(vector_irq, old_cpu)[old_vector] = -1;
+ 		}
+-		per_cpu(vector_irq, cpu)[vector] = irq;
+-		vector |= cpu << 8;
++		for_each_cpu_mask(new_cpu, domain)
++			per_cpu(vector_irq, new_cpu)[vector] = irq;
+ 		irq_vector[irq] = vector;
++		irq_domain[irq] = domain;
++		cpus_and(*result, domain, mask);
+ 		return vector;
+ 	}
+ 	return -ENOSPC;
+ }
+ 
+-static int assign_irq_vector(int irq, cpumask_t mask)
++static int assign_irq_vector(int irq, cpumask_t mask, cpumask_t *result)
+ {
+ 	int vector;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&vector_lock, flags);
+-	vector = __assign_irq_vector(irq, mask);
++	vector = __assign_irq_vector(irq, mask, result);
+ 	spin_unlock_irqrestore(&vector_lock, flags);
+ 	return vector;
+ }
+@@ -943,14 +990,12 @@ static void __init setup_IO_APIC_irqs(vo
+ 
+ 		if (IO_APIC_IRQ(irq)) {
+ 			cpumask_t mask;
+-			vector = assign_irq_vector(irq, TARGET_CPUS);
++			vector = assign_irq_vector(irq, TARGET_CPUS, &mask);
+ 			if (vector < 0)
+ 				continue;
+ 
+-			cpus_clear(mask);
+-			cpu_set(vector >> 8, mask);
+ 			entry.dest.logical.logical_dest = cpu_mask_to_apicid(mask);
+-			entry.vector = vector & 0xff;
++			entry.vector = vector;
+ 
+ 			ioapic_register_intr(irq, vector, IOAPIC_AUTO);
+ 			if (!apic && (irq < 16))
+@@ -1751,12 +1796,13 @@ static inline void check_timer(void)
+ {
+ 	int apic1, pin1, apic2, pin2;
+ 	int vector;
++	cpumask_t mask;
+ 
+ 	/*
+ 	 * get/set the timer IRQ vector:
+ 	 */
+ 	disable_8259A_irq(0);
+-	vector = assign_irq_vector(0, TARGET_CPUS);
++	vector = assign_irq_vector(0, TARGET_CPUS, &mask);
+ 
+ 	/*
+ 	 * Subtle, code in do_timer_interrupt() expects an AEOI
+@@ -2000,6 +2046,7 @@ int create_irq(void)
+ 	int new;
+ 	int vector = 0;
+ 	unsigned long flags;
++	cpumask_t mask;
+ 
+ 	irq = -ENOSPC;
+ 	spin_lock_irqsave(&vector_lock, flags);
+@@ -2008,7 +2055,7 @@ int create_irq(void)
+ 			continue;
+ 		if (irq_vector[new] != 0)
+ 			continue;
+-		vector = __assign_irq_vector(new, TARGET_CPUS);
++		vector = __assign_irq_vector(new, TARGET_CPUS, &mask);
+ 		if (likely(vector > 0))
+ 			irq = new;
+ 		break;
+@@ -2040,13 +2087,10 @@ static int msi_compose_msg(struct pci_de
+ {
+ 	int vector;
+ 	unsigned dest;
++	cpumask_t tmp;
+ 
+-	vector = assign_irq_vector(irq, TARGET_CPUS);
++	vector = assign_irq_vector(irq, TARGET_CPUS, &tmp);
+ 	if (vector >= 0) {
+-		cpumask_t tmp;
+-
+-		cpus_clear(tmp);
+-		cpu_set(vector >> 8, tmp);
+ 		dest = cpu_mask_to_apicid(tmp);
+ 
+ 		msg->address_hi = MSI_ADDR_BASE_HI;
+@@ -2085,12 +2129,10 @@ static void set_msi_irq_affinity(unsigne
+ 
+ 	cpus_and(mask, tmp, CPU_MASK_ALL);
+ 
+-	vector = assign_irq_vector(irq, mask);
++	vector = assign_irq_vector(irq, mask, &tmp);
+ 	if (vector < 0)
+ 		return;
+ 
+-	cpus_clear(tmp);
+-	cpu_set(vector >> 8, tmp);
+ 	dest = cpu_mask_to_apicid(tmp);
+ 
+ 	read_msi_msg(irq, &msg);
+@@ -2177,12 +2219,10 @@ static void set_ht_irq_affinity(unsigned
+ 
+ 	cpus_and(mask, tmp, CPU_MASK_ALL);
+ 
+-	vector = assign_irq_vector(irq, mask);
++	vector = assign_irq_vector(irq, mask, &tmp);
+ 	if (vector < 0)
+ 		return;
+ 
+-	cpus_clear(tmp);
+-	cpu_set(vector >> 8, tmp);
+ 	dest = cpu_mask_to_apicid(tmp);
+ 
+ 	target_ht_irq(irq, dest, vector & 0xff);
+@@ -2204,15 +2244,13 @@ static struct hw_interrupt_type ht_irq_c
+ int arch_setup_ht_irq(unsigned int irq, struct pci_dev *dev)
+ {
+ 	int vector;
++	cpumask_t tmp;
+ 
+-	vector = assign_irq_vector(irq, TARGET_CPUS);
++	vector = assign_irq_vector(irq, TARGET_CPUS, &tmp);
+ 	if (vector >= 0) {
+ 		u32 low, high;
+ 		unsigned dest;
+-		cpumask_t tmp;
+ 
+-		cpus_clear(tmp);
+-		cpu_set(vector >> 8, tmp);
+ 		dest = cpu_mask_to_apicid(tmp);
+ 
+ 		high = 	HT_IRQ_HIGH_DEST_ID(dest);
+@@ -2291,13 +2329,10 @@ int io_apic_set_pci_routing (int ioapic,
+ 		add_pin_to_irq(irq, ioapic, pin);
+ 
+ 
+-	vector = assign_irq_vector(irq, TARGET_CPUS);
++	vector = assign_irq_vector(irq, TARGET_CPUS, &mask);
+ 	if (vector < 0)
+ 		return vector;
+ 
+-	cpus_clear(mask);
+-	cpu_set(vector >> 8, mask);
+-
+ 	/*
+ 	 * Generate a PCI IRQ routing entry and program the IOAPIC accordingly.
+ 	 * Note that we mask (disable) IRQs now -- these get enabled when the
+Index: linux-2.6.18/include/asm-x86_64/genapic.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-x86_64/genapic.h
++++ linux-2.6.18/include/asm-x86_64/genapic.h
+@@ -19,6 +19,7 @@ struct genapic {
+ 	u32 int_delivery_dest;	/* for quick IPIs */
+ 	int (*apic_id_registered)(void);
+ 	cpumask_t (*target_cpus)(void);
++	cpumask_t (*vector_allocation_domain)(int cpu);
+ 	void (*init_apic_ldr)(void);
+ 	/* ipi */
+ 	void (*send_IPI_mask)(cpumask_t mask, int vector);
+Index: linux-2.6.18/include/asm-x86_64/mach_apic.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-x86_64/mach_apic.h
++++ linux-2.6.18/include/asm-x86_64/mach_apic.h
+@@ -18,6 +18,7 @@
+ #define INT_DEST_MODE (genapic->int_dest_mode)
+ #define INT_DELIVERY_DEST (genapic->int_delivery_dest)
+ #define TARGET_CPUS	  (genapic->target_cpus())
++#define vector_allocation_domain	(genapic->vector_allocation_domain)
+ #define apic_id_registered (genapic->apic_id_registered)
+ #define init_apic_ldr (genapic->init_apic_ldr)
+ #define send_IPI_mask (genapic->send_IPI_mask)
+Index: linux-2.6.18/mvl_patches/pro50-0429.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0429.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(429);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

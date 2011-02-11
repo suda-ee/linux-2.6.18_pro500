@@ -1,0 +1,466 @@
+#! /usr/bin/env bash
+# Patch: -USB_Rework_the_OHCI_quirk_mecanism_as_suggested_by
+# Date: Fri Oct 26 08:36:33 2007
+# MR: 24856
+# From 4302a595cd9c6363b495460497ecbda49fa16858 Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Fri, 15 Dec 2006 06:53:55 +1100
+# Subject: [PATCH] USB: Rework the OHCI quirk mechanism as suggested by David
+# 
+# This patch applies David Brownell's suggestion for reworking the
+# OHCI quirk mechanism via a table of PCI IDs. It adapts the existing
+# quirks to use that mechanism.
+# 
+# This also moves the quirks to reset() as suggested by the comment
+# in there. This is necessary as we need to have the endian properly
+# set before we try to init the controller.
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Acked-by: David Brownell <dbrownell@users.sourceforge.net>
+# Acked-by: Geoff Levand <geoffrey.levand@am.sony.com>
+# Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+# 
+# Adjustments:
+#     One comment whitespase adjustment.
+
+PATCHNUM=466
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From 4302a595cd9c6363b495460497ecbda49fa16858 Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Fri, 15 Dec 2006 06:53:55 +1100
+Subject: [PATCH] USB: Rework the OHCI quirk mechanism as suggested by David
+
+This patch applies David Brownell's suggestion for reworking the
+OHCI quirk mechanism via a table of PCI IDs. It adapts the existing
+quirks to use that mechanism.
+
+This also moves the quirks to reset() as suggested by the comment
+in there. This is necessary as we need to have the endian properly
+set before we try to init the controller.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Acked-by: David Brownell <dbrownell@users.sourceforge.net>
+Acked-by: Geoff Levand <geoffrey.levand@am.sony.com>
+Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+
+Adjustments:
+    One comment whitespase adjustment.
+Index: linux-2.6.18/drivers/usb/host/ohci-pci.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/host/ohci-pci.c
++++ linux-2.6.18/drivers/usb/host/ohci-pci.c
+@@ -20,79 +20,128 @@
+ 
+ /*-------------------------------------------------------------------------*/
+ 
+-static int
+-ohci_pci_reset (struct usb_hcd *hcd)
++/* AMD 756, for most chips (early revs), corrupts register
++ * values on read ... so enable the vendor workaround.
++ */
++static int __devinit ohci_quirk_amd756(struct usb_hcd *hcd)
+ {
+ 	struct ohci_hcd	*ohci = hcd_to_ohci (hcd);
+ 
+-	ohci_hcd_init (ohci);
+-	return ohci_init (ohci);
++	ohci->flags = OHCI_QUIRK_AMD756;
++	ohci_dbg (ohci, "AMD756 erratum 4 workaround\n");
++
++	/* also erratum 10 (suspend/resume issues) */
++	device_init_wakeup(&hcd->self.root_hub->dev, 0);
++
++	return 0;
+ }
+ 
+-static int __devinit
+-ohci_pci_start (struct usb_hcd *hcd)
++/* Apple's OHCI driver has a lot of bizarre workarounds
++ * for this chip.  Evidently control and bulk lists
++ * can get confused.  (B&W G3 models, and ...)
++ */
++static int __devinit ohci_quirk_opti(struct usb_hcd *hcd)
+ {
+ 	struct ohci_hcd	*ohci = hcd_to_ohci (hcd);
+-	int		ret;
+ 
+-	/* REVISIT this whole block should move to reset(), which handles
+-	 * all the other one-time init.
++	ohci_dbg (ohci, "WARNING: OPTi workarounds unavailable\n");
++
++	return 0;
++}
++
++/* Check for NSC87560. We have to look at the bridge (fn1) to
++ * identify the USB (fn2). This quirk might apply to more or
++ * even all NSC stuff.
++ */
++static int __devinit ohci_quirk_ns(struct usb_hcd *hcd)
++{
++	struct pci_dev *pdev = to_pci_dev(hcd->self.controller);
++	struct pci_dev	*b;
++
++	b  = pci_get_slot (pdev->bus, PCI_DEVFN (PCI_SLOT (pdev->devfn), 1));
++	if (b && b->device == PCI_DEVICE_ID_NS_87560_LIO
++	    && b->vendor == PCI_VENDOR_ID_NS) {
++		struct ohci_hcd	*ohci = hcd_to_ohci (hcd);
++
++		ohci->flags |= OHCI_QUIRK_SUPERIO;
++		ohci_dbg (ohci, "Using NSC SuperIO setup\n");
++	}
++	pci_dev_put(b);
++
++	return 0;
++}
++
++/* Check for Compaq's ZFMicro chipset, which needs short
++ * delays before control or bulk queues get re-activated
++ * in finish_unlinks()
++ */
++static int __devinit ohci_quirk_zfmicro(struct usb_hcd *hcd)
++{
++	struct ohci_hcd	*ohci = hcd_to_ohci (hcd);
++
++	ohci->flags |= OHCI_QUIRK_ZFMICRO;
++	ohci_dbg (ohci, "enabled Compaq ZFMicro chipset quirk\n");
++
++	return 0;
++}
++
++
++/* List of quirks for OHCI */
++static const struct pci_device_id ohci_pci_quirks[] = {
++	{
++		PCI_DEVICE(PCI_VENDOR_ID_AMD, 0x740c),
++		.driver_data = (unsigned long)ohci_quirk_amd756,
++	},
++	{
++		PCI_DEVICE(PCI_VENDOR_ID_OPTI, 0xc861),
++		.driver_data = (unsigned long)ohci_quirk_opti,
++	},
++	{
++		PCI_DEVICE(PCI_VENDOR_ID_NS, PCI_ANY_ID),
++		.driver_data = (unsigned long)ohci_quirk_ns,
++	},
++	{
++		PCI_DEVICE(PCI_VENDOR_ID_COMPAQ, 0xa0f8),
++		.driver_data = (unsigned long)ohci_quirk_zfmicro,
++	},
++	/* FIXME for some of the early AMD 760 southbridges, OHCI
++	 * won't work at all.  blacklist them.
+ 	 */
+-	if (hcd->self.controller) {
+-		struct pci_dev *pdev = to_pci_dev(hcd->self.controller);
++	{},
++};
+ 
+-		/* AMD 756, for most chips (early revs), corrupts register
+-		 * values on read ... so enable the vendor workaround.
+-		 */
+-		if (pdev->vendor == PCI_VENDOR_ID_AMD
+-				&& pdev->device == 0x740c) {
+-			ohci->flags = OHCI_QUIRK_AMD756;
+-			ohci_dbg (ohci, "AMD756 erratum 4 workaround\n");
+-			/* also erratum 10 (suspend/resume issues) */
+-			device_init_wakeup(&hcd->self.root_hub->dev, 0);
+-		}
++static int ohci_pci_reset (struct usb_hcd *hcd)
++{
++	struct ohci_hcd	*ohci = hcd_to_ohci (hcd);
++	int ret = 0;
+ 
+-		/* FIXME for some of the early AMD 760 southbridges, OHCI
+-		 * won't work at all.  blacklist them.
+-		 */
++	if (hcd->self.controller) {
++		struct pci_dev *pdev = to_pci_dev(hcd->self.controller);
++		const struct pci_device_id *quirk_id;
+ 
+-		/* Apple's OHCI driver has a lot of bizarre workarounds
+-		 * for this chip.  Evidently control and bulk lists
+-		 * can get confused.  (B&W G3 models, and ...)
+-		 */
+-		else if (pdev->vendor == PCI_VENDOR_ID_OPTI
+-				&& pdev->device == 0xc861) {
+-			ohci_dbg (ohci,
+-				"WARNING: OPTi workarounds unavailable\n");
++		quirk_id = pci_match_id(ohci_pci_quirks, pdev);
++		if (quirk_id != NULL) {
++			int (*quirk)(struct usb_hcd *ohci);
++			quirk = (void *)quirk_id->driver_data;
++			ret = quirk(hcd);
+ 		}
++	}
++	if (ret == 0) {
++		ohci_hcd_init (ohci);
++		return ohci_init (ohci);
++	}
++	return ret;
++}
+ 
+-		/* Check for NSC87560. We have to look at the bridge (fn1) to
+-		 * identify the USB (fn2). This quirk might apply to more or
+-		 * even all NSC stuff.
+-		 */
+-		else if (pdev->vendor == PCI_VENDOR_ID_NS) {
+-			struct pci_dev	*b;
+ 
+-			b  = pci_get_slot (pdev->bus,
+-					PCI_DEVFN (PCI_SLOT (pdev->devfn), 1));
+-			if (b && b->device == PCI_DEVICE_ID_NS_87560_LIO
+-					&& b->vendor == PCI_VENDOR_ID_NS) {
+-				ohci->flags |= OHCI_QUIRK_SUPERIO;
+-				ohci_dbg (ohci, "Using NSC SuperIO setup\n");
+-			}
+-			pci_dev_put(b);
+-		}
++static int __devinit ohci_pci_start (struct usb_hcd *hcd)
++{
++	struct ohci_hcd	*ohci = hcd_to_ohci (hcd);
++	int		ret;
+ 
+-		/* Check for Compaq's ZFMicro chipset, which needs short 
+-		 * delays before control or bulk queues get re-activated
+-		 * in finish_unlinks()
+-		 */
+-		else if (pdev->vendor == PCI_VENDOR_ID_COMPAQ
+-				&& pdev->device  == 0xa0f8) {
+-			ohci->flags |= OHCI_QUIRK_ZFMICRO;
+-			ohci_dbg (ohci,
+-				"enabled Compaq ZFMicro chipset quirk\n");
+-		}
++#ifdef CONFIG_PM /* avoid warnings about unused pdev */
++	if (hcd->self.controller) {
++		struct pci_dev *pdev = to_pci_dev(hcd->self.controller);
+ 
+ 		/* RWC may not be set for add-in PCI cards, since boot
+ 		 * firmware probably ignored them.  This transfers PCI
+@@ -101,16 +150,14 @@ ohci_pci_start (struct usb_hcd *hcd)
+ 		if (device_may_wakeup(&pdev->dev))
+ 			ohci->hc_control |= OHCI_CTRL_RWC;
+ 	}
++#endif /* CONFIG_PM */
+ 
+-	/* NOTE: there may have already been a first reset, to
+-	 * keep bios/smm irqs from making trouble
+-	 */
+-	if ((ret = ohci_run (ohci)) < 0) {
++	ret = ohci_run (ohci);
++	if (ret < 0) {
+ 		ohci_err (ohci, "can't start\n");
+ 		ohci_stop (hcd);
+-		return ret;
+ 	}
+-	return 0;
++	return ret;
+ }
+ 
+ #ifdef	CONFIG_PM
+Index: linux-2.6.18/mvl_patches/pro50-0466.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0466.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(466);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

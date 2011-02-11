@@ -1,0 +1,471 @@
+#! /usr/bin/env bash
+# Patch: -MVL_Driver_core_add_notification_of_bus_events
+# Date: Wed Sep 26 11:12:51 2007
+# MR: 24856
+# Adjustments:
+#     MVL kernel lacks return value checks for sysfs functions.
+#     Removed checks from the original patch.
+# From 116af378201ef793424cd10508ccf18b06d8a021 Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Wed, 25 Oct 2006 13:44:59 +1000
+# Subject: [PATCH] Driver core: add notification of bus events
+# 
+# I finally did as you suggested and added the notifier to the struct
+# bus_type itself. There are still problems to be expected is something
+# attaches to a bus type where the code can hook in different struct
+# device sub-classes (which is imho a big bogosity but I won't even try to
+# argue that case now) but it will solve nicely a number of issues I've
+# had so far.
+# 
+# That also means that clients interested in registering for such
+# notifications have to do it before devices are added and after bus types
+# are registered. Fortunately, most bus types that matter for the various
+# usage scenarios I have in mind are registerd at postcore_initcall time,
+# which means I have a really nice spot at arch_initcall time to add my
+# notifiers.
+# 
+# There are 4 notifications provided. Device being added (before hooked to
+# the bus) and removed (failure of previous case or after being unhooked
+# from the bus), along with driver being bound to a device and about to be
+# unbound.
+# 
+# The usage I have for these are:
+# 
+#  - The 2 first ones are used to maintain a struct device_ext that is
+# hooked to struct device.firmware_data. This structure contains for now a
+# pointer to the Open Firmware node related to the device (if any), the
+# NUMA node ID (for quick access to it) and the DMA operations pointers &
+# iommu table instance for DMA to/from this device. For bus types I own
+# (like IBM VIO or EBUS), I just maintain that structure directly from the
+# bus code when creating the devices. But for bus types managed by generic
+# code like PCI or platform (actually, of_platform which is a variation of
+# platform linked to Open Firmware device-tree), I need this notifier.
+# 
+#  - The other two ones have a completely different usage scenario. I have
+# cases where multiple devices and their drivers depend on each other. For
+# example, the IBM EMAC network driver needs to attach to a MAL DMA engine
+# which is a separate device, and a PHY interface which is also a separate
+# device. They are all of_platform_device's (well, about to be with my
+# upcoming patches) but there is no say in what precise order the core
+# will "probe" them and instanciate the various modules. The solution I
+# found for that is to have the drivers for emac to use multithread_probe,
+# and wait for a driver to be bound to the target MAL and PHY control
+# devices (the device-tree contains reference to the MAL and PHY interface
+# nodes, which I can then match to of_platform_devices). Right now, I've
+# been polling, but with that notifier, I can more cleanly wait (with a
+# timeout of course).
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+
+PATCHNUM=233
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+Adjustments:
+    MVL kernel lacks return value checks for sysfs functions.
+    Removed checks from the original patch.
+From 116af378201ef793424cd10508ccf18b06d8a021 Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Wed, 25 Oct 2006 13:44:59 +1000
+Subject: [PATCH] Driver core: add notification of bus events
+
+I finally did as you suggested and added the notifier to the struct
+bus_type itself. There are still problems to be expected is something
+attaches to a bus type where the code can hook in different struct
+device sub-classes (which is imho a big bogosity but I won't even try to
+argue that case now) but it will solve nicely a number of issues I've
+had so far.
+
+That also means that clients interested in registering for such
+notifications have to do it before devices are added and after bus types
+are registered. Fortunately, most bus types that matter for the various
+usage scenarios I have in mind are registerd at postcore_initcall time,
+which means I have a really nice spot at arch_initcall time to add my
+notifiers.
+
+There are 4 notifications provided. Device being added (before hooked to
+the bus) and removed (failure of previous case or after being unhooked
+from the bus), along with driver being bound to a device and about to be
+unbound.
+
+The usage I have for these are:
+
+ - The 2 first ones are used to maintain a struct device_ext that is
+hooked to struct device.firmware_data. This structure contains for now a
+pointer to the Open Firmware node related to the device (if any), the
+NUMA node ID (for quick access to it) and the DMA operations pointers &
+iommu table instance for DMA to/from this device. For bus types I own
+(like IBM VIO or EBUS), I just maintain that structure directly from the
+bus code when creating the devices. But for bus types managed by generic
+code like PCI or platform (actually, of_platform which is a variation of
+platform linked to Open Firmware device-tree), I need this notifier.
+
+ - The other two ones have a completely different usage scenario. I have
+cases where multiple devices and their drivers depend on each other. For
+example, the IBM EMAC network driver needs to attach to a MAL DMA engine
+which is a separate device, and a PHY interface which is also a separate
+device. They are all of_platform_device's (well, about to be with my
+upcoming patches) but there is no say in what precise order the core
+will "probe" them and instanciate the various modules. The solution I
+found for that is to have the drivers for emac to use multithread_probe,
+and wait for a driver to be bound to the target MAL and PHY control
+devices (the device-tree contains reference to the MAL and PHY interface
+nodes, which I can then match to of_platform_devices). Right now, I've
+been polling, but with that notifier, I can more cleanly wait (with a
+timeout of course).
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Greg Kroah-Hartman <gregkh@suse.de>
+Index: linux-2.6.18/drivers/base/bus.c
+===================================================================
+--- linux-2.6.18.orig/drivers/base/bus.c
++++ linux-2.6.18/drivers/base/bus.c
+@@ -683,6 +683,8 @@ int bus_register(struct bus_type * bus)
+ {
+ 	int retval;
+ 
++	BLOCKING_INIT_NOTIFIER_HEAD(&bus->bus_notifier);
++
+ 	retval = kobject_set_name(&bus->subsys.kset.kobj, "%s", bus->name);
+ 	if (retval)
+ 		goto out;
+@@ -737,6 +739,18 @@ void bus_unregister(struct bus_type * bu
+ 	subsystem_unregister(&bus->subsys);
+ }
+ 
++int bus_register_notifier(struct bus_type *bus, struct notifier_block *nb)
++{
++	return blocking_notifier_chain_register(&bus->bus_notifier, nb);
++}
++EXPORT_SYMBOL_GPL(bus_register_notifier);
++
++int bus_unregister_notifier(struct bus_type *bus, struct notifier_block *nb)
++{
++	return blocking_notifier_chain_unregister(&bus->bus_notifier, nb);
++}
++EXPORT_SYMBOL_GPL(bus_unregister_notifier);
++
+ int __init buses_init(void)
+ {
+ 	return subsystem_register(&bus_subsys);
+Index: linux-2.6.18/drivers/base/core.c
+===================================================================
+--- linux-2.6.18.orig/drivers/base/core.c
++++ linux-2.6.18/drivers/base/core.c
+@@ -15,6 +15,7 @@
+ #include <linux/slab.h>
+ #include <linux/string.h>
+ #include <linux/kdev_t.h>
++#include <linux/notifier.h>
+ 
+ #include <asm/semaphore.h>
+ 
+@@ -311,6 +312,11 @@ int device_add(struct device *dev)
+ 	if (platform_notify)
+ 		platform_notify(dev);
+ 
++	/* notify clients of device entry (new way) */
++	if (dev->bus)
++		blocking_notifier_call_chain(&dev->bus->bus_notifier,
++					     BUS_NOTIFY_ADD_DEVICE, dev);
++
+ 	dev->uevent_attr.attr.name = "uevent";
+ 	dev->uevent_attr.attr.mode = S_IWUSR;
+ 	if (dev->driver)
+@@ -372,6 +378,9 @@ int device_add(struct device *dev)
+  BusError:
+ 	device_pm_remove(dev);
+  PMError:
++	if (dev->bus)
++		blocking_notifier_call_chain(&dev->bus->bus_notifier,
++					     BUS_NOTIFY_DEL_DEVICE, dev);
+ 	if (dev->devt_attr) {
+ 		device_remove_file(dev, dev->devt_attr);
+ 		kfree(dev->devt_attr);
+@@ -472,6 +481,9 @@ void device_del(struct device * dev)
+ 	 */
+ 	if (platform_notify_remove)
+ 		platform_notify_remove(dev);
++	if (dev->bus)
++		blocking_notifier_call_chain(&dev->bus->bus_notifier,
++					     BUS_NOTIFY_DEL_DEVICE, dev);
+ 	bus_remove_device(dev);
+ 	device_pm_remove(dev);
+ 	kobject_uevent(&dev->kobj, KOBJ_REMOVE);
+Index: linux-2.6.18/drivers/base/dd.c
+===================================================================
+--- linux-2.6.18.orig/drivers/base/dd.c
++++ linux-2.6.18/drivers/base/dd.c
+@@ -45,6 +45,11 @@ void device_bind_driver(struct device * 
+ 
+ 	pr_debug("bound device '%s' to driver '%s'\n",
+ 		 dev->bus_id, dev->driver->name);
++
++	if (dev->bus)
++		blocking_notifier_call_chain(&dev->bus->bus_notifier,
++					     BUS_NOTIFY_BOUND_DRIVER, dev);
++
+ 	klist_add_tail(&dev->knode_driver, &dev->driver->klist_devices);
+ 	sysfs_create_link(&dev->driver->kobj, &dev->kobj,
+ 			  kobject_name(&dev->kobj));
+@@ -209,6 +214,11 @@ static void __device_release_driver(stru
+ 		sysfs_remove_link(&dev->kobj, "driver");
+ 		klist_remove(&dev->knode_driver);
+ 
++		if (dev->bus)
++			blocking_notifier_call_chain(&dev->bus->bus_notifier,
++						     BUS_NOTIFY_UNBIND_DRIVER,
++						     dev);
++
+ 		if (dev->bus && dev->bus->remove)
+ 			dev->bus->remove(dev);
+ 		else if (drv->remove)
+Index: linux-2.6.18/include/linux/device.h
+===================================================================
+--- linux-2.6.18.orig/include/linux/device.h
++++ linux-2.6.18/include/linux/device.h
+@@ -41,6 +41,8 @@ struct bus_type {
+ 	struct klist		klist_devices;
+ 	struct klist		klist_drivers;
+ 
++	struct blocking_notifier_head bus_notifier;
++
+ 	struct bus_attribute	* bus_attrs;
+ 	struct device_attribute	* dev_attrs;
+ 	struct driver_attribute	* drv_attrs;
+@@ -70,6 +72,28 @@ struct device * bus_find_device(struct b
+ int bus_for_each_drv(struct bus_type * bus, struct device_driver * start, 
+ 		     void * data, int (*fn)(struct device_driver *, void *));
+ 
++/*
++ * Bus notifiers: Get notified of addition/removal of devices
++ * and binding/unbinding of drivers to devices.
++ * In the long run, it should be a replacement for the platform
++ * notify hooks.
++ */
++struct notifier_block;
++
++extern int bus_register_notifier(struct bus_type *bus,
++				 struct notifier_block *nb);
++extern int bus_unregister_notifier(struct bus_type *bus,
++				   struct notifier_block *nb);
++
++/* All 4 notifers below get called with the target struct device *
++ * as an argument. Note that those functions are likely to be called
++ * with the device semaphore held in the core, so be careful.
++ */
++#define BUS_NOTIFY_ADD_DEVICE		0x00000001 /* device added */
++#define BUS_NOTIFY_DEL_DEVICE		0x00000002 /* device removed */
++#define BUS_NOTIFY_BOUND_DRIVER		0x00000003 /* driver bound to device */
++#define BUS_NOTIFY_UNBIND_DRIVER	0x00000004 /* driver about to be
++						      unbound */
+ 
+ /* driverfs interface for exporting bus attributes */
+ 
+Index: linux-2.6.18/mvl_patches/pro50-0233.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0233.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(233);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

@@ -1,0 +1,386 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_8xx_ep88xc_usb_peripheral_driver
+# Date: Wed Jul 23 07:18:55 2008
+# Source: MontaVista Software, Inc.
+# MR: 27582
+# Type: Defect Fix
+# Disposition: local
+# Signed-off-by: Gennadiy Kurtsman <gkurtsman@ru.mvista.com>
+# Description:
+#     USB 1.1 serial peripheral driver for EP88xc platform.
+# 
+
+PATCHNUM=1256
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: MontaVista Software, Inc.
+MR: 27582
+Type: Defect Fix
+Disposition: local
+Signed-off-by: Gennadiy Kurtsman <gkurtsman@ru.mvista.com>
+Description:
+    USB 1.1 serial peripheral driver for EP88xc platform.
+
+Index: linux-2.6.18/drivers/usb/gadget/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/gadget/Kconfig
++++ linux-2.6.18/drivers/usb/gadget/Kconfig
+@@ -300,6 +300,18 @@ config USB_MPC885ADS
+ 	depends on USB_GADGET_MPC885ADS
+ 	default USB_GADGET
+ 
++config USB_GADGET_EP88XC
++	boolean "EP88XC USB device controller"
++	depends on PPC_EP88XC
++	select USB_GADGET_SELECTED
++	help
++	  Intended to support USB serial gadget.
++
++config USB_EP88XC
++	tristate
++	depends on USB_GADGET_EP88XC
++	default USB_GADGET
++
+ endchoice
+ 
+ config USB_OTG
+Index: linux-2.6.18/drivers/usb/gadget/Makefile
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/gadget/Makefile
++++ linux-2.6.18/drivers/usb/gadget/Makefile
+@@ -11,6 +11,7 @@ obj-$(CONFIG_USB_LH7A40X)	+= lh7a40x_udc
+ obj-$(CONFIG_USB_AT91)		+= at91_udc.o
+ obj-$(CONFIG_USB_FSL_USB2)	+= fsl_usb2_udc.o
+ obj-$(CONFIG_USB_MPC885ADS)	+= mpc885_udc.o
++obj-$(CONFIG_USB_EP88XC)	+= mpc885_udc.o
+ obj-$(CONFIG_USB_MPC8272)	+= mpc8272_udc.o
+ 
+ #
+Index: linux-2.6.18/drivers/usb/gadget/gadget_chips.h
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/gadget/gadget_chips.h
++++ linux-2.6.18/drivers/usb/gadget/gadget_chips.h
+@@ -131,6 +131,12 @@
+ #define gadget_is_mpc885(g)	0
+ #endif
+ 
++#ifdef CONFIG_USB_GADGET_EP88XC
++#define gadget_is_ep885(g)	strstr((g)->name, "mpc885_udc")
++#else
++#define gadget_is_ep885(g)	0
++#endif
++
+ // CONFIG_USB_GADGET_SX2
+ // CONFIG_USB_GADGET_AU1X00
+ // ...
+@@ -193,5 +199,7 @@ static inline int usb_gadget_controller_
+   		return 0x19;
+   	else if (gadget_is_mpc885(gadget))
+   		return 0x1a;
++  	else if (gadget_is_ep885(gadget))
++  		return 0x1b;
+ 	return -ENOENT;
+ }
+Index: linux-2.6.18/drivers/usb/gadget/mpc885_udc.c
+===================================================================
+--- linux-2.6.18.orig/drivers/usb/gadget/mpc885_udc.c
++++ linux-2.6.18/drivers/usb/gadget/mpc885_udc.c
+@@ -46,7 +46,12 @@
+ #include <asm/8xx_immap.h>
+ #include <asm/commproc.h>
+ #include <asm/fs_pd.h>
++#ifdef CONFIG_MPC885ADS
+ #include <platforms/8xx/mpc885ads.h>
++#endif
++#ifdef CONFIG_PPC_EP88XC
++#include <platforms/8xx/ep88xc.h>
++#endif
+ #include "mpc885_udc.h"
+ 
+ static struct _mpc885_udc_dev *the_controller = NULL;
+@@ -129,6 +134,8 @@ mpc885_usbc_setup(struct mpc885_usbc_ep 
+ 		    && ((wValue >> 8) == USB_DT_DEVICE)) {
+ 			((struct usb_device_descriptor *)data)->
+ 			    bMaxPacketSize0 = UDC_USBC_CTL_PACKET_SIZE;
++			((struct usb_device_descriptor *)data)->
++			    bcdUSB = __constant_cpu_to_le16(0x0110);
+ 			if (wLength > 8) {
+ 				((struct usb_device_descriptor *)data)->
+ 				    idVendor = cpu_to_le16(0x6655);
+@@ -453,6 +460,8 @@ usb_gadget_register_driver(struct usb_ga
+ 	return 0;
+ }
+ 
++EXPORT_SYMBOL(usb_gadget_register_driver);
++
+ int
+ usb_gadget_unregister_driver(struct usb_gadget_driver *driver)
+ {
+@@ -470,6 +479,8 @@ usb_gadget_unregister_driver(struct usb_
+ 	return 0;
+ }
+ 
++EXPORT_SYMBOL(usb_gadget_unregister_driver);
++
+ static int
+ mpc885_disable(struct usb_ep *ep)
+ {
+@@ -795,7 +806,7 @@ mpc885_usbc_hw_ep_init(struct _mpc885_ud
+ 
+ /* Board specific configuration
+  */
+-#ifdef CONFIG_MPC885ADS
++#if defined(CONFIG_MPC885ADS) || defined(CONFIG_PPC_EP88XC)
+ 
+ /* bits in parallel i/o port registers
+  */
+@@ -807,6 +818,7 @@ mpc885_usbc_hw_ep_init(struct _mpc885_ud
+ #define PC_USB_TXP	((__u16)0x0100)
+ #define PC_USB_TXN	((__u16)0x0200)
+ 
++#ifdef CONFIG_MPC885ADS
+ void
+ mpc885_usb_iface_config(int enable)
+ {
+@@ -825,6 +837,7 @@ mpc885_usb_iface_config(int enable)
+ 	*((__u32 *) bcsr4_va) = bcsr4_val;
+ 	iounmap(bcsr4_va);
+ }
++#endif
+ 
+ void
+ mpc885_usb_clock_config(immap_t * immap)
+@@ -876,7 +889,9 @@ mpc885_usbc_hw_deinit(struct _mpc885_udc
+ 
+ 	usbc_dev->usb_rgs->usmod &= ~USMOD_ENABLE;
+ 	usbc_dev->intram->im_cpm.cp_sicr &= ~0x0000003f;
++#ifdef CONFIG_MPC885ADS
+ 	mpc885_usb_iface_config(0);
++#endif
+ 
+ 	free_irq(usbc_dev-> irq, usbc_dev);
+ 	for (i = 0; i < ARRAY_SIZE(usbc_dev->eps); i++) {
+@@ -936,7 +951,9 @@ mpc885_usbc_hw_init(struct _mpc885_udc_d
+ 
+ 	irq = usbc_dev->irq = platform_get_irq(pdev, 0);
+ 
++#ifdef CONFIG_MPC885ADS
+ 	mpc885_usb_iface_config(1);
++#endif
+ 	mpc885_usb_clock_config(immap);
+ 	mpc885_usb_io_pin_config(immap);
+ 
+@@ -1028,6 +1045,7 @@ mpc885_usbc_probe(struct device *dev)
+ 	INIT_LIST_HEAD(&the_controller->eps[2].squeue);
+ 	strcpy(the_controller->gadget.dev.bus_id, "gadget");
+ 	the_controller->gadget.name = driver_name;
++	the_controller->gadget.speed = USB_SPEED_FULL;
+ 	__mpc885_usbc_buf_init(&the_controller->read_buf, MPC885_USBC_BUF_SIZE);
+ 	__mpc885_usbc_buf_init(&the_controller->write_buf,
+ 			       MPC885_USBC_BUF_SIZE);
+Index: linux-2.6.18/mvl_patches/pro50-1256.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1256.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1256);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

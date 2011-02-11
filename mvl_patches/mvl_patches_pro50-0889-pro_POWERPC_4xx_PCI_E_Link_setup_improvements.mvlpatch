@@ -1,0 +1,634 @@
+#! /usr/bin/env bash
+# Patch: -pro_POWERPC_4xx_PCI_E_Link_setup_improvements
+# Date: Wed Mar  5 11:45:11 2008
+# MR: 26747
+# Disposition: backport from
+# git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+# 
+# From 035ee4282dc5ad19f0141821511346b8de1839af Mon Sep 17 00:00:00 2001
+# From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Date: Fri, 21 Dec 2007 15:39:36 +1100
+# Subject: [PATCH] [POWERPC] 4xx: PCI-E Link setup improvements
+# 
+# This improves the way the 4xx PCI-E code handles checking for a link
+# and adds explicit testing of CRS result codes on config space accesses.
+# 
+# This should make it more reliable.
+# 
+# Also, bridges with no link are now still created, though config space
+# accesses beyond the root complex are filtered. This is one step toward
+# eventually supporting hotplug.
+# 
+# Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+# Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+
+PATCHNUM=889
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26747
+Disposition: backport from
+git://git.kernel.org/pub/scm/linux/kernel/git/paulus/powerpc.git
+
+From 035ee4282dc5ad19f0141821511346b8de1839af Mon Sep 17 00:00:00 2001
+From: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Date: Fri, 21 Dec 2007 15:39:36 +1100
+Subject: [PATCH] [POWERPC] 4xx: PCI-E Link setup improvements
+
+This improves the way the 4xx PCI-E code handles checking for a link
+and adds explicit testing of CRS result codes on config space accesses.
+
+This should make it more reliable.
+
+Also, bridges with no link are now still created, though config space
+accesses beyond the root complex are filtered. This is one step toward
+eventually supporting hotplug.
+
+Signed-off-by: Benjamin Herrenschmidt <benh@kernel.crashing.org>
+Signed-off-by: Josh Boyer <jwboyer@linux.vnet.ibm.com>
+Index: linux-2.6.18/arch/powerpc/sysdev/ppc4xx_pci.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/ppc4xx_pci.c
++++ linux-2.6.18/arch/powerpc/sysdev/ppc4xx_pci.c
+@@ -16,6 +16,8 @@
+  *
+  */
+ 
++#undef DEBUG
++
+ #include <linux/kernel.h>
+ #include <linux/pci.h>
+ #include <linux/init.h>
+@@ -534,10 +536,13 @@ struct ppc4xx_pciex_port
+ 	struct device_node	*node;
+ 	unsigned int		index;
+ 	int			endpoint;
++	int			link;
++	int			has_ibpre;
+ 	unsigned int		sdr_base;
+ 	dcr_host_t		dcrs;
+ 	struct resource		cfg_space;
+ 	struct resource		utl_regs;
++	void __iomem		*utl_base;
+ };
+ 
+ static struct ppc4xx_pciex_port *ppc4xx_pciex_ports;
+@@ -709,29 +714,44 @@ static int ppc440spe_pciex_init_port_hw(
+ 	return 0;
+ }
+ 
+-static int ppc440speA_pciex_init_utl(struct ppc4xx_pciex_port *port)
++static int ppc440speA_pciex_init_port_hw(struct ppc4xx_pciex_port *port)
++{
++	return ppc440spe_pciex_init_port_hw(port);
++}
++
++static int ppc440speB_pciex_init_port_hw(struct ppc4xx_pciex_port *port)
+ {
+-	void __iomem *utl_base;
++	int rc = ppc440spe_pciex_init_port_hw(port);
++
++	port->has_ibpre = 1;
++
++	return rc;
++}
+ 
++static int ppc440speA_pciex_init_utl(struct ppc4xx_pciex_port *port)
++{
+ 	/* XXX Check what that value means... I hate magic */
+ 	dcr_write(port->dcrs, DCRO_PEGPL_SPECIAL, 0x68782800);
+ 
+-	utl_base = ioremap(port->utl_regs.start, 0x100);
+-	BUG_ON(utl_base == NULL);
+-
+ 	/*
+ 	 * Set buffer allocations and then assert VRB and TXE.
+ 	 */
+-	out_be32(utl_base + PEUTL_OUTTR,   0x08000000);
+-	out_be32(utl_base + PEUTL_INTR,    0x02000000);
+-	out_be32(utl_base + PEUTL_OPDBSZ,  0x10000000);
+-	out_be32(utl_base + PEUTL_PBBSZ,   0x53000000);
+-	out_be32(utl_base + PEUTL_IPHBSZ,  0x08000000);
+-	out_be32(utl_base + PEUTL_IPDBSZ,  0x10000000);
+-	out_be32(utl_base + PEUTL_RCIRQEN, 0x00f00000);
+-	out_be32(utl_base + PEUTL_PCTL,    0x80800066);
++	out_be32(port->utl_base + PEUTL_OUTTR,   0x08000000);
++	out_be32(port->utl_base + PEUTL_INTR,    0x02000000);
++	out_be32(port->utl_base + PEUTL_OPDBSZ,  0x10000000);
++	out_be32(port->utl_base + PEUTL_PBBSZ,   0x53000000);
++	out_be32(port->utl_base + PEUTL_IPHBSZ,  0x08000000);
++	out_be32(port->utl_base + PEUTL_IPDBSZ,  0x10000000);
++	out_be32(port->utl_base + PEUTL_RCIRQEN, 0x00f00000);
++	out_be32(port->utl_base + PEUTL_PCTL,    0x80800066);
+ 
+-	iounmap(utl_base);
++	return 0;
++}
++
++static int ppc440speB_pciex_init_utl(struct ppc4xx_pciex_port *port)
++{
++	/* Report CRS to the operating system */
++	out_be32(port->utl_base + PEUTL_PBCTL,    0x08000000);
+ 
+ 	return 0;
+ }
+@@ -739,14 +759,15 @@ static int ppc440speA_pciex_init_utl(str
+ static struct ppc4xx_pciex_hwops ppc440speA_pcie_hwops __initdata =
+ {
+ 	.core_init	= ppc440spe_pciex_core_init,
+-	.port_init_hw	= ppc440spe_pciex_init_port_hw,
++	.port_init_hw	= ppc440speA_pciex_init_port_hw,
+ 	.setup_utl	= ppc440speA_pciex_init_utl,
+ };
+ 
+ static struct ppc4xx_pciex_hwops ppc440speB_pcie_hwops __initdata =
+ {
+ 	.core_init	= ppc440spe_pciex_core_init,
+-	.port_init_hw	= ppc440spe_pciex_init_port_hw,
++	.port_init_hw	= ppc440speB_pciex_init_port_hw,
++	.setup_utl	= ppc440speB_pciex_init_utl,
+ };
+ 
+ 
+@@ -824,30 +845,21 @@ static int ppc405ex_pciex_init_port_hw(s
+ 
+ static int ppc405ex_pciex_init_utl(struct ppc4xx_pciex_port *port)
+ {
+-	void __iomem *utl_base;
+-
+ 	dcr_write(port->dcrs, DCRO_PEGPL_SPECIAL, 0x0);
+ 
+-	utl_base = ioremap(port->utl_regs.start, 0x100);
+-	BUG_ON(utl_base == NULL);
+-
+ 	/*
+ 	 * Set buffer allocations and then assert VRB and TXE.
+ 	 */
+-	out_be32(utl_base + PEUTL_OUTTR,   0x02000000);
+-	out_be32(utl_base + PEUTL_INTR,    0x02000000);
+-	out_be32(utl_base + PEUTL_OPDBSZ,  0x04000000);
+-	out_be32(utl_base + PEUTL_PBBSZ,   0x21000000);
+-	out_be32(utl_base + PEUTL_IPHBSZ,  0x02000000);
+-	out_be32(utl_base + PEUTL_IPDBSZ,  0x04000000);
+-	out_be32(utl_base + PEUTL_RCIRQEN, 0x00f00000);
+-	out_be32(utl_base + PEUTL_PCTL,    0x80800066);
+-
+-	out_be32(utl_base + PEUTL_PBCTL,   0x0800000c);
+-	out_be32(utl_base + PEUTL_RCSTA,
+-		 in_be32(utl_base + PEUTL_RCSTA) | 0x000040000);
++	out_be32(port->utl_base + PEUTL_OUTTR,   0x02000000);
++	out_be32(port->utl_base + PEUTL_INTR,    0x02000000);
++	out_be32(port->utl_base + PEUTL_OPDBSZ,  0x04000000);
++	out_be32(port->utl_base + PEUTL_PBBSZ,   0x21000000);
++	out_be32(port->utl_base + PEUTL_IPHBSZ,  0x02000000);
++	out_be32(port->utl_base + PEUTL_IPDBSZ,  0x04000000);
++	out_be32(port->utl_base + PEUTL_RCIRQEN, 0x00f00000);
++	out_be32(port->utl_base + PEUTL_PCTL,    0x80800066);
+ 
+-	iounmap(utl_base);
++	out_be32(port->utl_base + PEUTL_PBCTL,   0x08000000);
+ 
+ 	return 0;
+ }
+@@ -929,17 +941,29 @@ static void __init ppc4xx_pciex_port_ini
+ 	dcr_write(port->dcrs, DCRO_PEGPL_MSGMSK, 0);
+ }
+ 
+-static int __init ppc4xx_pciex_port_init(struct ppc4xx_pciex_port *port)
++static int __init ppc4xx_pciex_wait_on_sdr(struct ppc4xx_pciex_port *port,
++					   unsigned int sdr_offset,
++					   unsigned int mask,
++					   unsigned int value,
++					   int timeout_ms)
+ {
+-	int attempts, rc = 0;
+ 	u32 val;
+ 
+-	/* Check if it's endpoint or root complex
+-	 *
+-	 * XXX Do we want to use the device-tree instead ? --BenH.
+-	 */
+-	val = mfdcri(SDR0, port->sdr_base + PESDRn_DLPSET);
+-	port->endpoint = (((val >> 20) & 0xf) != PTYPE_ROOT_PORT);
++	while(timeout_ms--) {
++		val = mfdcri(SDR0, port->sdr_base + sdr_offset);
++		if ((val & mask) == value) {
++			pr_debug("PCIE%d: Wait on SDR %x success with tm %d (%08x)\n",
++				 port->index, sdr_offset, timeout_ms, val);
++			return 0;
++		}
++		msleep(1);
++	}
++	return -1;
++}
++
++static int __init ppc4xx_pciex_port_init(struct ppc4xx_pciex_port *port)
++{
++	int rc = 0;
+ 
+ 	/* Init HW */
+ 	if (ppc4xx_pciex_hwops->port_init_hw)
+@@ -947,44 +971,40 @@ static int __init ppc4xx_pciex_port_init
+ 	if (rc != 0)
+ 		return rc;
+ 
+-	/*
+-	 * Notice: the following delay has critical impact on device
+-	 * initialization - if too short (<50ms) the link doesn't get up.
+-	 *
+-	 * XXX FIXME: There are various issues with that link up thingy,
+-	 * we could just wait for the link with a timeout but Stefan says
+-	 * some cards need more time even after the link is up. I'll
+-	 * investigate. For now, we keep a fixed 1s delay.
+-	 *
+-	 * Ultimately, it should be made asynchronous so all ports are
+-	 * brought up simultaneously though.
+-	 */
+-	printk(KERN_INFO "PCIE%d: Waiting for link to go up...\n",
++	printk(KERN_INFO "PCIE%d: Checking link...\n",
+ 	       port->index);
+-	msleep(1000);
+-
+-	/*
+-	 * Check that we exited the reset state properly
+-	 */
+-	val = mfdcri(SDR0, port->sdr_base + PESDRn_RCSSTS);
+-	if (val & (1 << 20)) {
+-		printk(KERN_WARNING "PCIE%d: PGRST failed %08x\n",
+-		       port->index, val);
+-		return -1;
+-	}
+ 
+-	/*
+-	 * Verify link is up
+-	 */
+-	val = mfdcri(SDR0, port->sdr_base + PESDRn_LOOP);
+-	if (!(val & 0x00001000)) {
+-		printk(KERN_INFO "PCIE%d: link is not up !\n",
++	/* Wait for reset to complete */
++	if (ppc4xx_pciex_wait_on_sdr(port, PESDRn_RCSSTS, 1 << 20, 0, 10)) {
++		printk(KERN_WARNING "PCIE%d: PGRST failed\n",
+ 		       port->index);
+ 		return -1;
+ 	}
+ 
+-	printk(KERN_INFO "PCIE%d: link is up !\n",
+-	       port->index);
++	/* Check for card presence detect if supported, if not, just wait for
++	 * link unconditionally.
++	 *
++	 * note that we don't fail if there is no link, we just filter out
++	 * config space accesses. That way, it will be easier to implement
++	 * hotplug later on.
++	 */
++	if (!port->has_ibpre ||
++	    !ppc4xx_pciex_wait_on_sdr(port, PESDRn_LOOP,
++				      1 << 28, 1 << 28, 100)) {
++		printk(KERN_INFO
++		       "PCIE%d: Device detected, waiting for link...\n",
++		       port->index);
++		if (ppc4xx_pciex_wait_on_sdr(port, PESDRn_LOOP,
++					     0x1000, 0x1000, 2000))
++			printk(KERN_WARNING
++			       "PCIE%d: Link up failed\n", port->index);
++		else {
++			printk(KERN_INFO
++			       "PCIE%d: link is up !\n", port->index);
++			port->link = 1;
++		}
++	} else
++		printk(KERN_INFO "PCIE%d: No device detected.\n", port->index);
+ 
+ 	/*
+ 	 * Initialize mapping: disable all regions and configure
+@@ -993,12 +1013,13 @@ static int __init ppc4xx_pciex_port_init
+ 	ppc4xx_pciex_port_init_mapping(port);
+ 
+ 	/*
+-	 * Setup UTL registers - but only on revA!
+-	 * We use default settings for revB chip.
+-	 *
+-	 * To be reworked. We may also be able to move that to
+-	 * before the link wait
+-	 * --BenH.
++	 * Map UTL
++	 */
++	port->utl_base = ioremap(port->utl_regs.start, 0x100);
++	BUG_ON(port->utl_base == NULL);
++
++	/*
++	 * Setup UTL registers --BenH.
+ 	 */
+ 	if (ppc4xx_pciex_hwops->setup_utl)
+ 		ppc4xx_pciex_hwops->setup_utl(port);
+@@ -1006,15 +1027,13 @@ static int __init ppc4xx_pciex_port_init
+ 	/*
+ 	 * Check for VC0 active and assert RDY.
+ 	 */
+-	attempts = 10;
+-	while (!(mfdcri(SDR0, port->sdr_base + PESDRn_RCSSTS) & (1 << 16))) {
+-		if (!(attempts--)) {
+-			printk(KERN_INFO "PCIE%d: VC0 not active\n",
+-			       port->index);
+-			return -1;
+-		}
+-		msleep(1000);
++	if (port->link &&
++	    ppc4xx_pciex_wait_on_sdr(port, PESDRn_RCSSTS,
++				     1 << 16, 1 << 16, 5000)) {
++		printk(KERN_INFO "PCIE%d: VC0 not active\n", port->index);
++		port->link = 0;
+ 	}
++
+ 	mtdcri(SDR0, port->sdr_base + PESDRn_RCSSET,
+ 	       mfdcri(SDR0, port->sdr_base + PESDRn_RCSSET) | 1 << 20);
+ 	msleep(100);
+@@ -1051,6 +1070,10 @@ static int ppc4xx_pciex_validate_bdf(str
+ 	    PCI_SLOT(devfn) != 0)
+ 		return PCIBIOS_DEVICE_NOT_FOUND;
+ 
++	/* Check if we have a link */
++	if ((bus->number != port->hose->first_busno) && !port->link)
++		return PCIBIOS_DEVICE_NOT_FOUND;
++
+ 	return 0;
+ }
+ 
+@@ -1095,6 +1118,9 @@ static int ppc4xx_pciex_read_config(stru
+ 	gpl_cfg = dcr_read(port->dcrs, DCRO_PEGPL_CFG);
+ 	dcr_write(port->dcrs, DCRO_PEGPL_CFG, gpl_cfg | GPL_DMER_MASK_DISA);
+ 
++	/* Make sure no CRS is recorded */
++	out_be32(port->utl_base + PEUTL_RCSTA, 0x00040000);
++
+ 	switch (len) {
+ 	case 1:
+ 		*val = in_8((u8 *)(addr + offset));
+@@ -1112,6 +1138,14 @@ static int ppc4xx_pciex_read_config(stru
+ 		 bus->number, hose->first_busno, hose->last_busno,
+ 		 devfn, offset, len, addr + offset, *val);
+ 
++	/* Check for CRS (440SPe rev B does that for us but heh ..) */
++	if (in_be32(port->utl_base + PEUTL_RCSTA) & 0x00040000) {
++		pr_debug("Got CRS !\n");
++		if (len != 4 || offset != 0)
++			return PCIBIOS_DEVICE_NOT_FOUND;
++		*val = 0xffff0001;
++	}
++
+ 	dcr_write(port->dcrs, DCRO_PEGPL_CFG, gpl_cfg);
+ 
+ 	return PCIBIOS_SUCCESSFUL;
+@@ -1281,8 +1315,11 @@ static void __init ppc4xx_pciex_port_set
+ 	void __iomem *mbase = NULL, *cfg_data = NULL;
+ 
+ 	/* XXX FIXME: Handle endpoint mode properly */
+-	if (port->endpoint)
++	if (port->endpoint) {
++		printk(KERN_WARNING "PCIE%d: Port in endpoint mode !\n",
++		       port->index);
+ 		return;
++	}
+ 
+ 	/* Check if primary bridge */
+ 	if (of_get_property(port->node, "primary", NULL))
+@@ -1427,6 +1464,9 @@ static void __init ppc4xx_probe_pciex_br
+ 	}
+ 	port->sdr_base = *pval;
+ 
++	/* XXX Currently, we only support root complex mode */
++	port->endpoint = 0;
++
+ 	/* Fetch config space registers address */
+ 	if (of_address_to_resource(np, 0, &port->cfg_space)) {
+ 		printk(KERN_ERR "%s: Can't get PCI-E config space !",
+@@ -1450,8 +1490,10 @@ static void __init ppc4xx_probe_pciex_br
+ 	port->dcrs = dcr_map(np, dcrs, dcr_resource_len(np, 0));
+ 
+ 	/* Initialize the port specific registers */
+-	if (ppc4xx_pciex_port_init(port))
++	if (ppc4xx_pciex_port_init(port)) {
++		printk(KERN_WARNING "PCIE%d: Port init failed\n", port->index);
+ 		return;
++	}
+ 
+ 	/* Setup the linux hose data structure */
+ 	ppc4xx_pciex_port_setup_hose(port);
+Index: linux-2.6.18/arch/powerpc/sysdev/ppc4xx_pci.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/sysdev/ppc4xx_pci.h
++++ linux-2.6.18/arch/powerpc/sysdev/ppc4xx_pci.h
+@@ -330,6 +330,8 @@
+ /*
+  * Config space register offsets
+  */
++#define PECFG_ECRTCTL		0x074
++
+ #define PECFG_BAR0LMPA		0x210
+ #define PECFG_BAR0HMPA		0x214
+ #define PECFG_BAR1MPA		0x218
+Index: linux-2.6.18/mvl_patches/pro50-0889.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0889.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(889);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

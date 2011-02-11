@@ -1,0 +1,630 @@
+#! /usr/bin/env bash
+# Patch: -Support_piping_into_commands_in_proc_sys_kernel_c
+# Date: Wed Sep 26 11:12:45 2007
+# MR: 24856
+# From d025c9db7f31fc0554ce7fb2dfc78d35a77f3487 Mon Sep 17 00:00:00 2001
+# From: Andi Kleen <ak@suse.de>
+# Date: Sat, 30 Sep 2006 23:29:28 -0700
+# Subject: [PATCH] [PATCH] Support piping into commands in /proc/sys/kernel/core_pattern
+# 
+# Using the infrastructure created in previous patches implement support to
+# pipe core dumps into programs.
+# 
+# This is done by overloading the existing core_pattern sysctl
+# with a new syntax:
+# 
+# |program
+# 
+# When the first character of the pattern is a '|' the kernel will instead
+# threat the rest of the pattern as a command to run.  The core dump will be
+# written to the standard input of that program instead of to a file.
+# 
+# This is useful for having automatic core dump analysis without filling up
+# disks.  The program can do some simple analysis and save only a summary of
+# the core dump.
+# 
+# The core dump proces will run with the privileges and in the name space of
+# the process that caused the core dump.
+# 
+# I also increased the core pattern size to 128 bytes so that longer command
+# lines fit.
+# 
+# Most of the changes comes from allowing core dumps without seeks.  They are
+# fairly straight forward though.
+# 
+# One small incompatibility is that if someone had a core pattern previously
+# that started with '|' they will get suddenly new behaviour.  I think that's
+# unlikely to be a real problem though.
+# 
+# Additional background:
+# 
+# > Very nice, do you happen to have a program that can accept this kind of
+# > input for crash dumps?  I'm guessing that the embedded people will
+# > really want this functionality.
+# 
+# I had a cheesy demo/prototype.  Basically it wrote the dump to a file again,
+# ran gdb on it to get a backtrace and wrote the summary to a shared directory.
+# Then there was a simple CGI script to generate a "top 10" crashes HTML
+# listing.
+# 
+# Unfortunately this still had the disadvantage to needing full disk space for a
+# dump except for deleting it afterwards (in fact it was worse because over the
+# pipe holes didn't work so if you have a holey address map it would require
+# more space).
+# 
+# Fortunately gdb seems to be happy to handle /proc/pid/fd/xxx input pipes as
+# cores (at least it worked with zsh's =(cat core) syntax), so it would be
+# likely possible to do it without temporary space with a simple wrapper that
+# calls it in the right way.  I ran out of time before doing that though.
+# 
+# The demo prototype scripts weren't very good.  If there is really interest I
+# can dig them out (they are currently on a laptop disk on the desk with the
+# laptop itself being in service), but I would recommend to rewrite them for any
+# serious application of this and fix the disk space problem.
+# 
+# Also to be really useful it should probably find a way to automatically fetch
+# the debuginfos (I cheated and just installed them in advance).  If nobody else
+# does it I can probably do the rewrite myself again at some point.
+# 
+# My hope at some point was that desktops would support it in their builtin
+# crash reporters, but at least the KDE people I talked too seemed to be happy
+# with their user space only solution.
+# 
+# Alan sayeth:
+# 
+#   I don't believe that piping as such as neccessarily the right model, but
+#   the ability to intercept and processes core dumps from user space is asked
+#   for by many enterprise users as well.  They want to know about, capture,
+#   analyse and process core dumps, often centrally and in automated form.
+# 
+# [akpm@osdl.org: loff_t != unsigned long]
+# Signed-off-by: Andi Kleen <ak@suse.de>
+# Cc: Alan Cox <alan@lxorguk.ukuu.org.uk>
+# Signed-off-by: Andrew Morton <akpm@osdl.org>
+# Signed-off-by: Linus Torvalds <torvalds@osdl.org>
+
+PATCHNUM=230
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From d025c9db7f31fc0554ce7fb2dfc78d35a77f3487 Mon Sep 17 00:00:00 2001
+From: Andi Kleen <ak@suse.de>
+Date: Sat, 30 Sep 2006 23:29:28 -0700
+Subject: [PATCH] [PATCH] Support piping into commands in /proc/sys/kernel/core_pattern
+
+Using the infrastructure created in previous patches implement support to
+pipe core dumps into programs.
+
+This is done by overloading the existing core_pattern sysctl
+with a new syntax:
+
+|program
+
+When the first character of the pattern is a '|' the kernel will instead
+threat the rest of the pattern as a command to run.  The core dump will be
+written to the standard input of that program instead of to a file.
+
+This is useful for having automatic core dump analysis without filling up
+disks.  The program can do some simple analysis and save only a summary of
+the core dump.
+
+The core dump proces will run with the privileges and in the name space of
+the process that caused the core dump.
+
+I also increased the core pattern size to 128 bytes so that longer command
+lines fit.
+
+Most of the changes comes from allowing core dumps without seeks.  They are
+fairly straight forward though.
+
+One small incompatibility is that if someone had a core pattern previously
+that started with '|' they will get suddenly new behaviour.  I think that's
+unlikely to be a real problem though.
+
+Additional background:
+
+> Very nice, do you happen to have a program that can accept this kind of
+> input for crash dumps?  I'm guessing that the embedded people will
+> really want this functionality.
+
+I had a cheesy demo/prototype.  Basically it wrote the dump to a file again,
+ran gdb on it to get a backtrace and wrote the summary to a shared directory.
+Then there was a simple CGI script to generate a "top 10" crashes HTML
+listing.
+
+Unfortunately this still had the disadvantage to needing full disk space for a
+dump except for deleting it afterwards (in fact it was worse because over the
+pipe holes didn't work so if you have a holey address map it would require
+more space).
+
+Fortunately gdb seems to be happy to handle /proc/pid/fd/xxx input pipes as
+cores (at least it worked with zsh's =(cat core) syntax), so it would be
+likely possible to do it without temporary space with a simple wrapper that
+calls it in the right way.  I ran out of time before doing that though.
+
+The demo prototype scripts weren't very good.  If there is really interest I
+can dig them out (they are currently on a laptop disk on the desk with the
+laptop itself being in service), but I would recommend to rewrite them for any
+serious application of this and fix the disk space problem.
+
+Also to be really useful it should probably find a way to automatically fetch
+the debuginfos (I cheated and just installed them in advance).  If nobody else
+does it I can probably do the rewrite myself again at some point.
+
+My hope at some point was that desktops would support it in their builtin
+crash reporters, but at least the KDE people I talked too seemed to be happy
+with their user space only solution.
+
+Alan sayeth:
+
+  I don't believe that piping as such as neccessarily the right model, but
+  the ability to intercept and processes core dumps from user space is asked
+  for by many enterprise users as well.  They want to know about, capture,
+  analyse and process core dumps, often centrally and in automated form.
+
+[akpm@osdl.org: loff_t != unsigned long]
+Signed-off-by: Andi Kleen <ak@suse.de>
+Cc: Alan Cox <alan@lxorguk.ukuu.org.uk>
+Signed-off-by: Andrew Morton <akpm@osdl.org>
+Signed-off-by: Linus Torvalds <torvalds@osdl.org>
+Index: linux-2.6.18/fs/binfmt_elf.c
+===================================================================
+--- linux-2.6.18.orig/fs/binfmt_elf.c
++++ linux-2.6.18/fs/binfmt_elf.c
+@@ -1153,11 +1153,23 @@ static int dump_write(struct file *file,
+ 
+ static int dump_seek(struct file *file, loff_t off)
+ {
+-	if (file->f_op->llseek) {
+-		if (file->f_op->llseek(file, off, 0) != off)
++	if (file->f_op->llseek && file->f_op->llseek != no_llseek) {
++		if (file->f_op->llseek(file, off, 1) != off)
+ 			return 0;
+-	} else
+-		file->f_pos = off;
++	} else {
++		char *buf = (char *)get_zeroed_page(GFP_KERNEL);
++		if (!buf)
++			return 0;
++		while (off > 0) {
++			unsigned long n = off;
++			if (n > PAGE_SIZE)
++				n = PAGE_SIZE;
++			if (!dump_write(file, buf, n))
++				return 0;
++			off -= n;
++		}
++		free_page((unsigned long)buf);
++	}
+ 	return 1;
+ }
+ 
+@@ -1205,30 +1217,35 @@ static int notesize(struct memelfnote *e
+ 	return sz;
+ }
+ 
+-#define DUMP_WRITE(addr, nr)	\
+-	do { if (!dump_write(file, (addr), (nr))) return 0; } while(0)
+-#define DUMP_SEEK(off)	\
+-	do { if (!dump_seek(file, (off))) return 0; } while(0)
++#define DUMP_WRITE(addr, nr, foffset)	\
++	do { if (!dump_write(file, (addr), (nr))) return 0; *foffset += (nr); } while(0)
+ 
+-static int writenote(struct memelfnote *men, struct file *file)
++static int alignfile(struct file *file, loff_t *foffset)
+ {
+-	struct elf_note en;
++	char buf[4] = { 0, };
++	DUMP_WRITE(buf, roundup(*foffset, 4) - *foffset, foffset);
++	return 1;
++}
+ 
++static int writenote(struct memelfnote *men, struct file *file,
++			loff_t *foffset)
++{
++	struct elf_note en;
+ 	en.n_namesz = strlen(men->name) + 1;
+ 	en.n_descsz = men->datasz;
+ 	en.n_type = men->type;
+ 
+-	DUMP_WRITE(&en, sizeof(en));
+-	DUMP_WRITE(men->name, en.n_namesz);
+-	/* XXX - cast from long long to long to avoid need for libgcc.a */
+-	DUMP_SEEK(roundup((unsigned long)file->f_pos, 4));	/* XXX */
+-	DUMP_WRITE(men->data, men->datasz);
+-	DUMP_SEEK(roundup((unsigned long)file->f_pos, 4));	/* XXX */
++	DUMP_WRITE(&en, sizeof(en), foffset);
++	DUMP_WRITE(men->name, en.n_namesz, foffset);
++	if (!alignfile(file, foffset))
++		return 0;
++	DUMP_WRITE(men->data, men->datasz, foffset);
++	if (!alignfile(file, foffset))
++		return 0;
+ 
+ 	return 1;
+ }
+ #undef DUMP_WRITE
+-#undef DUMP_SEEK
+ 
+ #define DUMP_WRITE(addr, nr)	\
+ 	if ((size += (nr)) > limit || !dump_write(file, (addr), (nr))) \
+@@ -1428,7 +1445,7 @@ static int elf_core_dump(long signr, str
+ 	int i;
+ 	struct vm_area_struct *vma;
+ 	struct elfhdr *elf = NULL;
+-	loff_t offset = 0, dataoff;
++	loff_t offset = 0, dataoff, foffset;
+ 	unsigned long limit = current->signal->rlim[RLIMIT_CORE].rlim_cur;
+ 	int numnote;
+ 	struct memelfnote *notes = NULL;
+@@ -1572,7 +1589,8 @@ static int elf_core_dump(long signr, str
+ 		DUMP_WRITE(&phdr, sizeof(phdr));
+ 	}
+ 
+-	/* Page-align dumped data */
++	foffset = offset;
++
+ 	dataoff = offset = roundup(offset, ELF_EXEC_PAGESIZE);
+ 
+ 	/* Write program headers for segments dump */
+@@ -1597,6 +1615,7 @@ static int elf_core_dump(long signr, str
+ 		phdr.p_align = ELF_EXEC_PAGESIZE;
+ 
+ 		DUMP_WRITE(&phdr, sizeof(phdr));
++		foffset += sizeof(phdr);
+ 	}
+ 
+ #ifdef ELF_CORE_WRITE_EXTRA_PHDRS
+@@ -1605,7 +1624,7 @@ static int elf_core_dump(long signr, str
+ 
+  	/* write out the notes section */
+ 	for (i = 0; i < numnote; i++)
+-		if (!writenote(notes + i, file))
++		if (!writenote(notes + i, file, &foffset))
+ 			goto end_coredump;
+ 
+ 	/* write out the thread status notes section */
+@@ -1614,11 +1633,12 @@ static int elf_core_dump(long signr, str
+ 				list_entry(t, struct elf_thread_status, list);
+ 
+ 		for (i = 0; i < tmp->num_notes; i++)
+-			if (!writenote(&tmp->notes[i], file))
++			if (!writenote(&tmp->notes[i], file, &foffset))
+ 				goto end_coredump;
+ 	}
+- 
+-	DUMP_SEEK(dataoff);
++
++	/* Align to page */
++	DUMP_SEEK(dataoff - foffset);
+ 
+ 	for (vma = current->mm->mmap; vma != NULL; vma = vma->vm_next) {
+ 		unsigned long addr;
+@@ -1634,10 +1654,10 @@ static int elf_core_dump(long signr, str
+ 
+ 			if (get_user_pages(current, current->mm, addr, 1, 0, 1,
+ 						&page, &vma) <= 0) {
+-				DUMP_SEEK(file->f_pos + PAGE_SIZE);
++				DUMP_SEEK(PAGE_SIZE);
+ 			} else {
+ 				if (page == ZERO_PAGE(addr)) {
+-					DUMP_SEEK(file->f_pos + PAGE_SIZE);
++					DUMP_SEEK(PAGE_SIZE);
+ 				} else {
+ 					void *kaddr;
+ 					flush_cache_page(vma, addr,
+@@ -1661,13 +1681,6 @@ static int elf_core_dump(long signr, str
+ 	ELF_CORE_WRITE_EXTRA_DATA;
+ #endif
+ 
+-	if (file->f_pos != offset) {
+-		/* Sanity check */
+-		printk(KERN_WARNING
+-		       "elf_core_dump: file->f_pos (%Ld) != offset (%Ld)\n",
+-		       file->f_pos, offset);
+-	}
+-
+ end_coredump:
+ 	set_fs(fs);
+ 
+Index: linux-2.6.18/fs/exec.c
+===================================================================
+--- linux-2.6.18.orig/fs/exec.c
++++ linux-2.6.18/fs/exec.c
+@@ -60,7 +60,7 @@
+ #endif
+ 
+ int core_uses_pid;
+-char core_pattern[65] = "core";
++char core_pattern[128] = "core";
+ int suid_dumpable = 0;
+ 
+ EXPORT_SYMBOL(suid_dumpable);
+@@ -1486,6 +1486,7 @@ int do_coredump(long signr, int exit_cod
+ 	int retval = 0;
+ 	int fsuid = current->fsuid;
+ 	int flag = 0;
++	int ispipe = 0;
+ 
+ 	binfmt = current->binfmt;
+ 	if (!binfmt || !binfmt->core_dump)
+@@ -1527,22 +1528,34 @@ int do_coredump(long signr, int exit_cod
+  	lock_kernel();
+ 	format_corename(corename, core_pattern, signr);
+ 	unlock_kernel();
+-	file = filp_open(corename, O_CREAT | 2 | O_NOFOLLOW | O_LARGEFILE | flag, 0600);
++ 	if (corename[0] == '|') {
++		/* SIGPIPE can happen, but it's just never processed */
++ 		if(call_usermodehelper_pipe(corename+1, NULL, NULL, &file)) {
++ 			printk(KERN_INFO "Core dump to %s pipe failed\n",
++			       corename);
++ 			goto fail_unlock;
++ 		}
++		ispipe = 1;
++ 	} else
++ 		file = filp_open(corename,
++				 O_CREAT | 2 | O_NOFOLLOW | O_LARGEFILE, 0600);
+ 	if (IS_ERR(file))
+ 		goto fail_unlock;
+ 	inode = file->f_dentry->d_inode;
+ 	if (inode->i_nlink > 1)
+ 		goto close_fail;	/* multiple links - don't dump */
+-	if (d_unhashed(file->f_dentry))
++	if (!ispipe && d_unhashed(file->f_dentry))
+ 		goto close_fail;
+ 
+-	if (!S_ISREG(inode->i_mode))
++	/* AK: actually i see no reason to not allow this for named pipes etc.,
++	   but keep the previous behaviour for now. */
++	if (!ispipe && !S_ISREG(inode->i_mode))
+ 		goto close_fail;
+ 	if (!file->f_op)
+ 		goto close_fail;
+ 	if (!file->f_op->write)
+ 		goto close_fail;
+-	if (do_truncate(file->f_dentry, 0, 0, file) != 0)
++	if (!ispipe && do_truncate(file->f_dentry, 0, 0, file) != 0)
+ 		goto close_fail;
+ 
+ 	retval = binfmt->core_dump(signr, regs, file);
+Index: linux-2.6.18/kernel/kmod.c
+===================================================================
+--- linux-2.6.18.orig/kernel/kmod.c
++++ linux-2.6.18/kernel/kmod.c
+@@ -35,6 +35,7 @@
+ #include <linux/mount.h>
+ #include <linux/kernel.h>
+ #include <linux/init.h>
++#include <linux/resource.h>
+ #include <asm/uaccess.h>
+ 
+ extern int max_threads;
+@@ -158,6 +159,9 @@ static int ____call_usermodehelper(void 
+ 		FD_SET(0, fdt->open_fds);
+ 		FD_CLR(0, fdt->close_on_exec);
+ 		spin_unlock(&f->file_lock);
++
++		/* and disallow core files too */
++		current->signal->rlim[RLIMIT_CORE] = (struct rlimit){0, 0};
+ 	}
+ 
+ 	/* We can run anywhere, unlike our parent keventd(). */
+Index: linux-2.6.18/kernel/sysctl.c
+===================================================================
+--- linux-2.6.18.orig/kernel/sysctl.c
++++ linux-2.6.18/kernel/sysctl.c
+@@ -428,7 +428,7 @@ static ctl_table kern_table[] = {
+ 		.ctl_name	= KERN_CORE_PATTERN,
+ 		.procname	= "core_pattern",
+ 		.data		= core_pattern,
+-		.maxlen		= 64,
++		.maxlen		= 128,
+ 		.mode		= 0644,
+ 		.proc_handler	= &proc_dostring,
+ 		.strategy	= &sysctl_string,
+Index: linux-2.6.18/mvl_patches/pro50-0230.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0230.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(230);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

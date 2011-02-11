@@ -1,0 +1,396 @@
+#! /usr/bin/env bash
+# Patch: -common_arm_futex_atomic_macros
+# Date: Mon Jan  7 15:13:41 2008
+# Source: MontaVista Software Inc.
+# Type: Defect Fix.
+# MR: 22755
+# Disposition: Needs Submitting to linux-arm-kernel ml.
+# 
+# Signed-off-by: Nicolas Pitre <nico@cam.org>
+# Signed-off-by: George Davis <gdavis@mvista.com>
+# Signed-off-by: Khem Raj <kraj@mvista.com>
+# Description:
+# 
+# Add __futex_atomic_op() so futex_atomic_op_inuser() is no
+# longer a mere stub.
+# Add futex_atomic_cmpxchg_inatomic() implementation for arm.
+# 
+#  arch/arm/kernel/process.c |    2 
+#  include/asm-arm/futex.h   |  125 ++++++++++++++++++++++++++++++++++++++++++++--
+#  2 files changed, 124 insertions(+), 3 deletions(-)
+# 
+
+PATCHNUM=679
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: MontaVista Software Inc.
+Type: Defect Fix.
+MR: 22755
+Disposition: Needs Submitting to linux-arm-kernel ml.
+
+Signed-off-by: Nicolas Pitre <nico@cam.org>
+Signed-off-by: George Davis <gdavis@mvista.com>
+Signed-off-by: Khem Raj <kraj@mvista.com>
+Description:
+
+Add __futex_atomic_op() so futex_atomic_op_inuser() is no
+longer a mere stub.
+Add futex_atomic_cmpxchg_inatomic() implementation for arm.
+
+ arch/arm/kernel/process.c |    2 
+ include/asm-arm/futex.h   |  125 ++++++++++++++++++++++++++++++++++++++++++++--
+ mvl_patches/pro50-0679.c  |   16 +++++
+ 3 files changed, 140 insertions(+), 3 deletions(-)
+
+Index: linux-2.6.18/include/asm-arm/futex.h
+===================================================================
+--- linux-2.6.18.orig/include/asm-arm/futex.h
++++ linux-2.6.18/include/asm-arm/futex.h
+@@ -1,6 +1,125 @@
+-#ifndef _ASM_FUTEX_H
+-#define _ASM_FUTEX_H
++#ifndef _ASM_ARM_FUTEX_H
++#define _ASM_ARM_FUTEX_H
+ 
+-#include <asm-generic/futex.h>
++#ifdef __KERNEL__
+ 
++#include <linux/futex.h>
++#include <linux/errno.h>
++#include <linux/uaccess.h>
++
++extern spinlock_t  futex_atomic_lock;
++
++#define __futex_atomic_op(insn, ret, oldval, uaddr, oparg) \
++	__asm__ __volatile__ (						\
++	"1:	ldrt	%1, [%2]				\n"	\
++		insn							\
++	"2:	strt	%0, [%2]				\n"	\
++	"	mov	%0, #0					\n"	\
++	"3:							\n"	\
++	"	.section __ex_table, \"a\"			\n"	\
++	"	.align	3					\n"	\
++	"	.long	1b, 4f, 2b, 4f				\n"	\
++	"	.previous					\n"	\
++	"	.section .fixup,\"ax\"				\n"	\
++	"4:	mov	%0, %4					\n"	\
++	"	b	3b					\n"	\
++	"	.previous"						\
++	: "=&r" (ret), "=&r" (oldval)					\
++	: "r" (uaddr), "r" (oparg), "Ir" (-EFAULT)			\
++	: "cc", "memory")
++
++static inline int
++futex_atomic_op_inuser (int encoded_op, int __user *uaddr)
++{
++	int op = (encoded_op >> 28) & 7;
++	int cmp = (encoded_op >> 24) & 15;
++	int oparg = (encoded_op << 8) >> 20;
++	int cmparg = (encoded_op << 20) >> 20;
++	int oldval = 0, ret;
++	if (encoded_op & (FUTEX_OP_OPARG_SHIFT << 28))
++		oparg = 1 << oparg;
++
++	if (!access_ok (VERIFY_WRITE, uaddr, sizeof(int)))
++		return -EFAULT;
++
++	inc_preempt_count();
++
++	spin_lock(&futex_atomic_lock);
++
++	switch (op) {
++	case FUTEX_OP_SET:
++		__futex_atomic_op("	mov	%0, %3\n",
++				  ret, oldval, uaddr, oparg);
++		break;
++	case FUTEX_OP_ADD:
++		__futex_atomic_op("	add	%0, %1, %3\n",
++				  ret, oldval, uaddr, oparg);
++		break;
++	case FUTEX_OP_OR:
++		__futex_atomic_op("	orr	%0, %1, %3\n",
++				  ret, oldval, uaddr, oparg);
++		break;
++	case FUTEX_OP_ANDN:
++		__futex_atomic_op("	and	%0, %1, %3\n",
++				  ret, oldval, uaddr, oparg);
++		break;
++	case FUTEX_OP_XOR:
++		__futex_atomic_op("	eor	%0, %1, %3\n",
++				  ret, oldval, uaddr, oparg);
++		break;
++	default:
++		ret = -ENOSYS;
++	}
++
++	spin_unlock(&futex_atomic_lock);
++
++	dec_preempt_count();
++
++	if (!ret) {
++		switch (cmp) {
++		case FUTEX_OP_CMP_EQ: ret = (oldval == cmparg); break;
++		case FUTEX_OP_CMP_NE: ret = (oldval != cmparg); break;
++		case FUTEX_OP_CMP_LT: ret = (oldval < cmparg); break;
++		case FUTEX_OP_CMP_GE: ret = (oldval >= cmparg); break;
++		case FUTEX_OP_CMP_LE: ret = (oldval <= cmparg); break;
++		case FUTEX_OP_CMP_GT: ret = (oldval > cmparg); break;
++		default: ret = -ENOSYS;
++		}
++	}
++	return ret;
++}
++
++static inline int
++futex_atomic_cmpxchg_inatomic(int __user *uaddr, int oldval, int newval)
++{
++	int val;
++
++	if (!access_ok(VERIFY_WRITE, uaddr, sizeof(int)))
++		return -EFAULT;
++
++	spin_lock(&futex_atomic_lock);
++
++	__asm__ __volatile__( "@futex_atomic_cmpxchg_inatomic	\n"
++	"1:     ldrt    %0, [%3]				\n"
++	"       teq     %0, %1					\n"
++	"2:     streqt  %2, [%3]				\n"
++	"3:							\n"
++	"       .section __ex_table, \"a\"			\n"
++	"       .align 3					\n"
++	"       .long   1b, 4f, 2b, 4f				\n"
++	"       .previous					\n"
++	"       .section .fixup,\"ax\"				\n"
++	"4:     mov     %0, %4					\n"
++	"       b       3b					\n"
++	"       .previous"
++	: "=&r" (val)
++	: "r" (oldval), "r" (newval), "r" (uaddr), "Ir" (-EFAULT)
++	: "cc");
++
++	spin_unlock(&futex_atomic_lock);
++
++	return val;
++}
++
++#endif
+ #endif
+Index: linux-2.6.18/arch/arm/kernel/process.c
+===================================================================
+--- linux-2.6.18.orig/arch/arm/kernel/process.c
++++ linux-2.6.18/arch/arm/kernel/process.c
+@@ -41,6 +41,8 @@ extern void setup_mm_for_reboot(char mod
+ 
+ static volatile int hlt_counter;
+ 
++DEFINE_SPINLOCK(futex_atomic_lock);
++
+ #include <asm/arch/system.h>
+ 
+ void disable_hlt(void)
+Index: linux-2.6.18/mvl_patches/pro50-0679.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0679.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(679);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

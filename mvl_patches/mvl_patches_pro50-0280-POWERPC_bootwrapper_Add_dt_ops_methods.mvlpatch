@@ -1,0 +1,389 @@
+#! /usr/bin/env bash
+# Patch: -POWERPC_bootwrapper_Add_dt_ops_methods
+# Date: Wed Sep 26 11:14:28 2007
+# MR: 24856
+# From a07940ba00218267493798e89e3f4a86fea53125 Mon Sep 17 00:00:00 2001
+# From: Scott Wood <scottwood@freescale.com>
+# Date: Fri, 16 Mar 2007 12:27:54 -0500
+# Subject: [PATCH] [POWERPC] bootwrapper: Add dt_ops methods.
+# 
+# Add get_parent, create_node, and find_node_by_prop_value to dt_ops.
+# Currently only implemented by flatdevtree_misc.
+# 
+# Also, add a _str convenience wrapper for setprop.
+# 
+# Signed-off-by: Scott Wood <scottwood@freescale.com>
+# Acked-by: David Gibson <david@gibson.dropbear.id.au>
+# Signed-off-by: Paul Mackerras <paulus@samba.org>
+
+PATCHNUM=280
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 24856
+From a07940ba00218267493798e89e3f4a86fea53125 Mon Sep 17 00:00:00 2001
+From: Scott Wood <scottwood@freescale.com>
+Date: Fri, 16 Mar 2007 12:27:54 -0500
+Subject: [PATCH] [POWERPC] bootwrapper: Add dt_ops methods.
+
+Add get_parent, create_node, and find_node_by_prop_value to dt_ops.
+Currently only implemented by flatdevtree_misc.
+
+Also, add a _str convenience wrapper for setprop.
+
+Signed-off-by: Scott Wood <scottwood@freescale.com>
+Acked-by: David Gibson <david@gibson.dropbear.id.au>
+Signed-off-by: Paul Mackerras <paulus@samba.org>
+Index: linux-2.6.18/arch/powerpc/boot/flatdevtree_misc.c
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/flatdevtree_misc.c
++++ linux-2.6.18/arch/powerpc/boot/flatdevtree_misc.c
+@@ -16,24 +16,43 @@
+ 
+ static struct ft_cxt cxt;
+ 
+-static void *ft_finddevice(const char *name)
++static void *fdtm_finddevice(const char *name)
+ {
+ 	return ft_find_device(&cxt, name);
+ }
+ 
+-static int ft_getprop(const void *phandle, const char *propname, void *buf,
+-		const int buflen)
++static int fdtm_getprop(const void *phandle, const char *propname,
++                        void *buf, const int buflen)
+ {
+ 	return ft_get_prop(&cxt, phandle, propname, buf, buflen);
+ }
+ 
+-static int ft_setprop(const void *phandle, const char *propname,
+-		const void *buf, const int buflen)
++static int fdtm_setprop(const void *phandle, const char *propname,
++                        const void *buf, const int buflen)
+ {
+ 	return ft_set_prop(&cxt, phandle, propname, buf, buflen);
+ }
+ 
+-static unsigned long ft_finalize(void)
++static void *fdtm_get_parent(const void *phandle)
++{
++	return ft_get_parent(&cxt, phandle);
++}
++
++static void *fdtm_create_node(const void *phandle, const char *name)
++{
++	return ft_create_node(&cxt, phandle, name);
++}
++
++static void *fdtm_find_node_by_prop_value(const void *prev,
++                                          const char *propname,
++                                          const char *propval,
++                                          int proplen)
++{
++	return ft_find_node_by_prop_value(&cxt, prev, propname,
++	                                  propval, proplen);
++}
++
++static unsigned long fdtm_finalize(void)
+ {
+ 	ft_end_tree(&cxt);
+ 	return (unsigned long)cxt.bph;
+@@ -41,10 +60,13 @@ static unsigned long ft_finalize(void)
+ 
+ int ft_init(void *dt_blob, unsigned int max_size, unsigned int max_find_device)
+ {
+-	dt_ops.finddevice = ft_finddevice;
+-	dt_ops.getprop = ft_getprop;
+-	dt_ops.setprop = ft_setprop;
+-	dt_ops.finalize = ft_finalize;
++	dt_ops.finddevice = fdtm_finddevice;
++	dt_ops.getprop = fdtm_getprop;
++	dt_ops.setprop = fdtm_setprop;
++	dt_ops.get_parent = fdtm_get_parent;
++	dt_ops.create_node = fdtm_create_node;
++	dt_ops.find_node_by_prop_value = fdtm_find_node_by_prop_value;
++	dt_ops.finalize = fdtm_finalize;
+ 
+ 	return ft_open(&cxt, dt_blob, max_size, max_find_device,
+ 			platform_ops.realloc);
+Index: linux-2.6.18/arch/powerpc/boot/ops.h
+===================================================================
+--- linux-2.6.18.orig/arch/powerpc/boot/ops.h
++++ linux-2.6.18/arch/powerpc/boot/ops.h
+@@ -13,6 +13,7 @@
+ 
+ #include <stddef.h>
+ #include "types.h"
++#include "string.h"
+ 
+ #define	COMMAND_LINE_SIZE	512
+ #define	MAX_PATH_LEN		256
+@@ -37,6 +38,12 @@ struct dt_ops {
+ 			const int buflen);
+ 	int	(*setprop)(const void *phandle, const char *name,
+ 			const void *buf, const int buflen);
++	void *(*get_parent)(const void *phandle);
++	/* The node must not already exist. */
++	void *(*create_node)(const void *parent, const char *name);
++	void *(*find_node_by_prop_value)(const void *prev,
++	                                 const char *propname,
++	                                 const char *propval, int proplen);
+ 	unsigned long (*finalize)(void);
+ };
+ extern struct dt_ops dt_ops;
+@@ -89,6 +96,50 @@ static inline int setprop(void *devp, co
+ 	return (dt_ops.setprop) ? dt_ops.setprop(devp, name, buf, buflen) : -1;
+ }
+ 
++static inline int setprop_str(void *devp, const char *name, const char *buf)
++{
++	if (dt_ops.setprop)
++		return dt_ops.setprop(devp, name, buf, strlen(buf) + 1);
++
++	return -1;
++}
++
++static inline void *get_parent(const char *devp)
++{
++	return dt_ops.get_parent ? dt_ops.get_parent(devp) : NULL;
++}
++
++static inline void *create_node(const void *parent, const char *name)
++{
++	return dt_ops.create_node ? dt_ops.create_node(parent, name) : NULL;
++}
++
++
++static inline void *find_node_by_prop_value(const void *prev,
++                                            const char *propname,
++                                            const char *propval, int proplen)
++{
++	if (dt_ops.find_node_by_prop_value)
++		return dt_ops.find_node_by_prop_value(prev, propname,
++		                                      propval, proplen);
++
++	return NULL;
++}
++
++static inline void *find_node_by_prop_value_str(const void *prev,
++                                                const char *propname,
++                                                const char *propval)
++{
++	return find_node_by_prop_value(prev, propname, propval,
++	                               strlen(propval) + 1);
++}
++
++static inline void *find_node_by_devtype(const void *prev,
++                                         const char *type)
++{
++	return find_node_by_prop_value_str(prev, "device_type", type);
++}
++
+ static inline void *malloc(u32 size)
+ {
+ 	return (platform_ops.malloc) ? platform_ops.malloc(size) : NULL;
+Index: linux-2.6.18/mvl_patches/pro50-0280.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0280.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(280);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

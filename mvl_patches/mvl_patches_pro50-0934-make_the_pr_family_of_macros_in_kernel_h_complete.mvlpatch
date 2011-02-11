@@ -1,0 +1,473 @@
+#! /usr/bin/env bash
+# Patch: -make_the_pr_family_of_macros_in_kernel_h_complete
+# Date: Wed Mar  5 16:43:46 2008
+# Source: Emil Medve <Emilian.Medve@Freescale.com>
+# MR: 26854
+# Type: Enhancement
+# Disposition: backport from 2.6.24-rc1 (1f7c8234c7a68c2ccc2a33f3b7d48057980e7c35)
+# Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+# Description:
+# 
+# commit 1f7c8234c7a68c2ccc2a33f3b7d48057980e7c35
+# Author: Emil Medve <Emilian.Medve@Freescale.com>
+# Date:   Tue Oct 16 23:29:48 2007 -0700
+# 
+#     Make the pr_*() family of macros in kernel.h complete
+#     
+#     Other/Some pr_*() macros are already defined in kernel.h, but pr_err() was
+#     defined multiple times in several other places
+#     
+#     Signed-off-by: Emil Medve <Emilian.Medve@Freescale.com>
+#     Cc: Jean Delvare <khali@linux-fr.org>
+#     Cc: Jeff Garzik <jeff@garzik.org>
+#     Cc: "Antonino A. Daplas" <adaplas@pol.net>
+#     Cc: Tony Lindgren <tony@atomide.com>
+#     Reviewed-by: Satyam Sharma <satyam@infradead.org>
+#     Acked-by: Randy Dunlap <randy.dunlap@oracle.com>
+#     Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+#     Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+# 
+#  drivers/i2c/chips/menelaus.c     |   18 ++++++++----------
+#  drivers/net/spider_net.h         |    3 ---
+#  drivers/video/omap/lcd_h3.c      |    6 ++----
+#  drivers/video/omap/lcd_inn1610.c |    6 ++----
+#  include/linux/kernel.h           |   22 +++++++++++++++++-----
+#  5 files changed, 29 insertions(+), 26 deletions(-)
+# 
+
+PATCHNUM=934
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: Emil Medve <Emilian.Medve@Freescale.com>
+MR: 26854
+Type: Enhancement
+Disposition: backport from 2.6.24-rc1 (1f7c8234c7a68c2ccc2a33f3b7d48057980e7c35)
+Signed-off-by: Anton Vorontsov <avorontsov@ru.mvista.com>
+Description:
+
+commit 1f7c8234c7a68c2ccc2a33f3b7d48057980e7c35
+Author: Emil Medve <Emilian.Medve@Freescale.com>
+Date:   Tue Oct 16 23:29:48 2007 -0700
+
+    Make the pr_*() family of macros in kernel.h complete
+    
+    Other/Some pr_*() macros are already defined in kernel.h, but pr_err() was
+    defined multiple times in several other places
+    
+    Signed-off-by: Emil Medve <Emilian.Medve@Freescale.com>
+    Cc: Jean Delvare <khali@linux-fr.org>
+    Cc: Jeff Garzik <jeff@garzik.org>
+    Cc: "Antonino A. Daplas" <adaplas@pol.net>
+    Cc: Tony Lindgren <tony@atomide.com>
+    Reviewed-by: Satyam Sharma <satyam@infradead.org>
+    Acked-by: Randy Dunlap <randy.dunlap@oracle.com>
+    Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+ drivers/i2c/chips/menelaus.c     |   18 ++++++++----------
+ drivers/net/spider_net.h         |    3 ---
+ drivers/video/omap/lcd_h3.c      |    6 ++----
+ drivers/video/omap/lcd_inn1610.c |    6 ++----
+ include/linux/kernel.h           |   22 +++++++++++++++++-----
+ mvl_patches/pro50-0934.c         |   16 ++++++++++++++++
+ 6 files changed, 45 insertions(+), 26 deletions(-)
+
+Index: linux-2.6.18/drivers/i2c/chips/menelaus.c
+===================================================================
+--- linux-2.6.18.orig/drivers/i2c/chips/menelaus.c
++++ linux-2.6.18/drivers/i2c/chips/menelaus.c
+@@ -48,8 +48,6 @@
+ 
+ #define DRIVER_NAME			"menelaus"
+ 
+-#define pr_err(fmt, arg...)	printk(KERN_ERR DRIVER_NAME ": ", ## arg);
+-
+ #define MENELAUS_I2C_ADDRESS		0x72
+ 
+ #define MENELAUS_REV			0x01
+@@ -154,7 +152,7 @@ static int menelaus_write_reg(int reg, u
+ 	int val = i2c_smbus_write_byte_data(&menelaus.client, reg, value);
+ 
+ 	if (val < 0) {
+-		pr_err("write error");
++		pr_err(DRIVER_NAME ": write error");
+ 		return val;
+ 	}
+ 
+@@ -166,7 +164,7 @@ static int menelaus_read_reg(int reg)
+ 	int val = i2c_smbus_read_byte_data(&menelaus.client, reg);
+ 
+ 	if (val < 0)
+-		pr_err("read error");
++		pr_err(DRIVER_NAME ": read error");
+ 
+ 	return val;
+ }
+@@ -707,13 +705,13 @@ static int menelaus_probe(struct i2c_ada
+ 	c->flags	= 0;
+ 
+ 	if ((err = i2c_attach_client(c)) < 0) {
+-		pr_err("couldn't attach\n");
++		pr_err(DRIVER_NAME ": couldn't attach\n");
+ 		goto fail1;
+ 	}
+ 
+ 	/* If a true probe check the device */
+ 	if (kind < 0 && (rev = menelaus_read_reg(MENELAUS_REV)) < 0) {
+-		pr_err("device not found");
++		pr_err(DRIVER_NAME ": device not found");
+ 		err = -ENODEV;
+ 		goto fail2;
+ 	}
+@@ -760,7 +758,7 @@ static int menelaus_remove(struct i2c_cl
+ 	free_irq(menelaus.irq, &menelaus);
+ 
+ 	if ((err = i2c_detach_client(client))) {
+-		pr_err("client deregistration failed\n");
++		pr_err(DRIVER_NAME ": client deregistration failed\n");
+ 		return err;
+ 	}
+ 
+@@ -775,7 +773,7 @@ static int menelaus_scan_bus(struct i2c_
+ {
+ 	if (!i2c_check_functionality(bus, I2C_FUNC_SMBUS_BYTE_DATA |
+ 					  I2C_FUNC_SMBUS_WRITE_BYTE)) {
+-		pr_err("invalid i2c bus functionality\n");
++		pr_err(DRIVER_NAME ": invalid i2c bus functionality\n");
+ 		return -EINVAL;
+ 	}
+ 
+@@ -797,7 +795,7 @@ static int __init menelaus_init(void)
+ 	int res;
+ 
+ 	if ((res = i2c_add_driver(&menelaus_i2c_driver)) < 0) {
+-		pr_err("driver registration failed\n");
++		pr_err(DRIVER_NAME ": driver registration failed\n");
+ 		return res;
+ 	}
+ 
+@@ -807,7 +805,7 @@ static int __init menelaus_init(void)
+ static void __exit menelaus_exit(void)
+ {
+ 	if (i2c_del_driver(&menelaus_i2c_driver) < 0)
+-		pr_err("driver remove failed\n");
++		pr_err(DRIVER_NAME ": driver remove failed\n");
+ 
+ 	/* FIXME: Shutdown menelaus parts that can be shut down */
+ }
+Index: linux-2.6.18/drivers/net/spider_net.h
+===================================================================
+--- linux-2.6.18.orig/drivers/net/spider_net.h
++++ linux-2.6.18/drivers/net/spider_net.h
+@@ -446,7 +446,4 @@ struct spider_net_card {
+ 	struct spider_net_descr descr[0];
+ };
+ 
+-#define pr_err(fmt,arg...) \
+-	printk(KERN_ERR fmt ,##arg)
+-
+ #endif
+Index: linux-2.6.18/drivers/video/omap/lcd_h3.c
+===================================================================
+--- linux-2.6.18.orig/drivers/video/omap/lcd_h3.c
++++ linux-2.6.18/drivers/video/omap/lcd_h3.c
+@@ -30,8 +30,6 @@
+ 
+ #define MODULE_NAME	"omapfb-lcd_h3"
+ 
+-#define pr_err(fmt, args...) printk(KERN_ERR MODULE_NAME ": " fmt, ## args)
+-
+ static int h3_panel_init(struct lcd_panel *panel, struct omapfb_device *fbdev)
+ {
+ 	return 0;
+@@ -50,7 +48,7 @@ static int h3_panel_enable(struct lcd_pa
+ 	if (!r)
+ 		r = tps65010_set_gpio_out_value(GPIO2, HIGH);
+ 	if (r)
+-		pr_err("Unable to turn on LCD panel\n");
++		pr_err(MODULE_NAME ": Unable to turn on LCD panel\n");
+ 
+ 	return r;
+ }
+@@ -64,7 +62,7 @@ static void h3_panel_disable(struct lcd_
+ 	if (!r)
+ 		tps65010_set_gpio_out_value(GPIO2, LOW);
+ 	if (r)
+-		pr_err("Unable to turn off LCD panel\n");
++		pr_err(MODULE_NAME ": Unable to turn off LCD panel\n");
+ }
+ 
+ static unsigned long h3_panel_get_caps(struct lcd_panel *panel)
+Index: linux-2.6.18/drivers/video/omap/lcd_inn1610.c
+===================================================================
+--- linux-2.6.18.orig/drivers/video/omap/lcd_inn1610.c
++++ linux-2.6.18/drivers/video/omap/lcd_inn1610.c
+@@ -29,20 +29,18 @@
+ 
+ #define MODULE_NAME	"omapfb-lcd_h3"
+ 
+-#define pr_err(fmt, args...) printk(KERN_ERR MODULE_NAME ": " fmt, ## args)
+-
+ static int innovator1610_panel_init(struct lcd_panel *panel,
+ 				    struct omapfb_device *fbdev)
+ {
+ 	int r = 0;
+ 
+ 	if (omap_request_gpio(14)) {
+-		pr_err("can't request GPIO 14\n");
++		pr_err(MODULE_NAME ": can't request GPIO 14\n");
+ 		r = -1;
+ 		goto exit;
+ 	}
+ 	if (omap_request_gpio(15)) {
+-		pr_err("can't request GPIO 15\n");
++		pr_err(MODULE_NAME ": can't request GPIO 15\n");
+ 		omap_free_gpio(14);
+ 		r = -1;
+ 		goto exit;
+Index: linux-2.6.18/include/linux/kernel.h
+===================================================================
+--- linux-2.6.18.orig/include/linux/kernel.h
++++ linux-2.6.18/include/linux/kernel.h
+@@ -224,18 +224,30 @@ extern enum system_states {
+ 
+ extern void dump_stack(void);
+ 
++#define pr_emerg(fmt, arg...) \
++	printk(KERN_EMERG fmt, ##arg)
++#define pr_alert(fmt, arg...) \
++	printk(KERN_ALERT fmt, ##arg)
++#define pr_crit(fmt, arg...) \
++	printk(KERN_CRIT fmt, ##arg)
++#define pr_err(fmt, arg...) \
++	printk(KERN_ERR fmt, ##arg)
++#define pr_warning(fmt, arg...) \
++	printk(KERN_WARNING fmt, ##arg)
++#define pr_notice(fmt, arg...) \
++	printk(KERN_NOTICE fmt, ##arg)
++#define pr_info(fmt, arg...) \
++	printk(KERN_INFO fmt, ##arg)
++
+ #ifdef DEBUG
+ /* If you are writing a driver, please use dev_dbg instead */
+-#define pr_debug(fmt,arg...) \
+-	printk(KERN_DEBUG fmt,##arg)
++#define pr_debug(fmt, arg...) \
++	printk(KERN_DEBUG fmt, ##arg)
+ #else
+ #define pr_debug(fmt,arg...) \
+ 	do { } while (0)
+ #endif
+ 
+-#define pr_info(fmt,arg...) \
+-	printk(KERN_INFO fmt,##arg)
+-
+ /*
+  *      Display an IP address in readable format.
+  */
+Index: linux-2.6.18/mvl_patches/pro50-0934.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0934.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(934);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

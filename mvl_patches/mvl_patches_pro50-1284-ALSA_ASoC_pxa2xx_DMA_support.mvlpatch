@@ -1,0 +1,674 @@
+#! /usr/bin/env bash
+# Patch: -ALSA_ASoC_pxa2xx_DMA_support
+# Date: Mon Jul 21 10:26:21 2008
+# MR: 26835
+# Disposition: Backport from 2.6.21-rc1
+# Adjustments:
+# 
+# From f11a96d5cd94202479e603f9dfaff6e92f342135 Mon Sep 17 00:00:00 2001
+# From: Liam Girdwood <liam.girdwood@wolfsonmicro.com>
+# Date: Thu, 12 Oct 2006 14:26:55 +0200
+# Subject: [PATCH] [ALSA] ASoC pxa2xx DMA support
+# 
+# This patch adds pxa2xx ASoC DMA audio support. It's based on
+# sound/arm/pxa-pcm.c by Nicolas Pitre with the following differences.
+# o Modified driver structure to use ASoC core PCM callbacks and data
+# structures.
+# o Registration with ASoC core.
+# From: Liam Girdwood <liam.girdwood@wolfsonmicro.com>
+# Signed-off-by: Nicolas Pitre <nico@cam.org>
+# Signed-off-by: Richard Purdie <rpurdie@rpsys.net>
+# Signed-off-by: Liam Girdwood <liam.girdwood@wolfsonmicro.com>
+# Signed-off-by: Takashi Iwai <tiwai@suse.de>
+# Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+
+PATCHNUM=1284
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+MR: 26835
+Disposition: Backport from 2.6.21-rc1
+Adjustments:
+
+From f11a96d5cd94202479e603f9dfaff6e92f342135 Mon Sep 17 00:00:00 2001
+From: Liam Girdwood <liam.girdwood@wolfsonmicro.com>
+Date: Thu, 12 Oct 2006 14:26:55 +0200
+Subject: [PATCH] [ALSA] ASoC pxa2xx DMA support
+
+This patch adds pxa2xx ASoC DMA audio support. It's based on
+sound/arm/pxa-pcm.c by Nicolas Pitre with the following differences.
+o Modified driver structure to use ASoC core PCM callbacks and data
+structures.
+o Registration with ASoC core.
+From: Liam Girdwood <liam.girdwood@wolfsonmicro.com>
+Signed-off-by: Nicolas Pitre <nico@cam.org>
+Signed-off-by: Richard Purdie <rpurdie@rpsys.net>
+Signed-off-by: Liam Girdwood <liam.girdwood@wolfsonmicro.com>
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+Signed-off-by: Jaroslav Kysela <perex@suse.cz>
+Index: linux-2.6.18/sound/soc/pxa/pxa2xx-pcm.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/pxa/pxa2xx-pcm.c
+@@ -0,0 +1,363 @@
++/*
++ * linux/sound/arm/pxa2xx-pcm.c -- ALSA PCM interface for the Intel PXA2xx chip
++ *
++ * Author:	Nicolas Pitre
++ * Created:	Nov 30, 2004
++ * Copyright:	(C) 2004 MontaVista Software, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/platform_device.h>
++#include <linux/slab.h>
++#include <linux/dma-mapping.h>
++
++#include <sound/driver.h>
++#include <sound/core.h>
++#include <sound/pcm.h>
++#include <sound/pcm_params.h>
++#include <sound/soc.h>
++
++#include <asm/dma.h>
++#include <asm/hardware.h>
++#include <asm/arch/pxa-regs.h>
++#include <asm/arch/audio.h>
++
++#include "pxa2xx-pcm.h"
++
++static const struct snd_pcm_hardware pxa2xx_pcm_hardware = {
++	.info			= SNDRV_PCM_INFO_MMAP |
++				  SNDRV_PCM_INFO_MMAP_VALID |
++				  SNDRV_PCM_INFO_INTERLEAVED |
++				  SNDRV_PCM_INFO_PAUSE |
++				  SNDRV_PCM_INFO_RESUME,
++	.formats		= SNDRV_PCM_FMTBIT_S16_LE |
++					SNDRV_PCM_FMTBIT_S24_LE |
++					SNDRV_PCM_FMTBIT_S32_LE,
++	.period_bytes_min	= 32,
++	.period_bytes_max	= 8192 - 32,
++	.periods_min		= 1,
++	.periods_max		= PAGE_SIZE/sizeof(pxa_dma_desc),
++	.buffer_bytes_max	= 128 * 1024,
++	.fifo_size		= 32,
++};
++
++struct pxa2xx_runtime_data {
++	int dma_ch;
++	struct pxa2xx_pcm_dma_params *params;
++	pxa_dma_desc *dma_desc_array;
++	dma_addr_t dma_desc_array_phys;
++};
++
++static void pxa2xx_pcm_dma_irq(int dma_ch, void *dev_id)
++{
++	struct snd_pcm_substream *substream = dev_id;
++	struct pxa2xx_runtime_data *prtd = substream->runtime->private_data;
++	int dcsr;
++
++	dcsr = DCSR(dma_ch);
++	DCSR(dma_ch) = dcsr & ~DCSR_STOPIRQEN;
++
++	if (dcsr & DCSR_ENDINTR) {
++		snd_pcm_period_elapsed(substream);
++	} else {
++		printk( KERN_ERR "%s: DMA error on channel %d (DCSR=%#x)\n",
++			prtd->params->name, dma_ch, dcsr );
++	}
++}
++
++static int pxa2xx_pcm_hw_params(struct snd_pcm_substream *substream,
++	struct snd_pcm_hw_params *params)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	struct pxa2xx_runtime_data *prtd = runtime->private_data;
++	struct snd_soc_pcm_runtime *rtd = substream->private_data;
++	struct pxa2xx_pcm_dma_params *dma = rtd->cpu_dai->dma_data;
++	size_t totsize = params_buffer_bytes(params);
++	size_t period = params_period_bytes(params);
++	pxa_dma_desc *dma_desc;
++	dma_addr_t dma_buff_phys, next_desc_phys;
++	int ret;
++
++	/* this may get called several times by oss emulation
++	 * with different params */
++	if (prtd->params == NULL) {
++		prtd->params = dma;
++		ret = pxa_request_dma(prtd->params->name, DMA_PRIO_LOW,
++			      pxa2xx_pcm_dma_irq, substream);
++		if (ret < 0)
++			return ret;
++		prtd->dma_ch = ret;
++	} else if (prtd->params != dma) {
++		pxa_free_dma(prtd->dma_ch);
++		prtd->params = dma;
++		ret = pxa_request_dma(prtd->params->name, DMA_PRIO_LOW,
++			      pxa2xx_pcm_dma_irq, substream);
++		if (ret < 0)
++			return ret;
++		prtd->dma_ch = ret;
++	}
++
++	snd_pcm_set_runtime_buffer(substream, &substream->dma_buffer);
++	runtime->dma_bytes = totsize;
++
++	dma_desc = prtd->dma_desc_array;
++	next_desc_phys = prtd->dma_desc_array_phys;
++	dma_buff_phys = runtime->dma_addr;
++	do {
++		next_desc_phys += sizeof(pxa_dma_desc);
++		dma_desc->ddadr = next_desc_phys;
++		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
++			dma_desc->dsadr = dma_buff_phys;
++			dma_desc->dtadr = prtd->params->dev_addr;
++		} else {
++			dma_desc->dsadr = prtd->params->dev_addr;
++			dma_desc->dtadr = dma_buff_phys;
++		}
++		if (period > totsize)
++			period = totsize;
++		dma_desc->dcmd = prtd->params->dcmd | period | DCMD_ENDIRQEN;
++		dma_desc++;
++		dma_buff_phys += period;
++	} while (totsize -= period);
++	dma_desc[-1].ddadr = prtd->dma_desc_array_phys;
++
++	return 0;
++}
++
++static int pxa2xx_pcm_hw_free(struct snd_pcm_substream *substream)
++{
++	struct pxa2xx_runtime_data *prtd = substream->runtime->private_data;
++
++	if (prtd && prtd->params)
++		*prtd->params->drcmr = 0;
++
++	if (prtd->dma_ch) {
++		snd_pcm_set_runtime_buffer(substream, NULL);
++		pxa_free_dma(prtd->dma_ch);
++		prtd->dma_ch = 0;
++	}
++
++	return 0;
++}
++
++static int pxa2xx_pcm_prepare(struct snd_pcm_substream *substream)
++{
++	struct pxa2xx_runtime_data *prtd = substream->runtime->private_data;
++
++	DCSR(prtd->dma_ch) &= ~DCSR_RUN;
++	DCSR(prtd->dma_ch) = 0;
++	DCMD(prtd->dma_ch) = 0;
++	*prtd->params->drcmr = prtd->dma_ch | DRCMR_MAPVLD;
++
++	return 0;
++}
++
++static int pxa2xx_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
++{
++	struct pxa2xx_runtime_data *prtd = substream->runtime->private_data;
++	int ret = 0;
++
++	switch (cmd) {
++	case SNDRV_PCM_TRIGGER_START:
++		DDADR(prtd->dma_ch) = prtd->dma_desc_array_phys;
++		DCSR(prtd->dma_ch) = DCSR_RUN;
++		break;
++
++	case SNDRV_PCM_TRIGGER_STOP:
++	case SNDRV_PCM_TRIGGER_SUSPEND:
++	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
++		DCSR(prtd->dma_ch) &= ~DCSR_RUN;
++		break;
++
++	case SNDRV_PCM_TRIGGER_RESUME:
++		DCSR(prtd->dma_ch) |= DCSR_RUN;
++		break;
++	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
++		DDADR(prtd->dma_ch) = prtd->dma_desc_array_phys;
++		DCSR(prtd->dma_ch) |= DCSR_RUN;
++		break;
++
++	default:
++		ret = -EINVAL;
++	}
++
++	return ret;
++}
++
++static snd_pcm_uframes_t
++pxa2xx_pcm_pointer(struct snd_pcm_substream *substream)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	struct pxa2xx_runtime_data *prtd = runtime->private_data;
++
++	dma_addr_t ptr = (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) ?
++			 DSADR(prtd->dma_ch) : DTADR(prtd->dma_ch);
++	snd_pcm_uframes_t x = bytes_to_frames(runtime, ptr - runtime->dma_addr);
++
++	if (x == runtime->buffer_size)
++		x = 0;
++	return x;
++}
++
++static int pxa2xx_pcm_open(struct snd_pcm_substream *substream)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	struct pxa2xx_runtime_data *prtd;
++	int ret;
++
++	snd_soc_set_runtime_hwparams(substream, &pxa2xx_pcm_hardware);
++
++	/*
++	 * For mysterious reasons (and despite what the manual says)
++	 * playback samples are lost if the DMA count is not a multiple
++	 * of the DMA burst size.  Let's add a rule to enforce that.
++	 */
++	ret = snd_pcm_hw_constraint_step(runtime, 0,
++		SNDRV_PCM_HW_PARAM_PERIOD_BYTES, 32);
++	if (ret)
++		goto out;
++
++	ret = snd_pcm_hw_constraint_step(runtime, 0,
++		SNDRV_PCM_HW_PARAM_BUFFER_BYTES, 32);
++	if (ret)
++		goto out;
++
++	prtd = kzalloc(sizeof(struct pxa2xx_runtime_data), GFP_KERNEL);
++	if (prtd == NULL) {
++		ret = -ENOMEM;
++		goto out;
++	}
++
++	prtd->dma_desc_array =
++		dma_alloc_writecombine(substream->pcm->card->dev, PAGE_SIZE,
++				       &prtd->dma_desc_array_phys, GFP_KERNEL);
++	if (!prtd->dma_desc_array) {
++		ret = -ENOMEM;
++		goto err1;
++	}
++
++	runtime->private_data = prtd;
++	return 0;
++
++ err1:
++	kfree(prtd);
++ out:
++	return ret;
++}
++
++static int pxa2xx_pcm_close(struct snd_pcm_substream *substream)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	struct pxa2xx_runtime_data *prtd = runtime->private_data;
++
++	dma_free_writecombine(substream->pcm->card->dev, PAGE_SIZE,
++			      prtd->dma_desc_array, prtd->dma_desc_array_phys);
++	kfree(prtd);
++	return 0;
++}
++
++static int pxa2xx_pcm_mmap(struct snd_pcm_substream *substream,
++	struct vm_area_struct *vma)
++{
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	return dma_mmap_writecombine(substream->pcm->card->dev, vma,
++				     runtime->dma_area,
++				     runtime->dma_addr,
++				     runtime->dma_bytes);
++}
++
++struct snd_pcm_ops pxa2xx_pcm_ops = {
++	.open		= pxa2xx_pcm_open,
++	.close		= pxa2xx_pcm_close,
++	.ioctl		= snd_pcm_lib_ioctl,
++	.hw_params	= pxa2xx_pcm_hw_params,
++	.hw_free	= pxa2xx_pcm_hw_free,
++	.prepare	= pxa2xx_pcm_prepare,
++	.trigger	= pxa2xx_pcm_trigger,
++	.pointer	= pxa2xx_pcm_pointer,
++	.mmap		= pxa2xx_pcm_mmap,
++};
++
++static int pxa2xx_pcm_preallocate_dma_buffer(struct snd_pcm *pcm, int stream)
++{
++	struct snd_pcm_substream *substream = pcm->streams[stream].substream;
++	struct snd_dma_buffer *buf = &substream->dma_buffer;
++	size_t size = pxa2xx_pcm_hardware.buffer_bytes_max;
++	buf->dev.type = SNDRV_DMA_TYPE_DEV;
++	buf->dev.dev = pcm->card->dev;
++	buf->private_data = NULL;
++	buf->area = dma_alloc_writecombine(pcm->card->dev, size,
++					   &buf->addr, GFP_KERNEL);
++	if (!buf->area)
++		return -ENOMEM;
++	buf->bytes = size;
++	return 0;
++}
++
++static void pxa2xx_pcm_free_dma_buffers(struct snd_pcm *pcm)
++{
++	struct snd_pcm_substream *substream;
++	struct snd_dma_buffer *buf;
++	int stream;
++
++	for (stream = 0; stream < 2; stream++) {
++		substream = pcm->streams[stream].substream;
++		if (!substream)
++			continue;
++
++		buf = &substream->dma_buffer;
++		if (!buf->area)
++			continue;
++
++		dma_free_writecombine(pcm->card->dev, buf->bytes,
++				      buf->area, buf->addr);
++		buf->area = NULL;
++	}
++}
++
++static u64 pxa2xx_pcm_dmamask = DMA_32BIT_MASK;
++
++int pxa2xx_pcm_new(struct snd_card *card, struct snd_soc_codec_dai *dai,
++	struct snd_pcm *pcm)
++{
++	int ret = 0;
++
++	if (!card->dev->dma_mask)
++		card->dev->dma_mask = &pxa2xx_pcm_dmamask;
++	if (!card->dev->coherent_dma_mask)
++		card->dev->coherent_dma_mask = DMA_32BIT_MASK;
++
++	if (dai->playback.channels_min) {
++		ret = pxa2xx_pcm_preallocate_dma_buffer(pcm,
++			SNDRV_PCM_STREAM_PLAYBACK);
++		if (ret)
++			goto out;
++	}
++
++	if (dai->capture.channels_min) {
++		ret = pxa2xx_pcm_preallocate_dma_buffer(pcm,
++			SNDRV_PCM_STREAM_CAPTURE);
++		if (ret)
++			goto out;
++	}
++ out:
++	return ret;
++}
++
++struct snd_soc_platform pxa2xx_soc_platform = {
++	.name		= "pxa2xx-audio",
++	.pcm_ops 	= &pxa2xx_pcm_ops,
++	.pcm_new	= pxa2xx_pcm_new,
++	.pcm_free	= pxa2xx_pcm_free_dma_buffers,
++};
++
++EXPORT_SYMBOL_GPL(pxa2xx_soc_platform);
++
++MODULE_AUTHOR("Nicolas Pitre");
++MODULE_DESCRIPTION("Intel PXA2xx PCM DMA module");
++MODULE_LICENSE("GPL");
+Index: linux-2.6.18/sound/soc/pxa/pxa2xx-pcm.h
+===================================================================
+--- /dev/null
++++ linux-2.6.18/sound/soc/pxa/pxa2xx-pcm.h
+@@ -0,0 +1,48 @@
++/*
++ * linux/sound/arm/pxa2xx-pcm.h -- ALSA PCM interface for the Intel PXA2xx chip
++ *
++ * Author:	Nicolas Pitre
++ * Created:	Nov 30, 2004
++ * Copyright:	MontaVista Software, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#ifndef _PXA2XX_PCM_H
++#define _PXA2XX_PCM_H
++
++struct pxa2xx_pcm_dma_params {
++	char *name;			/* stream identifier */
++	u32 dcmd;			/* DMA descriptor dcmd field */
++	volatile u32 *drcmr;		/* the DMA request channel to use */
++	u32 dev_addr;			/* device physical address for DMA */
++};
++
++struct pxa2xx_gpio {
++	u32 sys;
++	u32	rx;
++	u32 tx;
++	u32 clk;
++	u32 frm;
++};
++
++/* pxa2xx DAI ID's */
++#define PXA2XX_DAI_AC97_HIFI	0
++#define PXA2XX_DAI_AC97_AUX		1
++#define PXA2XX_DAI_AC97_MIC		2
++#define PXA2XX_DAI_I2S			0
++#define PXA2XX_DAI_SSP1			0
++#define PXA2XX_DAI_SSP2			1
++#define PXA2XX_DAI_SSP3			2
++
++extern struct snd_soc_cpu_dai pxa_ac97_dai[3];
++extern struct snd_soc_cpu_dai pxa_i2s_dai;
++extern struct snd_soc_cpu_dai pxa_ssp_dai[3];
++
++/* platform data */
++extern struct snd_soc_platform pxa2xx_soc_platform;
++extern struct snd_ac97_bus_ops pxa2xx_ac97_ops;
++
++#endif
+Index: linux-2.6.18/mvl_patches/pro50-1284.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-1284.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2008 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(1284);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

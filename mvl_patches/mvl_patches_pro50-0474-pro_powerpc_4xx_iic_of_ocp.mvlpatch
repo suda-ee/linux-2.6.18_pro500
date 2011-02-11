@@ -1,0 +1,622 @@
+#! /usr/bin/env bash
+# Patch: -pro_powerpc_4xx_iic_of_ocp
+# Date: Fri Oct 26 08:37:02 2007
+# Source: DENX Software Engineering.
+# MR: 24856
+# Type: Enhancement
+# Disposition: merged from linuxppc-dev
+# Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+# Description:
+#     This patch adds OF support to the i2c-ibm_iic driver.
+#     The code is based on the Stefan Roese's patch:
+#     http://patchwork.ozlabs.org/linuxppc/patch?id=14181
+#     Just poll mode updated to use NO_IRQ and some minor bugs fixed.
+# 
+
+PATCHNUM=474
+LSPINFO=include/linux/lsppatchlevel.h
+TMPFILE=/tmp/mvl_patch_$$
+
+function dopatch() {
+    patch $* >${TMPFILE} 2>&1 <<"EOF"
+Source: DENX Software Engineering.
+MR: 24856
+Type: Enhancement
+Disposition: merged from linuxppc-dev
+Signed-off-by: Valentine Barshak <vbarshak@ru.mvista.com>
+Description:
+    This patch adds OF support to the i2c-ibm_iic driver.
+    The code is based on the Stefan Roese's patch:
+    http://patchwork.ozlabs.org/linuxppc/patch?id=14181
+    Just poll mode updated to use NO_IRQ and some minor bugs fixed.
+
+Index: linux-2.6.18/drivers/i2c/busses/i2c-ibm_iic.c
+===================================================================
+--- linux-2.6.18.orig/drivers/i2c/busses/i2c-ibm_iic.c
++++ linux-2.6.18/drivers/i2c/busses/i2c-ibm_iic.c
+@@ -37,8 +37,13 @@
+ #include <asm/io.h>
+ #include <linux/i2c.h>
+ #include <linux/i2c-id.h>
+-#include <asm/ocp.h>
++
++#ifdef	CONFIG_PPC_MERGE
++#include <asm/of_platform.h>
++#else
+ #include <asm/ibm4xx.h>
++#include <asm/ocp.h>
++#endif
+ 
+ #include "i2c-ibm_iic.h"
+ 
+@@ -160,7 +165,7 @@ static void iic_dev_init(struct ibm_iic_
+ 	out_8(&iic->cntl, 0);
+ 
+ 	/* Enable interrupts if possible */
+-	iic_interrupt_mode(dev, dev->irq >= 0);
++	iic_interrupt_mode(dev, dev->irq != NO_IRQ);
+ 
+ 	/* Set mode control */
+ 	out_8(&iic->mdcntl, MDCNTL_FMDB | MDCNTL_EINT | MDCNTL_EUBS
+@@ -407,7 +412,7 @@ static int iic_wait_for_tc(struct ibm_ii
+ 	volatile struct iic_regs __iomem *iic = dev->vaddr;
+ 	int ret = 0;
+ 
+-	if (dev->irq >= 0) {
++	if (dev->irq != NO_IRQ) {
+ 		/* Interrupt mode */
+ 		ret = wait_event_interruptible_timeout(dev->wq,
+ 			!(in_8(&iic->sts) & STS_PT), dev->adap.timeout * HZ);
+@@ -655,13 +660,41 @@ static inline u8 iic_clckdiv(unsigned in
+ 	return (u8)((opb + 9) / 10 - 1);
+ }
+ 
++
++static int iic_adap_add(struct ibm_iic_private *dev, unsigned int opb)
++{
++	struct i2c_adapter *adap;
++
++	/* clckdiv is the same for *all* IIC interfaces,
++	 * but I'd rather make a copy than introduce another global. --ebs
++	 */
++	dev->clckdiv = iic_clckdiv(opb);
++	DBG("%d: clckdiv = %d\n", dev->idx, dev->clckdiv);
++
++	/* Initialize IIC interface */
++	iic_dev_init(dev);
++
++	/* Register it with i2c layer */
++	adap = &dev->adap;
++	strcpy(adap->name, "IBM IIC");
++	i2c_set_adapdata(adap, dev);
++	adap->id = I2C_HW_OCP;
++	adap->class = I2C_CLASS_HWMON;
++	adap->algo = &iic_algo;
++	adap->client_register = NULL;
++	adap->client_unregister = NULL;
++	adap->timeout = 1;
++	adap->retries = 1;
++	return i2c_add_adapter(adap);
++}
++
+ /*
+  * Register single IIC interface
+  */
++#ifndef CONFIG_PPC_MERGE /* OCP support */
+ static int __devinit iic_probe(struct ocp_device *ocp) {
+ 
+ 	struct ibm_iic_private *dev;
+-	struct i2c_adapter *adap;
+ 	struct ocp_func_iic_data *iic_data = ocp->def->additions;
+ 	int ret;
+ 
+@@ -693,8 +726,8 @@ static int __devinit iic_probe(struct oc
+ 
+ 	init_waitqueue_head(&dev->wq);
+ 
+-	dev->irq = iic_force_poll ? -1 : ocp->def->irq;
+-	if (dev->irq >= 0) {
++	dev->irq = iic_force_poll ? NO_IRQ : ocp->def->irq;
++	if (dev->irq != NO_IRQ) {
+ 		/* Disable interrupts until we finish initialization,
+ 		 * assumes level-sensitive IRQ setup...
+ 		 */
+@@ -703,39 +736,18 @@ static int __devinit iic_probe(struct oc
+ 			printk(KERN_ERR "ibm-iic%d: request_irq %d failed\n",
+ 				dev->idx, dev->irq);
+ 			/* Fallback to the polling mode */
+-			dev->irq = -1;
++			dev->irq = NO_IRQ;
+ 		}
+ 	}
+ 
+-	if (dev->irq < 0)
++	if (dev->irq == NO_IRQ)
+ 		printk(KERN_WARNING "ibm-iic%d: using polling mode\n",
+ 			dev->idx);
+ 
+ 	/* Board specific settings */
+ 	dev->fast_mode = iic_force_fast ? 1 : (iic_data ? iic_data->fast_mode : 0);
+ 
+-	/* clckdiv is the same for *all* IIC interfaces,
+-	 * but I'd rather make a copy than introduce another global. --ebs
+-	 */
+-	dev->clckdiv = iic_clckdiv(ocp_sys_info.opb_bus_freq);
+-	DBG("%d: clckdiv = %d\n", dev->idx, dev->clckdiv);
+-
+-	/* Initialize IIC interface */
+-	iic_dev_init(dev);
+-
+-	/* Register it with i2c layer */
+-	adap = &dev->adap;
+-	strcpy(adap->name, "IBM IIC");
+-	i2c_set_adapdata(adap, dev);
+-	adap->id = I2C_HW_OCP;
+-	adap->class = I2C_CLASS_HWMON;
+-	adap->algo = &iic_algo;
+-	adap->client_register = NULL;
+-	adap->client_unregister = NULL;
+-	adap->timeout = 1;
+-	adap->retries = 1;
+-
+-	if ((ret = i2c_add_adapter(adap)) != 0) {
++	if ((ret = iic_adap_add(dev, ocp_sys_info.opb_bus_freq)) != 0) {
+ 		printk(KERN_CRIT "ibm-iic%d: failed to register i2c adapter\n",
+ 			dev->idx);
+ 		goto fail;
+@@ -747,7 +759,7 @@ static int __devinit iic_probe(struct oc
+ 	return 0;
+ 
+ fail:
+-	if (dev->irq >= 0) {
++	if (dev->irq != NO_IRQ) {
+ 		iic_interrupt_mode(dev, 0);
+ 		free_irq(dev->irq, dev);
+ 	}
+@@ -772,13 +784,13 @@ static void __devexit iic_remove(struct 
+ 		printk(KERN_CRIT "ibm-iic%d: failed to delete i2c adapter :(\n",
+ 			dev->idx);
+ 		/* That's *very* bad, just shutdown IRQ ... */
+-		if (dev->irq >= 0) {
++		if (dev->irq != NO_IRQ) {
+ 			iic_interrupt_mode(dev, 0);
+ 			free_irq(dev->irq, dev);
+-			dev->irq = -1;
++			dev->irq = NO_IRQ;
+ 		}
+ 	} else {
+-		if (dev->irq >= 0) {
++		if (dev->irq != NO_IRQ) {
+ 			iic_interrupt_mode(dev, 0);
+ 			free_irq(dev->irq, dev);
+ 		}
+@@ -808,15 +820,184 @@ static struct ocp_driver ibm_iic_driver 
+ #endif
+ };
+ 
++#define iic_register_driver(d)		ocp_register_driver(d)
++#define iic_unregister_driver(d)	ocp_unregister_driver(d)
++#else /* OF support */
++static int device_idx = -1;
++
++static int __devinit iic_probe (struct of_device *ofdev,
++				const struct of_device_id *match)
++{
++	struct ibm_iic_private *dev;
++	struct device_node *np;
++	struct resource res;
++	resource_size_t rlen;
++	int  len;
++	const u32 *prop;
++	int ret;
++
++	ret = -ENODEV;
++	np = ofdev->node;
++	if (!(dev = kzalloc(sizeof(*dev), GFP_KERNEL))) {
++		printk(KERN_CRIT "ibm-iic(%s): failed to allocate device data\n",
++			np->full_name);
++		return -ENOMEM;
++	}
++
++	dev_set_drvdata(&ofdev->dev, dev);
++	dev->idx = ++device_idx;
++	dev->np = np;
++
++	if (of_address_to_resource(np, 0, &res)) {
++		printk(KERN_ERR "ibd-iic(%d): Can't get registers address\n",
++				dev->idx);
++		goto fail2;
++	}
++
++	rlen = res.end - res.start + 1;
++
++	dev->res = request_mem_region(res.start, rlen, "ibm_iic");
++	if (!dev->res) {
++		ret = -EBUSY;
++		goto fail2;
++	}
++
++	if (!(dev->vaddr = ioremap(res.start, rlen))) {
++		printk(KERN_CRIT "ibm-iic(%d): failed to ioremap device registers\n",
++			dev->idx);
++		ret = -ENXIO;
++		goto fail1;
++	}
++
++	init_waitqueue_head(&dev->wq);
++
++	dev->irq = iic_force_poll ? NO_IRQ : irq_of_parse_and_map(np, 0);
++	if (dev->irq != NO_IRQ) {
++		/* Disable interrupts until we finish initialization,
++		 * assumes level-sensitive IRQ setup...
++		 */
++		iic_interrupt_mode(dev, 0);
++		if (request_irq(dev->irq, iic_handler, 0, "IBM IIC", dev)) {
++			printk(KERN_ERR "ibm-iic(%d): request_irq %d failed\n",
++				dev->idx, dev->irq);
++			/* Fallback to the polling mode */
++			irq_dispose_mapping(dev->irq);
++			dev->irq = NO_IRQ;
++		}
++	}
++
++	if (dev->irq == NO_IRQ)
++		printk(KERN_WARNING "ibm-iic(%d): using polling mode\n",
++			dev->idx);
++
++	/* Board specific settings */
++	prop = of_get_property(np, "iic-mode", &len);
++	/* use 400kHz only if stated in dts, 100kHz otherwise */
++	dev->fast_mode = iic_force_fast ? 1 : (prop && (*prop == 400));
++	/* clckdiv is the same for *all* IIC interfaces,
++	 * but I'd rather make a copy than introduce another global. --ebs
++	 */
++	/* Parent bus should have frequency filled */
++	prop = of_get_property(of_get_parent(np), "clock-frequency", &len);
++	if (prop == NULL) {
++		printk(KERN_ERR
++			"ibm-iic(%d):no clock-frequency prop on parent bus!\n",
++			dev->idx);
++		goto fail;
++	}
++
++	if ((ret = iic_adap_add(dev, *prop)) != 0) {
++		printk(KERN_CRIT "ibm-iic(%d): failed to register i2c adapter\n",
++			dev->idx);
++		goto fail;
++	}
++
++	printk(KERN_INFO "ibm-iic(%d): using %s mode\n", dev->idx,
++		dev->fast_mode ? "fast (400 kHz)" : "standard (100 kHz)");
++
++	return 0;
++
++fail:
++	if (dev->irq != NO_IRQ) {
++		iic_interrupt_mode(dev, 0);
++		free_irq(dev->irq, dev);
++		irq_dispose_mapping(dev->irq);
++	}
++	iounmap(dev->vaddr);
++fail1:
++	release_mem_region(res.start, rlen);
++	kfree(dev->res);
++fail2:
++	dev_set_drvdata(&ofdev->dev, NULL);
++	kfree(dev);
++	return ret;
++}
++
++/*
++ * Cleanup initialized IIC interface
++ */
++static int __devexit iic_remove(struct of_device *ofdev)
++{
++	struct ibm_iic_private *dev = dev_get_drvdata(&ofdev->dev);
++	int retval;
++
++	BUG_ON(dev == NULL);
++	retval = i2c_del_adapter(&dev->adap);
++	if (dev->irq != NO_IRQ) {
++		iic_interrupt_mode(dev, 0);
++		free_irq(dev->irq, dev);
++		irq_dispose_mapping(dev->irq);
++	}
++
++	if (retval) {
++		printk(KERN_CRIT "ibm-iic(%s): failed to delete i2c adapter :(\n",
++			dev->np->full_name);
++		/* That's *very* bad, just shutdown IRQ ... */
++		dev->irq = NO_IRQ;
++		return 0;
++	}
++	iounmap(dev->vaddr);
++	release_mem_region(dev->res->start,
++				dev->res->end - dev->res->start + 1);
++	kfree(dev->res);
++
++	dev_set_drvdata(&ofdev->dev, NULL);
++	kfree(dev);
++	return 0;
++}
++
++
++static struct of_device_id ibm_iic_match[] = {
++	{
++		.type = "i2c",
++		.compatible = "ibm,iic",
++	},
++	{},
++};
++MODULE_DEVICE_TABLE(of, ibm_iic_match);
++
++
++static struct of_platform_driver ibm_iic_driver = {
++	.name = "ibm-iic",
++	.match_table = ibm_iic_match,
++	.probe = iic_probe,
++	.remove = iic_remove,
++};
++
++#define iic_register_driver(d)		of_register_platform_driver(d)
++#define iic_unregister_driver(d)	of_unregister_platform_driver(d)
++#endif
++
++
+ static int __init iic_init(void)
+ {
+ 	printk(KERN_INFO "IBM IIC driver v" DRIVER_VERSION "\n");
+-	return ocp_register_driver(&ibm_iic_driver);
++	return iic_register_driver(&ibm_iic_driver);
+ }
+ 
+ static void __exit iic_exit(void)
+ {
+-	ocp_unregister_driver(&ibm_iic_driver);
++	iic_unregister_driver(&ibm_iic_driver);
+ }
+ 
+ module_init(iic_init);
+Index: linux-2.6.18/drivers/i2c/busses/i2c-ibm_iic.h
+===================================================================
+--- linux-2.6.18.orig/drivers/i2c/busses/i2c-ibm_iic.h
++++ linux-2.6.18/drivers/i2c/busses/i2c-ibm_iic.h
+@@ -22,6 +22,11 @@
+ 
+ #include <linux/i2c.h>
+ 
++#ifdef CONFIG_PPC_MERGE
++#include <asm/prom.h>
++#endif
++
++
+ struct iic_regs {
+ 	u16 mdbuf;
+ 	u16 sbbuf;
+@@ -48,6 +53,10 @@ struct ibm_iic_private {
+ 	int irq;
+ 	int fast_mode;
+ 	u8  clckdiv;
++#ifdef CONFIG_PPC_MERGE
++	struct device_node *np;
++	struct resource *res;
++#endif
+ };
+ 
+ /* IICx_CNTL register */
+Index: linux-2.6.18/drivers/i2c/busses/Kconfig
+===================================================================
+--- linux-2.6.18.orig/drivers/i2c/busses/Kconfig
++++ linux-2.6.18/drivers/i2c/busses/Kconfig
+@@ -186,7 +186,7 @@ config I2C_PIIX4
+ 
+ config I2C_IBM_IIC
+ 	tristate "IBM PPC 4xx on-chip I2C interface"
+-	depends on IBM_OCP && I2C
++	depends on I2C && 4xx
+ 	help
+ 	  Say Y here if you want to use IIC peripheral found on 
+ 	  embedded IBM PPC 4xx based systems. 
+Index: linux-2.6.18/mvl_patches/pro50-0474.c
+===================================================================
+--- /dev/null
++++ linux-2.6.18/mvl_patches/pro50-0474.c
+@@ -0,0 +1,16 @@
++/*
++ * Author: MontaVista Software, Inc. <source@mvista.com>
++ *
++ * 2007 (c) MontaVista Software, Inc. This file is licensed under
++ * the terms of the GNU General Public License version 2. This program
++ * is licensed "as is" without any warranty of any kind, whether express
++ * or implied.
++ */
++#include <linux/init.h>
++#include <linux/mvl_patch.h>
++
++static __init int regpatch(void)
++{
++        return mvl_register_patch(474);
++}
++module_init(regpatch);
+EOF
+
+    rv=0
+    cat /tmp/mvl_patch_$$
+    if [ "$?" != "0" ]; then
+	# Patch had a hard error, return 2
+	rv=2
+    elif grep '^Hunk' ${TMPFILE}; then
+	rv=1
+    fi
+
+    rm -f ${TMPFILE}
+    return $rv
+}
+
+function options() {
+    echo "Options are:"
+    echo "  --force-unsupported - Force the patch to be applied even if the"
+    echo "      patch is out of order or the current kernel is unsupported."
+    echo "      Use of this option is strongly discouraged."
+    echo "  --force-apply-fuzz - If the patch has fuzz, go ahead and apply"
+    echo "      it anyway.  This can occur if the patch is applied to an"
+    echo "      unsupported kernel or applied out of order or if you have"
+    echo "      made your own modifications to the kernel.  Use with"
+    echo "      caution."
+    echo "  --remove - Remove the patch"
+}
+
+
+function checkpatchnum() {
+    local level;
+
+    if [ ! -e ${1} ]; then
+	echo "${1} does not exist, make sure you are in the kernel" 1>&2
+	echo "base directory" 1>&2
+	exit 1;
+    fi
+
+    # Extract the current patch number from the lsp info file.
+    level=`grep '#define LSP_.*PATCH_LEVEL' ${1} | sed 's/^.*\"\\(.*\\)\".*\$/\\1/'`
+    if [ "a$level" = "a" ]; then
+	echo "No patch level defined in ${1}, are you sure this is" 1>&2
+	echo "a valid MVL kernel LSP?" 1>&2
+	exit 1;
+    fi
+
+    expr $level + 0 >/dev/null 2>&1
+    isnum=$?
+
+    # Check if the kernel is supported
+    if [ "$level" = "unsupported" ]; then
+	echo "**Current kernel is unsupported by MontaVista due to patches"
+	echo "  begin applied out of order."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  Application is forced, applying patch anyway"
+	    unsupported=t
+	    fix_patch_level=f
+	else
+	    echo "  Patch application aborted.  Use --force-unsupported to"
+	    echo "  force the patch to be applied, but the kernel will not"
+	    echo "  be supported by MontaVista."
+	    exit 1;
+	fi
+
+    # Check the patch number from the lspinfo file to make sure it is
+    # a valid number
+    elif [ $isnum = 2 ]; then
+	echo "**Patch level from ${1} was not a valid number, " 1>&2
+	echo "  are you sure this is a valid MVL kernel LSP?" 1>&2
+	exit 1;
+
+    # Check that this is the right patch number to be applied.
+    elif [ `expr $level $3` ${4} ${2} ]; then
+	echo "**Application of this patch is out of order and will cause the"
+	echo "  kernel to be unsupported by MontaVista."
+	if [ $force_unsupported == 't' ]; then
+	    echo "  application is forced, applying patch anyway"
+	    unsupported=t
+	else
+	    echo "  Patch application aborted.  Please get all the patches in"
+	    echo "  proper order from MontaVista Zone and apply them in order"
+	    echo "  If you really want to apply this patch, use"
+	    echo "  --force-unsupported to force the patch to be applied, but"
+	    echo "  the kernel will not be supported by MontaVista."
+	    exit 1;
+	fi
+    fi
+}
+
+#
+# Update the patch level in the file.  Note that we use patch to do
+# this.  Certain weak version control systems don't take kindly to
+# arbitrary changes directly to files, but do have a special version
+# of "patch" that understands this.
+#
+function setpatchnum() {
+    sed "s/^#define LSP_\(.*\)PATCH_LEVEL[ \t*]\"[0-9]*\".*$/#define LSP_\1PATCH_LEVEL \"${2}\"/" <${1} >/tmp/$$.tmp1
+    diff -u ${1} /tmp/$$.tmp1 >/tmp/$$.tmp2
+    rm /tmp/$$.tmp1
+    sed "s/^+++ \/tmp\/$$.tmp1/+++ include\/linux\/lsppatchlevel.h/" </tmp/$$.tmp2 >/tmp/$$.tmp1
+    rm /tmp/$$.tmp2
+    patch -p0 </tmp/$$.tmp1
+    rm /tmp/$$.tmp1
+}
+
+force_unsupported=f
+force_apply_fuzz=""
+unsupported=f
+fix_patch_level=t
+reverse=f
+common_patchnum_diff='+ 1'
+common_patchnum=$PATCHNUM
+patch_extraopts=''
+
+# Extract command line parameters.
+while [ $# -gt 0 ]; do
+    if [ "a$1" == 'a--force-unsupported' ]; then
+	force_unsupported=t
+    elif [ "a$1" == 'a--force-apply-fuzz' ]; then
+	force_apply_fuzz=y
+    elif [ "a$1" == 'a--remove' ]; then
+	reverse=t
+	common_patchnum_diff=''
+	common_patchnum=`expr $PATCHNUM - 1`
+	patch_extraopts='--reverse'
+    else
+	echo "'$1' is an invalid command line parameter."
+	options
+	exit 1
+    fi
+    shift
+done
+
+echo "Checking patch level"
+checkpatchnum ${LSPINFO} ${PATCHNUM} "${common_patchnum_diff}" "-ne"
+
+if ! dopatch -p1 --dry-run --force $patch_extraopts; then
+    if [ $? = 2 ]; then
+	echo -n "**Patch had errors, application aborted" 1>&2
+	exit 1;
+    fi
+
+    # Patch has warnings
+    clean_apply=${force_apply_fuzz}
+    while [ "a$clean_apply" != 'ay' -a "a$clean_apply" != 'an' ]; do
+	echo -n "**Patch did not apply cleanly.  Do you still want to apply? (y/n) > "
+	read clean_apply
+	clean_apply=`echo "$clean_apply" | tr '[:upper:]' '[:lower:]'`
+    done
+    if [ $clean_apply = 'n' ]; then
+	exit 1;
+    fi
+fi
+
+dopatch -p1 --force $patch_extraopts
+
+if [ $fix_patch_level = 't' ]; then 
+    if [ $unsupported = 't' ]; then
+	common_patchnum="unsupported"
+    fi
+
+    setpatchnum ${LSPINFO} ${common_patchnum}
+fi
+
+# Move the patch file into the mvl_patches directory if we are not reversing
+if [ $reverse != 't' ]; then 
+    if echo $0 | grep '/' >/dev/null; then
+	# Filename is a path, either absolute or from the current directory.
+	srcfile=$0
+    else
+	# Filename is from the path
+	for i in `echo $PATH | tr ':;' '  '`; do
+	    if [ -e ${i}/$0 ]; then
+		srcfile=${i}/$0
+	    fi
+	done
+    fi
+
+    fname=`basename ${srcfile}`
+    diff -uN mvl_patches/${fname} ${srcfile} | (cd mvl_patches; patch)
+fi
+

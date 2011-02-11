@@ -45,7 +45,6 @@ int davinci_get_macaddr (char *ptr)
 	/* check whether MAC address is available in ERPROM else try to
 	 * to get it from bootparams for now.  From Delta EVM MAC address
 	 * should be available from I2C EEPROM.
-	 */
 	if ((temp [0] != 0xFF) |
 	    (temp [1] != 0xFF) |
 	    (temp [2] != 0xFF) |
@@ -82,6 +81,7 @@ int davinci_get_macaddr (char *ptr)
 				ptr[i] = ptr[i] + 87;
 		}
 	} else
+	 */
 #endif
 	{
 		strcpy (ptr, cpmac_eth_string);

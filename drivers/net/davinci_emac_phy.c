@@ -428,13 +428,14 @@ void emac_mdio_finding_state(void)
 		phy_alive_status &= emac_phy->phy_mask;
 
 		/* Find the first interesting alive phy */
-		for (i = 0, j = 1;
+	/*	for (i = 0, j = 1;
 		     (i < 32) && ((j & phy_alive_status) == 0); i++, j <<= 1) ;
 
 		if ((phy_alive_status) && (i < 32)) {
 			emac_phy->phy_addr = i;
 		}
-
+*/
+emac_phy->phy_addr = 0;
 		if (emac_phy->phy_addr != PHY_NOT_FOUND) {
 			DPRINTK("PHY Found. Phy Number=%d\n",
 				emac_phy->phy_addr);
@@ -465,7 +466,7 @@ void emac_mdio_found_state(void)
 	/* Check alive phy's */
 	phy_status = MDIO_REG_LINK;
 	phy_status &= emac_phy->phy_mask;	/* Check phys based upon user mask */
-
+#if 0
 	/* we will now isolate all our phys, except the one we have decided to use */
 	for (phy_num = 0, cnt = 1; phy_num < 32; phy_num++, cnt <<= 1) {
 		if (phy_status & cnt) {
@@ -481,7 +482,7 @@ void emac_mdio_found_state(void)
 			}
 		}
 	}
-
+#endif
 	/*  Reset the Phy and proceed with auto-negotiation */
 	emac_mdio_phy_reset(emac_phy->phy_addr);
 

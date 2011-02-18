@@ -41,6 +41,10 @@ config SND_SOC_TLV320AIC3X
 	tristate
 	depends on SND_SOC && I2C
 
+config SND_SOC_TLV320AIC23
+	tristate
+	depends on SND_SOC && I2C
+
 config SND_SOC_CODEC_STUBS
 	tristate
 	depends on SND_SOC && I2C

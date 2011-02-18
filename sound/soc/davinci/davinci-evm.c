@@ -24,14 +24,17 @@
 #include <asm/dma.h>
 #include <asm/arch/hardware.h>
 
-#include "../codecs/tlv320aic3x.h"
+#include "../codecs/tlv320aic23.h"
 #include "../codecs/codec_stubs.h"
 #include "davinci-pcm.h"
 #include "davinci-i2s.h"
 #include "davinci-i2s-mcbsp.h"
 #include "davinci-i2s-mcasp.h"
 
-#define DM644X_EVM_CODEC_CLOCK 22579200
+#define AUDIO_FORMAT (SND_SOC_DAIFMT_I2S | \
+		SND_SOC_DAIFMT_CBM_CFM | SND_SOC_DAIFMT_IB_NF)
+
+#define DM644X_EVM_CODEC_CLOCK 11289600
 #define DM355_EVM_CODEC_CLOCK 27000000
 #define DM646X_EVM_CODEC_CLOCK 27000000
 
@@ -48,8 +51,7 @@ static int evm_hw_params(struct snd_pcm_substream *substream,
 
 	/* set codec DAI configuration */
 	if (codec_dai->dai_ops.set_fmt != NULL)
-		ret = codec_dai->dai_ops.set_fmt(codec_dai, SND_SOC_DAIFMT_I2S |
-						 SND_SOC_DAIFMT_CBM_CFM);
+		ret = codec_dai->dai_ops.set_fmt(codec_dai, AUDIO_FORMAT);
 	if (ret < 0)
 		return ret;
 
@@ -74,45 +76,32 @@ static struct snd_soc_ops evm_ops = {
 };
 
 /* davinci-evm machine dapm widgets */
-static const struct snd_soc_dapm_widget aic3x_dapm_widgets[] = {
-	SND_SOC_DAPM_HP("Headphone Jack", NULL),
+static const struct snd_soc_dapm_widget aic23_dapm_widgets[] = {
 	SND_SOC_DAPM_LINE("Line Out", NULL),
-	SND_SOC_DAPM_MIC("Mic Jack", NULL),
 	SND_SOC_DAPM_LINE("Line In", NULL),
 };
 
 /* davinci-evm machine audio_mapnections to the codec pins */
 static const char *audio_map[][3] = {
-	/* Headphone connected to HPLOUT, HPROUT */
-	{"Headphone Jack", NULL, "HPLOUT"},
-	{"Headphone Jack", NULL, "HPROUT"},
-
 	/* Line Out connected to LLOUT, RLOUT */
-	{"Line Out", NULL, "LLOUT"},
-	{"Line Out", NULL, "RLOUT"},
-
-	/* Mic connected to (MIC3L | MIC3R) */
-	{"MIC3L", NULL, "Mic Bias 2V"},
-	{"MIC3R", NULL, "Mic Bias 2V"},
-	{"Mic Bias 2V", NULL, "Mic Jack"},
+	{"Line Out", NULL, "LOUT"},
+	{"Line Out", NULL, "ROUT"},
 
 	/* Line In connected to (LINE1L | LINE2L), (LINE1R | LINE2R) */
-	{"LINE1L", NULL, "Line In"},
-	{"LINE2L", NULL, "Line In"},
-	{"LINE1R", NULL, "Line In"},
-	{"LINE2R", NULL, "Line In"},
+	{"LLINE", NULL, "Line In"},
+	{"RLINE", NULL, "Line In"},
 
 	{NULL, NULL, NULL},
 };
 
-/* Logic for a aic3x as connected on a davinci-evm */
-static int evm_aic3x_init(struct snd_soc_codec *codec)
+/* Logic for a aic23 as connected on a davinci-evm */
+static int evm_aic23_init(struct snd_soc_codec *codec)
 {
 	int i;
 
 	/* Add davinci-evm specific widgets */
-	for (i = 0; i < ARRAY_SIZE(aic3x_dapm_widgets); i++)
-		snd_soc_dapm_new_control(codec, &aic3x_dapm_widgets[i]);
+	for (i = 0; i < ARRAY_SIZE(aic23_dapm_widgets); i++)
+		snd_soc_dapm_new_control(codec, &aic23_dapm_widgets[i]);
 
 	/* Set up davinci-evm specific audio path audio_map */
 	for (i = 0; audio_map[i][0] != NULL; i++)
@@ -120,14 +109,12 @@ static int evm_aic3x_init(struct snd_soc_codec *codec)
 					   audio_map[i][1], audio_map[i][2]);
 
 	/* not connected */
-	snd_soc_dapm_set_endpoint(codec, "MONO_LOUT", 0);
-	snd_soc_dapm_set_endpoint(codec, "HPLCOM", 0);
-	snd_soc_dapm_set_endpoint(codec, "HPRCOM", 0);
+	snd_soc_dapm_set_endpoint(codec, "MICIN", 0);
+	snd_soc_dapm_set_endpoint(codec, "LHPOUT", 0);
+	snd_soc_dapm_set_endpoint(codec, "RHPOUT", 0);
 
 	/* always connected */
-	snd_soc_dapm_set_endpoint(codec, "Headphone Jack", 1);
 	snd_soc_dapm_set_endpoint(codec, "Line Out", 1);
-	snd_soc_dapm_set_endpoint(codec, "Mic Jack", 1);
 	snd_soc_dapm_set_endpoint(codec, "Line In", 1);
 
 	snd_soc_dapm_sync_endpoints(codec);
@@ -137,21 +124,21 @@ static int evm_aic3x_init(struct snd_soc_codec *codec)
 
 /* davinci-evm digital audio interface glue - connects codec <--> CPU */
 static struct snd_soc_dai_link davinci_evm_dai = {
-	.name = "TLV320AIC3X",
-	.stream_name = "AIC3X",
+	.name = "TLV320AIC23",
+	.stream_name = "AIC23",
 	.cpu_dai = davinci_i2s_dai,
-	.codec_dai = &aic3x_dai,
-	.init = evm_aic3x_init,
+	.codec_dai = &tlv320aic23_dai,
+	.init = evm_aic23_init,
 	.ops = &evm_ops,
 };
 
 static struct snd_soc_dai_link dm646x_evm_dai[] = {
 	{
-		.name = "TLV320AIC3X",
-		.stream_name = "AIC3X",
+		.name = "TLV320AIC23",
+		.stream_name = "AIC23",
 		.cpu_dai = davinci_iis_mcasp_dai,
-		.codec_dai = &aic3x_dai,
-		.init = evm_aic3x_init,
+		.codec_dai = &tlv320aic23_dai,
+		.init = evm_aic23_init,
 		.ops = &evm_ops,
 	},
 	{
@@ -171,16 +158,16 @@ static struct snd_soc_machine dm644x_snd_soc_machine_evm = {
 };
 
 /* evm audio private data */
-static struct aic3x_setup_data dm644x_evm_aic3x_setup = {
-	.i2c_address = 0x1b,
+static struct tlv320aic23_setup_data dm644x_evm_aic23_setup = {
+	.i2c_address = 0x1a,
 };
 
 /* evm audio subsystem */
 static struct snd_soc_device dm644x_evm_snd_devdata = {
 	.machine = &dm644x_snd_soc_machine_evm,
 	.platform = &davinci_soc_platform,
-	.codec_dev = &soc_codec_dev_aic3x,
-	.codec_data = &dm644x_evm_aic3x_setup,
+	.codec_dev = &soc_codec_dev_tlv320aic23,
+	.codec_data = &dm644x_evm_aic23_setup,
 };
 
 static struct resource dm644x_evm_snd_resources[] = {
@@ -209,7 +196,7 @@ static struct snd_soc_machine dm355_snd_soc_machine_evm = {
 };
 
 /* evm audio private data */
-static struct aic3x_setup_data dm355_evm_aic3x_setup = {
+static struct tlv320aic23_setup_data dm355_evm_aic23_setup = {
 	.i2c_address = 0x1b,
 };
 
@@ -217,8 +204,8 @@ static struct aic3x_setup_data dm355_evm_aic3x_setup = {
 static struct snd_soc_device dm355_evm_snd_devdata = {
 	.machine = &dm355_snd_soc_machine_evm,
 	.platform = &davinci_soc_platform,
-	.codec_dev = &soc_codec_dev_aic3x,
-	.codec_data = &dm355_evm_aic3x_setup,
+	.codec_dev = &soc_codec_dev_tlv320aic23,
+	.codec_data = &dm355_evm_aic23_setup,
 };
 
 static struct resource dm355_evm_snd_resources[] = {
@@ -247,7 +234,7 @@ static struct snd_soc_machine dm646x_snd_soc_machine_evm = {
 };
 
 /* evm audio private data */
-static struct aic3x_setup_data dm646x_evm_aic3x_setup = {
+static struct tlv320aic23_setup_data dm646x_evm_aic23_setup = {
 	.i2c_address = 0x18,
 };
 
@@ -256,8 +243,8 @@ static struct snd_soc_device dm646x_evm_snd_devdata[] = {
 	{
 		.machine = &dm646x_snd_soc_machine_evm,
 		.platform = &davinci_soc_platform,
-		.codec_dev = &soc_codec_dev_aic3x,
-		.codec_data = &dm646x_evm_aic3x_setup,
+		.codec_dev = &soc_codec_dev_tlv320aic23,
+		.codec_data = &dm646x_evm_aic23_setup,
 	},
 };
 

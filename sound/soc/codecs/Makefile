@@ -5,6 +5,7 @@ snd-soc-wm8753-objs := wm8753.o
 snd-soc-wm9712-objs := wm9712.o
 snd-soc-cs4270-objs := cs4270.o
 snd-soc-tlv320aic3x-objs := tlv320aic3x.o
+snd-soc-tlv320aic23-objs := tlv320aic23.o
 snd-soc-codec_stubs-objs := codec_stubs.o
 
 obj-$(CONFIG_SND_SOC_AC97_CODEC)	+= snd-soc-ac97.o
@@ -14,4 +15,5 @@ obj-$(CONFIG_SND_SOC_WM8753)	+= snd-soc-wm8753.o
 obj-$(CONFIG_SND_SOC_WM9712)	+= snd-soc-wm9712.o
 obj-$(CONFIG_SND_SOC_CS4270)	+= snd-soc-cs4270.o
 obj-$(CONFIG_SND_SOC_TLV320AIC3X)	+= snd-soc-tlv320aic3x.o
+obj-$(CONFIG_SND_SOC_TLV320AIC23)	+= snd-soc-tlv320aic23.o
 obj-$(CONFIG_SND_SOC_CODEC_STUBS)	+= snd-soc-codec_stubs.o

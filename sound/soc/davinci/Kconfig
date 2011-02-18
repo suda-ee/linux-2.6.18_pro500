@@ -19,7 +19,7 @@ config SND_DM644X_SOC_EVM
 	depends on SND_DAVINCI_SOC && MACH_DAVINCI_EVM
 	select SND_DAVINCI_SOC_I2S
 	select SND_DAVINCI_SOC_I2S_MCBSP
-	select SND_SOC_TLV320AIC3X
+	select SND_SOC_TLV320AIC23
 	help
 	  Say Y if you want to add support for SoC audio on TI
 	  DaVinci EVM platform.

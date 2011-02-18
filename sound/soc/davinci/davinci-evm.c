@@ -31,7 +31,7 @@
 #include "davinci-i2s-mcbsp.h"
 #include "davinci-i2s-mcasp.h"
 
-#define AUDIO_FORMAT (SND_SOC_DAIFMT_I2S | \
+#define AUDIO_FORMAT (SND_SOC_DAIFMT_DSP_A | \
 		SND_SOC_DAIFMT_CBM_CFM | SND_SOC_DAIFMT_IB_NF)
 
 #define DM644X_EVM_CODEC_CLOCK 11289600
@@ -184,7 +184,8 @@ static struct evm_snd_platform_data dm644x_evm_snd_data = {
 	.rx_dma_ch	= DM644X_DMACH_MCBSP_RX,
 	.tx_dma_offset	= DAVINCI_MCBSP_DXR_REG,
 	.rx_dma_offset	= DAVINCI_MCBSP_DRR_REG,
-	.codec_fmt	= SND_SOC_DAIFMT_CBM_CFM | SND_SOC_DAIFMT_IB_NF,
+	.codec_fmt	= SND_SOC_DAIFMT_DSP_A | SND_SOC_DAIFMT_CBM_CFM \
+                          | SND_SOC_DAIFMT_IB_NF,
 	.eventq_no	= EVENTQ_0,
 };
 

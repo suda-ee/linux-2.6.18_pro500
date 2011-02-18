@@ -523,6 +523,7 @@ static int tlv320aic23_set_dai_fmt(struct snd_soc_codec_dai *codec_dai,
 
 	iface_reg =
 	    tlv320aic23_read_reg_cache(codec, TLV320AIC23_DIGT_FMT) & (~0x03);
+        iface_reg |= TLV320AIC23_LRP_ON;
 
 	/* set master/slave audio interface */
 	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {

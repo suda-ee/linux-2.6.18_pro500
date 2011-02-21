@@ -411,9 +411,9 @@ static int settvp5146amuxmode(int arg)
 
 	dev_dbg(tvp5146_i2c_dev, "\nStarting settvp5146amuxmode...");
 	if (arg == TVP5146_AMUX_COMPOSITE) {	/* composite */
-		input_sel = 0x05;
+		input_sel = 0x02;
 	} else if (arg == TVP5146_AMUX_SVIDEO) {	/* s-video */
-		input_sel = 0x46;
+		input_sel = 0x06;
 	} else {
 		return -EINVAL;
 	}
